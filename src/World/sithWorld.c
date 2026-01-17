@@ -30,6 +30,10 @@
 #include "Platform/std3D.h"
 #include "jk.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 #ifdef TARGET_TWL
 #include <nds.h>
 #endif
@@ -200,6 +204,11 @@ LABEL_11:
                     sithConsole_Print(tmp);
 #ifdef TARGET_TWL
                     stdPlatform_PrintHeapStats();
+#endif
+#ifdef PLATFORM_VR
+                    // Keep VR headset alive during loading
+                    stdPlatform_Printf("sithWorld: Calling VR KeepAlive after section %s\n", section);
+                    stdVR_KeepAlive();
 #endif
                 }
             }

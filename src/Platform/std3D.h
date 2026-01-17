@@ -104,6 +104,7 @@ void std3D_AddTextureToCacheList(rdDDrawSurface *pTexture); // TODO: mark the ad
 int std3D_PurgeTextureCache(size_t size);
 void std3D_PurgeEntireTextureCache();
 int std3D_ClearZBuffer();
+int std3D_ClearMainFbo();
 int std3D_AddToTextureCache(stdVBuffer *vbuf, rdDDrawSurface *texture, int is_alpha_tex, int no_alpha);
 void std3D_DrawMenu();
 void std3D_DrawSceneFbo();
@@ -122,6 +123,13 @@ void std3D_PurgeBitmapRefs(stdBitmap *pBitmap);
 void std3D_PurgeSurfaceRefs(rdDDrawSurface *texture);
 void std3D_UpdateSettings();
 void std3D_Screenshot(const char* pFpath);
+
+// Added: VR FBO override - allows VR to temporarily redirect "window" FBO
+#ifdef PLATFORM_VR
+void std3D_SetVRTargetSize(int width, int height);
+void std3D_SetVRTargetFBO(int fbo, int width, int height);
+void std3D_ClearVRTargetFBO(void);
+#endif
 
 void std3D_ResetUIRenderList();
 int std3D_AddBitmapToTextureCache(stdBitmap *texture, int mipIdx, int is_alpha_tex, int no_alpha);

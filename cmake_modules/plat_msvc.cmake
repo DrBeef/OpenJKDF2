@@ -15,7 +15,7 @@ macro(plat_initialize)
     set(TARGET_COMPILE_FREEGLUT TRUE)
     set(TARGET_FIND_OPENAL FALSE)
     set(TARGET_USE_GAMENETWORKINGSOCKETS FALSE) # TODO why does this keep breaking :(
-    set(SDL2_COMMON_LIBS SDL2main SDL::SDL)
+    set(SDL2_COMMON_LIBS SDL::SDL)
     
     set(TARGET_WIN32 TRUE)
 
@@ -23,7 +23,7 @@ macro(plat_initialize)
 endmacro()
 
 macro(plat_specific_deps)
-    set(SDL2_COMMON_LIBS SDL2main SDL::SDL)
+    set(SDL2_COMMON_LIBS SDL::SDL)
 endmacro()
 
 macro(plat_link_and_package)
@@ -39,14 +39,8 @@ macro(plat_link_and_package)
         # the PE image version field.
         VERSION ${CMAKE_SYSTEM_VERSION}
     )
-    if(CMAKE_BUILD_TYPE STREQUAL Release OR
-       CMAKE_BUILD_TYPE STREQUAL MinSizeRel OR
-       CMAKE_BUILD_TYPE STREQUAL RelWithDebInfo)
-        # TODO: Implement WinMain() for this to work nicely
-        set_target_properties(${BIN_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
-    elseif(CMAKE_BUILD_TYPE STREQUAL Debug)
-        set_target_properties(${BIN_NAME} PROPERTIES WIN32_EXECUTABLE FALSE)
-    endif()
+    # Use console subsystem - project uses main() not WinMain()
+    set_target_properties(${BIN_NAME} PROPERTIES WIN32_EXECUTABLE FALSE)
 
     set_target_properties(${BIN_NAME} PROPERTIES
       LINK_SEARCH_START_STATIC ON

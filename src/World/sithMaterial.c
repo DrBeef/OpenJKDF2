@@ -9,6 +9,10 @@
 #include "Platform/std3D.h"
 #include "jk.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 int sithMaterial_Startup()
 {
     sithMaterial_hashmap = stdHashTable_New(1024);
@@ -116,6 +120,12 @@ int sithMaterial_Load(sithWorld *world, int a2)
                     world->materials2[v2++].y = _atof(v9);
                     a1a = (flex_d_t)(unsigned int)v2 * v12 - -5.0;
                     sithWorld_UpdateLoadPercent(a1a);
+#ifdef PLATFORM_VR
+                    // Keep VR headset alive during material loading
+                    if ((v2 % 10) == 0) {
+                        stdVR_KeepAlive();
+                    }
+#endif
                     if ( !stdConffile_ReadArgs() )
                         break;
                 }

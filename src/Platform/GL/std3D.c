@@ -5,12 +5,18 @@
 #include "Win95/Window.h"
 #include "World/sithWorld.h"
 #include "Engine/rdColormap.h"
+#include "Engine/rdCamera.h"
 #include "Main/jkGame.h"
 #include "World/jkPlayer.h"
 #include "General/stdBitmap.h"
 #include "stdPlatform.h"
 
 #include "jk.h"
+
+// Added: VR support
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -95,6 +101,44 @@ typedef struct std3DFramebuffer
 GLint std3D_windowFbo = 0;
 std3DFramebuffer std3D_framebuffers[2];
 std3DFramebuffer *std3D_pFb = NULL;
+
+// Added: VR FBO override state
+#ifdef PLATFORM_VR
+static GLint std3D_savedWindowFbo = 0;
+static int std3D_vrTargetActive = 0;
+static int std3D_vrTargetSizeActive = 0;
+static int std3D_vrTargetWidth = 0;
+static int std3D_vrTargetHeight = 0;
+
+static void std3D_ApplyWindowInfo(std3DFramebuffer* pFb, GLint fbo, int width, int height)
+{
+    if (!pFb) {
+        return;
+    }
+
+    pFb->window.fbo = fbo;
+    pFb->window.w = width;
+    pFb->window.h = height;
+    pFb->window.iw = width;
+    pFb->window.ih = height;
+}
+
+static void std3D_ApplyVRWindowToAllFramebuffers(void)
+{
+    if (std3D_vrTargetWidth <= 0 || std3D_vrTargetHeight <= 0) {
+        return;
+    }
+
+    std3D_ApplyWindowInfo(&std3D_framebuffers[0], std3D_windowFbo, std3D_vrTargetWidth, std3D_vrTargetHeight);
+    std3D_ApplyWindowInfo(&std3D_framebuffers[1], std3D_windowFbo, std3D_vrTargetWidth, std3D_vrTargetHeight);
+}
+
+static void std3D_ApplyDesktopWindowToAllFramebuffers(void)
+{
+    std3D_ApplyWindowInfo(&std3D_framebuffers[0], std3D_windowFbo, Window_xSize, Window_ySize);
+    std3D_ApplyWindowInfo(&std3D_framebuffers[1], std3D_windowFbo, Window_xSize, Window_ySize);
+}
+#endif
 
 static bool has_initted = false;
 
@@ -373,6 +417,14 @@ void std3D_swapFramebuffers()
         std3D_activeFb = 2;
         std3D_pFb = &std3D_framebuffers[1];
     }
+
+#ifdef PLATFORM_VR
+    if (std3D_vrTargetActive) {
+        std3D_ApplyVRWindowToAllFramebuffers();
+    } else {
+        std3D_ApplyDesktopWindowToAllFramebuffers();
+    }
+#endif
 }
 
 GLuint std3D_loadProgram(const char* fpath_base)
@@ -754,6 +806,17 @@ int std3D_StartScene()
     int32_t tex_w = (int32_t)((double)Window_xSize * supersample_level);
     int32_t tex_h = (int32_t)((double)Window_ySize * supersample_level);
 
+#ifdef PLATFORM_VR
+    if ((std3D_vrTargetActive || std3D_vrTargetSizeActive) && stdVR_bEnabled && stdVR_IsSessionRunning()
+        && std3D_vrTargetWidth > 0 && std3D_vrTargetHeight > 0)
+    {
+        double vr_supersample = stdVR_config.supersampling > 0.0 ? stdVR_config.supersampling : 1.0;
+        supersample_level = vr_supersample;
+        tex_w = (int32_t)((double)std3D_vrTargetWidth * supersample_level);
+        tex_h = (int32_t)((double)std3D_vrTargetHeight * supersample_level);
+    }
+#endif
+
     if (tex_w != std3D_pFb->w || tex_h != std3D_pFb->h 
         || (!(std3D_pFb->enable_extra & 1) && jkPlayer_enableBloom)
         || (!(std3D_pFb->enable_extra & 2) && jkPlayer_enableSSAO))
@@ -761,6 +824,12 @@ int std3D_StartScene()
         std3D_deleteFramebuffer(std3D_pFb);
         std3D_generateFramebuffer(tex_w, tex_h, std3D_pFb);
     }
+
+#ifdef PLATFORM_VR
+    if (std3D_vrTargetActive) {
+        std3D_ApplyVRWindowToAllFramebuffers();
+    }
+#endif
 
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
     glEnable(GL_BLEND);
@@ -2447,6 +2516,14 @@ void std3D_DrawRenderList()
         internalWidth = 640.0;
         internalHeight = 480.0;
     }
+#ifdef PLATFORM_VR
+    // Added: When VR is active, use VR render target dimensions for projection
+    // This ensures CPU projection (rdCamera_PerspProjectVR) and GPU projection match
+    else if (std3D_vrTargetActive && std3D_vrTargetWidth > 0 && std3D_vrTargetHeight > 0) {
+        internalWidth = (float)std3D_vrTargetWidth;
+        internalHeight = (float)std3D_vrTargetHeight;
+    }
+#endif
 
     maxX = 1.0;
     maxY = 1.0;
@@ -2459,6 +2536,13 @@ void std3D_DrawRenderList()
         width = 640;
         height = 480;
     }
+#ifdef PLATFORM_VR
+    // Added: Match width/height to VR dimensions as well
+    else if (std3D_vrTargetActive && std3D_vrTargetWidth > 0 && std3D_vrTargetHeight > 0) {
+        width = (float)std3D_vrTargetWidth;
+        height = (float)std3D_vrTargetHeight;
+    }
+#endif
 
     // JKDF2's vertical FOV is fixed with their projection, for whatever reason. 
     // This ends up resulting in the view looking squished vertically at wide/ultrawide aspect ratios.
@@ -2527,17 +2611,18 @@ void std3D_DrawRenderList()
     glUniform1i(uniform_displacement_map, 4);
     
     {
-    
+
+    // Standard projection matrix (VR uses CPU projection into screen space)
     float d3dmat[16] = {
        (float)(maxX*scaleX*zoom_xaspect),      0,                                          0,      0, // right
        0,                                       (float)(-maxY*scaleY*zoom_yaspect),               0,      0, // up
        0,                                       0,                                          1,     0, // forward
        (float)(-(internalWidth/2)*scaleX*zoom_xaspect + shift_add_x),  (float)((internalHeight/2)*scaleY*zoom_yaspect + shift_add_y),     (float)((!rdCamera_pCurCamera || rdCamera_pCurCamera->projectType == rdCameraProjectType_Perspective) ? -1 : 1),      1  // pos
     };
-    
+
     glUniformMatrix4fv(uniform_mvp, 1, GL_FALSE, d3dmat);
     glViewport(0, 0, width, height);
-    
+
     }
 
     glUniform2f(uniform_iResolution, width, height);
@@ -2870,6 +2955,20 @@ int std3D_ClearZBuffer()
     glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
     glClear(GL_DEPTH_BUFFER_BIT);
+    return 1;
+}
+
+int std3D_ClearMainFbo()
+{
+    if (Main_bHeadless) return 1;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+
+    GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
+    glDrawBuffers(4, bufs);
+
+    glClearColor(0.0, 0.0, 0.0, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     return 1;
 }
 
@@ -3710,3 +3809,48 @@ int std3D_IsReady()
 {
     return has_initted;
 }
+
+// Added: VR FBO override functions
+#ifdef PLATFORM_VR
+void std3D_SetVRTargetSize(int width, int height)
+{
+    if (width <= 0 || height <= 0) {
+        std3D_vrTargetSizeActive = 0;
+        return;
+    }
+
+    std3D_vrTargetWidth = width;
+    std3D_vrTargetHeight = height;
+    std3D_vrTargetSizeActive = 1;
+}
+
+void std3D_SetVRTargetFBO(int fbo, int width, int height)
+{
+    if (!std3D_vrTargetActive) {
+        // Save the original window FBO the first time
+        std3D_savedWindowFbo = std3D_windowFbo;
+    }
+
+    // Ensure VR target size is known even before swapchain override
+    std3D_SetVRTargetSize(width, height);
+
+    // Override the window FBO so all rendering goes to VR target
+    std3D_windowFbo = fbo;
+    std3D_vrTargetActive = 1;
+
+    // Update BOTH framebuffers' window info (important because std3D_swapFramebuffers can switch)
+    std3D_ApplyVRWindowToAllFramebuffers();
+}
+
+void std3D_ClearVRTargetFBO(void)
+{
+    if (std3D_vrTargetActive) {
+        // Restore the original window FBO
+        std3D_windowFbo = std3D_savedWindowFbo;
+        std3D_vrTargetActive = 0;
+
+        // Restore BOTH framebuffers' window info
+        std3D_ApplyDesktopWindowToAllFramebuffers();
+    }
+}
+#endif // PLATFORM_VR

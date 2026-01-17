@@ -65,12 +65,12 @@ for (int i = 0; i < strlen(tmp_filepath); i++)
     SDL_free(base_path);
 #endif
 
-    f = fopen(tmp_filepath, "r");
+    f = fopen(tmp_filepath, "rb");
     if (f) {
         fseek(f, 0, SEEK_END);
         size_t len = ftell(f);
         rewind(f);
-        
+
         file_contents = (char*)malloc(len+1);
         if (!file_contents) {
             if (pOutSz) {
@@ -79,20 +79,23 @@ for (int i = 0; i < strlen(tmp_filepath); i++)
             fclose(f);
             return NULL;
         }
-        
-        if (fread(file_contents, 1, len, f) != len)
+
+        size_t bytes_read = fread(file_contents, 1, len, f);
+        if (bytes_read == 0 && len > 0)
         {
             char errtmp[256];
             snprintf(errtmp, 256, "Failed to read file `%s`!\n", filepath);
             stdEmbeddedRes_errmsg(errtmp);
+            free(file_contents);
+            fclose(f);
             return NULL;
         }
-        file_contents[len] = 0;
-        
+        file_contents[bytes_read] = 0;
+
         fclose(f);
 
         if (pOutSz) {
-            *pOutSz = len+1;
+            *pOutSz = bytes_read+1;
         }
         return file_contents;
     }
@@ -174,14 +177,14 @@ for (int i = 0; i < strlen(tmp_filepath); i++)
     }
 #endif
 
-    f = fopen(tmp_filepath, "r");
+    f = fopen(tmp_filepath, "rb");
     if (f)
     {
 retry_file:
         fseek(f, 0, SEEK_END);
         size_t len = ftell(f);
         rewind(f);
-        
+
         file_contents = (char*)malloc(len+1);
         if (!file_contents) {
             if (pOutSz) {
@@ -190,20 +193,23 @@ retry_file:
             fclose(f);
             return NULL;
         }
-        
-        if (fread(file_contents, 1, len, f) != len)
+
+        size_t bytes_read = fread(file_contents, 1, len, f);
+        if (bytes_read == 0 && len > 0)
         {
             char errtmp[256];
             snprintf(errtmp, 256, "Failed to read file `%s`!\n", filepath);
             stdEmbeddedRes_errmsg(errtmp);
+            free(file_contents);
+            fclose(f);
             return NULL;
         }
-        file_contents[len] = 0;
-        
+        file_contents[bytes_read] = 0; // Null terminate at actual read length
+
         fclose(f);
 
         if (pOutSz) {
-            *pOutSz = len+1;
+            *pOutSz = bytes_read+1;
         }
     }
     else
@@ -215,9 +221,30 @@ retry_file:
         strncat(tmp_filepath, filepath, 256-1);
         SDL_free(base_path);
 
-        f = fopen(tmp_filepath, "r");
+        f = fopen(tmp_filepath, "rb");
         if (f)
             goto retry_file;
+#endif
+
+// Added: Try executable's base path on Windows
+#if defined(WIN32) && defined(SDL2_RENDER)
+        base_path = SDL_GetBasePath();
+        if (base_path) {
+            strncpy(tmp_filepath, base_path, 256-1);
+            strncat(tmp_filepath, "resource\\", 256-1);
+            strncat(tmp_filepath, filepath, 256-1);
+            // Convert forward slashes to backslashes
+            for (int i = 0; i < strlen(tmp_filepath); i++) {
+                if (tmp_filepath[i] == '/') {
+                    tmp_filepath[i] = '\\';
+                }
+            }
+            SDL_free(base_path);
+
+            f = fopen(tmp_filepath, "rb");
+            if (f)
+                goto retry_file;
+        }
 #endif
 
 skip_fopen:

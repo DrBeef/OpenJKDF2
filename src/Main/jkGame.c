@@ -29,6 +29,12 @@
 #include <nds.h>
 #endif
 
+// Added: VR support
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#include "Engine/rdCamera.h"
+#endif
+
 int jkGame_Startup()
 {
     stdPlatform_Printf("OpenJKDF2: %s\n", __func__);
@@ -132,6 +138,19 @@ int jkGame_Update()
     int result; // eax
     int v6; // [esp+1Ch] [ebp-1Ch]
 
+    // Debug: unconditional log to verify function is called
+    {
+        static int unconditionalCount = 0;
+        unconditionalCount++;
+        if (unconditionalCount <= 10 || unconditionalCount % 300 == 0) {
+            stdPlatform_Printf("jkGame_Update CALLED #%d\n", unconditionalCount);
+#ifdef PLATFORM_VR
+            extern void VR_Log(const char* fmt, ...);
+            VR_Log("jkGame_Update CALLED #%d (PLATFORM_VR defined)\n", unconditionalCount);
+#endif
+        }
+    }
+
     static int jkGame_Update_Start = 0;
     static int jkGame_Update_ClearScreen = 0;
     static int jkGame_Update_AdvanceFrame = 0;
@@ -184,27 +203,173 @@ int jkGame_Update()
 #if defined(SDL2_RENDER) || defined(TARGET_TWL)
     _memcpy(stdDisplay_masterPalette, sithWorld_pCurrentWorld->colormaps->colors, 0x300);
 #endif
-    rdAdvanceFrame();
-    jkGame_Update_AdvanceFrame = stdPlatform_GetTimeMsec();
-#if !defined(SDL2_RENDER) && !defined(TARGET_TWL)
-    if ( Video_modeStruct.b3DAccel )
-#endif
+
+// Added: VR stereo rendering path
+#ifdef PLATFORM_VR
+    // Forward declaration for VR logging
+    extern void VR_Log(const char* fmt, ...);
+
+    // Debug: log every call to jkGame_Update to verify it's being called
     {
-        sithMain_UpdateCamera();
+        static int jkGameCallCount = 0;
+        jkGameCallCount++;
+        if (jkGameCallCount <= 10 || jkGameCallCount % 300 == 0) {
+            VR_Log("jkGame_Update #%d: enabled=%d, running=%d, pending=%d\n",
+                jkGameCallCount, stdVR_bEnabled, stdVR_IsSessionRunning(), stdVR_IsFramePending());
+        }
     }
-#if !defined(SDL2_RENDER) && !defined(TARGET_TWL)
-    else
+
+    if (stdVR_bEnabled && stdVR_IsSessionRunning() && jkGame_isDDraw) {
+        static int vrRenderCount = 0;
+        vrRenderCount++;
+
+        // If no frame is pending, we need to call WaitFrame ourselves
+        // This happens in 3D game mode where Window_Main_Loop doesn't manage VR frames
+        if (!stdVR_IsFramePending()) {
+            stdVR_WaitFrame();
+
+            // Update VR input after WaitFrame (in 3D mode, Window_Main_Loop skips this)
+            stdVR_UpdateInput();
+            stdVR_MapInputToGame();
+
+            if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
+                VR_Log("jkGame: Called WaitFrame (frame #%d, now pending=%d)\n",
+                    vrRenderCount, stdVR_IsFramePending());
+            }
+        }
+
+        // Log first few frames and periodically
+        if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
+            VR_Log("jkGame: VR render frame #%d starting (framePending=%d, shouldRender=%d)\n",
+                vrRenderCount, stdVR_IsFramePending(), stdVR_clientInfo.bShouldRender);
+        }
+
+        // Check if we have a VR frame pending to work with
+        if (!stdVR_IsFramePending()) {
+            if (vrRenderCount <= 10) {
+                VR_Log("jkGame: No VR frame pending after WaitFrame, skipping VR render\n");
+            }
+            goto non_vr_path;
+        }
+
+        // VR frame timing - BeginFrame must be called first
+        if (!stdVR_BeginFrame()) {
+            if (vrRenderCount <= 10) {
+                VR_Log("jkGame: VR BeginFrame failed, skipping VR render\n");
+            }
+            goto non_vr_path;  // Fall back to non-VR if frame begin fails
+        }
+
+        // Update tracking
+        stdVR_UpdateTracking();
+
+        // Update screen layer state (will be false for 3D gameplay, true for menus)
+        // This ensures bUseScreenLayer is updated when transitioning from menu to gameplay
+        stdVR_UseScreenLayer();
+
+        // Only render if the runtime tells us to (headset visible, etc.)
+        if (stdVR_clientInfo.bShouldRender) {
+            // Do per-frame setup ONCE before eye loop
+            rdAdvanceFrame();
+            sithCamera_PrepareFrameVR();  // Updates camera position, sets rdCamera
+
+            // Render each eye
+            for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
+                if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
+                    VR_Log("jkGame: VR eye %d - starting render\n", eye);
+                }
+
+                if (!stdVR_PrepareEyeBuffer(eye)) {
+                    if (vrRenderCount <= 10) {
+                        VR_Log("jkGame: VR PrepareEyeBuffer(%d) failed\n", eye);
+                    }
+                    continue;
+                }
+
+                // Clear internal render target per-eye to avoid depth/color leakage
+                std3D_ClearMainFbo();
+
+                // Set up VR view for this eye (applies eye offset and projection)
+                sithCamera_SetVRView(eye);
+
+                // Added: Advance render tick for each eye so sectors don't get skipped
+                // The render system uses sithRender_lastRenderTick to mark sectors as "already rendered"
+                // Without this, the second eye would skip all sectors because they were rendered for the first eye
+                sithMain_sub_4C4D80();
+
+                if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
+                    VR_Log("jkGame: VR eye %d - calling sithRender_Draw\n", eye);
+                }
+
+                // Render scene for this eye
+                sithRender_Draw();
+                jkPlayer_DrawPov();
+
+                // Added: Flush render cache per-eye so triangles are actually drawn to internal FBO
+                // before we blit to VR swapchain. Without this, both eyes get empty content.
+                rdCache_Flush();
+
+                // Resolve internal FBO to VR swapchain
+                std3D_DrawSceneFbo();
+
+                if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
+                    VR_Log("jkGame: VR eye %d - render complete\n", eye);
+                }
+
+                // Release eye buffer
+                stdVR_FinishEyeBuffer(eye);
+            }
+        } else if (vrRenderCount <= 10) {
+            VR_Log("jkGame: VR shouldRender=false, skipping render\n");
+        }
+
+        // Clear VR projection state before potentially falling through to non-VR code
+        rdCamera_ClearVRProjection();
+
+        // Flush and clear render state (equivalent to what rdFinishFrame does for non-VR)
+        rdCache_Flush();
+        rdCache_ClearFrameCounters();
+
+        // End VR frame
+        stdVR_EndFrame();
+
+        if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
+            VR_Log("jkGame: VR render frame #%d complete\n", vrRenderCount);
+        }
+
+        jkGame_Update_AdvanceFrame = stdPlatform_GetTimeMsec();
+        jkGame_Update_UpdateCamera = stdPlatform_GetTimeMsec();
+        jkGame_Update_DrawPov = stdPlatform_GetTimeMsec();
+        return 1;  // Skip non-VR rendering path when VR is active
+    }
+non_vr_path:
+    ;  // Label needs a statement
+#endif // PLATFORM_VR
+
+    // Non-VR rendering path
     {
-        stdDisplay_VBufferLock(Video_pMenuBuffer);
-        stdDisplay_VBufferLock(Video_pVbufIdk);
-        sithMain_UpdateCamera();
-        stdDisplay_VBufferUnlock(Video_pVbufIdk);
-        stdDisplay_VBufferUnlock(Video_pMenuBuffer);
-    }
+        rdAdvanceFrame();
+        jkGame_Update_AdvanceFrame = stdPlatform_GetTimeMsec();
+#if !defined(SDL2_RENDER) && !defined(TARGET_TWL)
+        if ( Video_modeStruct.b3DAccel )
 #endif
-    jkGame_Update_UpdateCamera = stdPlatform_GetTimeMsec();
-    jkPlayer_DrawPov();
-    jkGame_Update_DrawPov = stdPlatform_GetTimeMsec();
+        {
+            sithMain_UpdateCamera();
+        }
+#if !defined(SDL2_RENDER) && !defined(TARGET_TWL)
+        else
+        {
+            stdDisplay_VBufferLock(Video_pMenuBuffer);
+            stdDisplay_VBufferLock(Video_pVbufIdk);
+            sithMain_UpdateCamera();
+            stdDisplay_VBufferUnlock(Video_pVbufIdk);
+            stdDisplay_VBufferUnlock(Video_pMenuBuffer);
+        }
+#endif
+        jkGame_Update_UpdateCamera = stdPlatform_GetTimeMsec();
+        jkPlayer_DrawPov();
+        jkGame_Update_DrawPov = stdPlatform_GetTimeMsec();
+    }
 
 #if 1
     //if (Main_bMotsCompat)
@@ -313,6 +478,9 @@ int jkGame_Update()
     std3D_DrawMenu();
     rdFinishFrame();
 #endif
+
+// VR frames are ended in the VR render paths (gameplay or menu). Avoid calling
+// xrEndFrame here without a matching BeginFrame.
 
     // MOTS removed
     if ( Video_modeStruct.b3DAccel )

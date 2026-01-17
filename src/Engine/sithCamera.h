@@ -55,6 +55,12 @@ void sithCamera_CycleCamera();
 MATH_FUNC void sithCamera_SetZoom(sithCamera *pCamera, flex_t zoomScale, flex_t zoom_2); // MOTS added
 MATH_FUNC void sithCamera_UpdateZoom(sithCamera *pCamera);
 
+// Added: VR support
+#ifdef PLATFORM_VR
+void sithCamera_PrepareFrameVR(void);
+void sithCamera_SetVRView(int eye);
+#endif
+
 #ifndef __cplusplus
 //static void (*sithCamera_Shutdown)() = (void*)sithCamera_Shutdown_ADDR;
 static int (*sithCamera_NewEntry_)(sithCamera *camera, int a2, int a3, flex_t fov, flex_t a5, rdCanvas* a6, sithThing *focus_far, sithThing *focus_near) = (void*)sithCamera_NewEntry_ADDR;

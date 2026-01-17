@@ -12,6 +12,9 @@
 #include "World/jkPlayer.h"
 #include "Win95/Window.h"
 #include "Platform/std3D.h"
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
 
 #include "jk.h"
 
@@ -29,6 +32,7 @@ enum jkGuiDecisionButton_t
 static wchar_t render_level[256] = {0};
 static wchar_t gamma_level[256] = {0};
 static wchar_t hud_level[256] = {0};
+static wchar_t vr_render_level[256] = {0};
 
 static wchar_t slider_val_text[5] = {0};
 static wchar_t slider_val_text_2[5] = {0};
@@ -104,6 +108,9 @@ static jkGuiElement jkGuiDisplay_aElementsAdvanced[22] = {
     
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_JKGFXMOD",            0, {20, 150, 300, 40},  1, 0, "GUIEXT_EN_JKGFXMOD_HINT",          0, 0, 0, {0}, 0},
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_TEXTURE_PRECACHE",   0, {20, 190, 300, 40},  1, 0, "GUIEXT_EN_TEXTURE_PRECACHE_HINT",          0, 0, 0, {0}, 0},
+
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SSAA_MULT",           2, {20, 240, 200, 20},  1, 0, "GUIEXT_VR_SSAA_MULT_HINT",          0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBOX,     0,            0, NULL,                            100, {230, 240, 80, 20}, 1, 0, NULL,                        0, 0, 0, {0}, 0},
     
     { ELEMENT_END,         0,            0, NULL,                   0, {0},                 0, 0, NULL,                        0, 0, 0, {0}, 0},
 };
@@ -122,12 +129,21 @@ void jkGuiDisplay_Startup()
 
     jkGuiDisplay_aElements[28].wstr = hud_level;
 
+    jkGuiDisplay_aElementsAdvanced[12].wstr = vr_render_level;
+
     ftmp = jkPlayer_ssaaMultiple;
     jk_snwprintf(render_level, 255, L"%.2f", ftmp);
     ftmp = jkPlayer_gamma;
     jk_snwprintf(gamma_level, 255, L"%.2f", ftmp);
     ftmp = jkPlayer_hudScale;
     jk_snwprintf(hud_level, 255, L"%.2f", ftmp);
+
+#ifdef PLATFORM_VR
+    ftmp = jkPlayer_vrSupersampling;
+    jk_snwprintf(vr_render_level, 255, L"%.2f", ftmp);
+#else
+    jk_snwprintf(vr_render_level, 255, L"%.2f", 1.0f);
+#endif
 }
 
 void jkGuiDisplay_Shutdown()
@@ -166,10 +182,24 @@ void jkGuiDisplay_FramelimitDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuf
 int jkGuiDisplay_ShowAdvanced()
 {
     int v0; // esi
+#ifdef PLATFORM_VR
+    flex32_t ftmp;
+#endif
 
     jkGui_sub_412E20(&jkGuiDisplay_menuAdvanced, 100, 104, 100);
     jkGuiDisplay_aElementsAdvanced[9].selectedTextEntry = jkPlayer_bEnableJkgm;
     jkGuiDisplay_aElementsAdvanced[10].selectedTextEntry = jkPlayer_bEnableTexturePrecache;
+
+#ifdef PLATFORM_VR
+    jkGuiDisplay_aElementsAdvanced[11].bIsVisible = 1;
+    jkGuiDisplay_aElementsAdvanced[12].bIsVisible = 1;
+    ftmp = jkPlayer_vrSupersampling;
+    jk_snwprintf(vr_render_level, 255, L"%.2f", ftmp);
+#else
+    jkGuiDisplay_aElementsAdvanced[11].bIsVisible = 0;
+    jkGuiDisplay_aElementsAdvanced[12].bIsVisible = 0;
+    jk_snwprintf(vr_render_level, 255, L"%.2f", 1.0f);
+#endif
     
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiDisplay_menuAdvanced, &jkGuiDisplay_aElementsAdvanced[7]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiDisplay_menuAdvanced, &jkGuiDisplay_aElementsAdvanced[8]);
@@ -184,9 +214,23 @@ int jkGuiDisplay_ShowAdvanced()
             jkPlayer_bEnableJkgm = jkGuiDisplay_aElementsAdvanced[9].selectedTextEntry;
             jkPlayer_bEnableTexturePrecache = jkGuiDisplay_aElementsAdvanced[10].selectedTextEntry;
 
+#ifdef PLATFORM_VR
+            char tmp[256];
+            stdString_WcharToChar(tmp, vr_render_level, 255);
+            if (_sscanf(tmp, "%f", &ftmp) != 1) {
+                jkPlayer_vrSupersampling = 1.0f;
+            } else {
+                jkPlayer_vrSupersampling = ftmp;
+            }
+#endif
+
             std3D_PurgeEntireTextureCache();
 
             jkPlayer_WriteConf(jkPlayer_playerShortName);
+
+#ifdef PLATFORM_VR
+            stdVR_SyncConfigFromJkPlayer();
+#endif
         }
         break;
     }

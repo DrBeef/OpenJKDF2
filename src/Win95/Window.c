@@ -17,6 +17,12 @@
 
 #include "jk.h"
 
+// Added: VR support
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+extern void VR_Log(const char* fmt, ...);
+#endif
+
 #ifdef ARCH_WASM
 #include <emscripten.h>
 #endif
@@ -1159,43 +1165,136 @@ void Window_SdlUpdate()
 
         SDL_SetRelativeMouseMode(SDL_FALSE);
 
-        if (!jkGuiBuildMulti_bRendering) {
-            std3D_StartScene();
-#ifdef QUAKE_CONSOLE
-            jkQuakeConsole_Render();
-#endif
-            std3D_DrawMenu();
-            std3D_EndScene();
-            SDL_GL_SwapWindow(displayWindow);
+        // Added: VR rendering for menus/videos
+#ifdef PLATFORM_VR
+        static int vrMenuFrameCount = 0;
+        static int vrMenuCheckCount = 0;
+        vrMenuCheckCount++;
+
+        int vrEnabled = stdVR_bEnabled;
+        int vrRunning = stdVR_IsSessionRunning();
+
+        if (vrMenuCheckCount <= 30 || vrMenuCheckCount % 100 == 0) {
+            VR_Log("Window_SdlUpdate #%d: VR check - enabled=%d, running=%d\n",
+                vrMenuCheckCount, vrEnabled, vrRunning);
         }
-        else {
+
+        // Handle complete VR frame cycle: Wait→Begin→Render→End
+        if (vrEnabled && vrRunning) {
+            vrMenuFrameCount++;
+
+            // Wait for the next frame from the runtime (blocks until ready)
+            if (!stdVR_WaitFrame()) {
+                // WaitFrame failed; skip this frame while VR is active
+                return;
+            }
+
+            // Update VR input after WaitFrame (best timing for low latency)
+            stdVR_UpdateInput();
+            stdVR_MapInputToGame();
+
+            if (vrMenuFrameCount <= 30 || vrMenuFrameCount % 100 == 0) {
+                VR_Log("Window_SdlUpdate: VR menu render #%d (shouldRender=%d)\n",
+                    vrMenuFrameCount, stdVR_clientInfo.bShouldRender);
+            }
+
+            // Update tracking to get eye poses before rendering
+            stdVR_UpdateTracking();
+
+            // Check if we should use screen layer mode (updates snap position on transition)
+            int useScreenLayer = stdVR_UseScreenLayer();
+
+            // Begin the VR frame
+            int beginResult = stdVR_BeginFrame();
+            if (vrMenuFrameCount <= 30 || vrMenuFrameCount % 100 == 0) {
+                VR_Log("Window_SdlUpdate: BeginFrame returned %d, screenLayer=%d\n", beginResult, useScreenLayer);
+            }
+
+            if (beginResult) {
+                // Only render content if runtime says we should
+                if (stdVR_clientInfo.bShouldRender) {
+                    // In screen layer mode, only render to eye 0 (quad layer uses single swapchain)
+                    // In projection mode, render to both eyes
+                    int eyeCount = useScreenLayer ? 1 : 2;
+                    for (int eye = 0; eye < eyeCount; eye++) {
+                        if (stdVR_PrepareEyeBuffer(eye)) {
+                            if (!jkGuiBuildMulti_bRendering) {
+                                std3D_StartScene();
 #ifdef QUAKE_CONSOLE
-            jkQuakeConsole_Render();
+                                jkQuakeConsole_Render();
 #endif
-            std3D_DrawMenu();
-            SDL_GL_SwapWindow(displayWindow);
-            //menu_framelimit_amt_ms = 64;
+                                std3D_DrawMenu();
+                                std3D_EndScene();
+                            }
+                            else {
+#ifdef QUAKE_CONSOLE
+                                jkQuakeConsole_Render();
+#endif
+                                std3D_DrawMenu();
+                            }
+                            stdVR_FinishEyeBuffer(eye);
+                        }
+                    }
+                }
+                // Always end the frame (with or without layers)
+                stdVR_EndFrame();
+                if (vrMenuFrameCount <= 30 || vrMenuFrameCount % 100 == 0) {
+                    VR_Log("Window_SdlUpdate: EndFrame called (screenLayer=%d)\n", useScreenLayer);
+                }
+            }
+            // Skip SDL swap - VR compositor handles presentation
+        }
+        else
+#endif
+        {
+            // Non-VR path
+            if (!jkGuiBuildMulti_bRendering) {
+                std3D_StartScene();
+#ifdef QUAKE_CONSOLE
+                jkQuakeConsole_Render();
+#endif
+                std3D_DrawMenu();
+                std3D_EndScene();
+                SDL_GL_SwapWindow(displayWindow);
+            }
+            else {
+#ifdef QUAKE_CONSOLE
+                jkQuakeConsole_Render();
+#endif
+                std3D_DrawMenu();
+                SDL_GL_SwapWindow(displayWindow);
+                //menu_framelimit_amt_ms = 64;
+            }
         }
 
         if (Window_needsRecreate) {
             std3D_PurgeEntireTextureCache();
             Window_RecreateSDL2Window();
         }
-        
-        // Keep menu FPS at 60FPS, to avoid cranking the GPU unnecessarily.
-        if (sampleTime_roundtrip < menu_framelimit_amt_ms) {
-            sampleTime_delay++;
+
+        int allowMenuDelay = 1;
+#ifdef PLATFORM_VR
+        if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+            allowMenuDelay = 0;
         }
-        else {
-            sampleTime_delay--;
+#endif
+
+        if (allowMenuDelay) {
+            // Keep menu FPS at 60FPS, to avoid cranking the GPU unnecessarily.
+            if (sampleTime_roundtrip < menu_framelimit_amt_ms) {
+                sampleTime_delay++;
+            }
+            else {
+                sampleTime_delay--;
+            }
+            if (sampleTime_delay <= 0) {
+                sampleTime_delay = 1;
+            }
+            if (sampleTime_delay >= menu_framelimit_amt_ms) {
+                sampleTime_delay = menu_framelimit_amt_ms;
+            }
+            SDL_Delay(sampleTime_delay);
         }
-        if (sampleTime_delay <= 0) {
-            sampleTime_delay = 1;
-        }
-        if (sampleTime_delay >= menu_framelimit_amt_ms) {
-            sampleTime_delay = menu_framelimit_amt_ms;
-        }
-        SDL_Delay(sampleTime_delay);
     }
     else
     {
@@ -1247,6 +1346,16 @@ void Window_SdlVblank()
 {
     if (Main_bHeadless) return;
 
+// Added: Skip SDL swap in VR mode - OpenXR handles frame presentation
+#ifdef PLATFORM_VR
+    if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+        // Don't swap - OpenXR compositor handles presentation
+        if (Window_needsRecreate)
+            Window_RecreateSDL2Window();
+        return;
+    }
+#endif
+
     //static uint32_t roundtrip = 0;
     //uint32_t before = stdPlatform_GetTimeMsec();
 #ifdef ARCH_WASM
@@ -1292,6 +1401,12 @@ void Window_RecreateSDL2Window()
     Window_needsRecreate = 0;
 
     if (displayWindow) {
+#ifdef PLATFORM_VR
+        // VR session must be destroyed before GL context
+        if (stdVR_bInitted) {
+            stdVR_DestroySession();
+        }
+#endif
         std3D_FreeResources();
         SDL_GL_DeleteContext(glWindowContext);
         SDL_DestroyWindow(displayWindow);
@@ -1396,13 +1511,36 @@ void Window_RecreateSDL2Window()
     SDL_GetWindowSize(displayWindow, &Window_screenXSize, &Window_screenYSize);
 
     Window_resized = 1;
+
+    // Added: Create VR session now that GL context is ready
+#ifdef PLATFORM_VR
+    if (stdVR_bInitted && !stdVR_IsSessionRunning()) {
+        if (stdVR_CreateSession(glWindowContext)) {
+            stdPlatform_Printf("Window: VR session created\n");
+        }
+    }
+#endif
 }
 
 void Window_Main_Loop()
 {
+// Added: VR frame timing and input
+#ifdef PLATFORM_VR
+    static int mainLoopCount = 0;
+    mainLoopCount++;
+
+    if (stdVR_bEnabled) {
+        // Always poll events to advance session state machine
+        stdVR_PollEvents();
+
+        // VR frame timing is handled entirely in Window_SdlUpdate to ensure proper
+        // Wait→Begin→Render→End cycle. We only poll events here.
+    }
+#endif
+
     jkMain_GuiAdvance(); // TODO needed?
     Window_msg_main_handler(g_hWnd, WM_PAINT, 0, 0);
-    
+
     //Window_SdlUpdate();
 }
 
@@ -1516,6 +1654,12 @@ int Window_Main_Linux(int argc, char** argv)
     if (Main_bHeadless)
     {
         if (displayWindow) {
+#ifdef PLATFORM_VR
+            // VR session must be destroyed before GL context
+            if (stdVR_bInitted) {
+                stdVR_DestroySession();
+            }
+#endif
             std3D_FreeResources();
             SDL_GL_DeleteContext(glWindowContext);
             SDL_DestroyWindow(displayWindow);

@@ -34,6 +34,9 @@ set(PLAT_ANDROID_ARM64 FALSE CACHE BOOL "Android AArch64")
 set(PLAT_TWL FALSE CACHE BOOL "Nintendo DSi")
 set(PLAT_AUTO FALSE CACHE BOOL "Target the host OS")
 
+# Added: VR/OpenXR support option
+set(TARGET_USE_VR FALSE CACHE BOOL "Enable OpenXR VR support")
+
 # Set PLAT_AUTO if a platform isn't specifically selected
 if(NOT PLAT_LINUX_32 AND NOT PLAT_LINUX_64 AND NOT PLAT_MACOS AND NOT PLAT_MACOS_X86_64 AND NOT PLAT_MINGW_X86_64 AND NOT PLAT_WASM AND NOT PLAT_HOOKS AND NOT PLAT_TWL)
     set(PLAT_AUTO TRUE)
@@ -218,6 +221,11 @@ include_directories(${PROJECT_SOURCE_DIR}/src/external/fcaseopen)
 # The rest of the conditional/TARGET_* dependencies
 include(cmake_modules/config_platform_deps.cmake)
 
+# Added: VR/OpenXR support
+if(TARGET_USE_VR)
+    include(cmake_modules/plat_feat_vr.cmake)
+endif()
+
 # globals.c/globals.c/precompiled resources preprocessing.
 # This includes selection for most of the files in src/platform/*
 include(cmake_modules/precompile_globals.cmake)
@@ -272,6 +280,11 @@ endif()
 
 # Allow platforms to add extra dependencies, ie Frameworks on macOS or PkgConfig on Linux
 plat_extra_deps()
+
+# Added: Link VR dependencies if enabled
+if(TARGET_USE_VR)
+    plat_vr_link_deps()
+endif()
 
 if(NOT OPENJKDF2_NO_ASAN)
     #add_compile_options(-fsanitize=address -fsanitize=float-divide-by-zero)

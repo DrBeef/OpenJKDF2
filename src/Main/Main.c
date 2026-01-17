@@ -39,6 +39,9 @@
 #include "Win95/stdConsole.h"
 #include "Platform/wuRegistry.h"
 #include "Platform/std3D.h"
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
 #include "Win95/Video.h"
 #include "Win95/Window.h"
 #include "Win95/Windows.h"
@@ -430,6 +433,9 @@ int Main_Startup(const char *cmdline)
         jkSmack_Startup();
 
         std3D_Startup(); // Added
+#ifdef PLATFORM_VR
+        stdVR_Startup(); // Added: Initialize VR/OpenXR
+#endif
 #ifdef QUAKE_CONSOLE
         jkQuakeConsole_Startup(); // Added
 #endif
@@ -464,6 +470,10 @@ void Main_Shutdown()
 {
     stdPlatform_Printf("OpenJKDF2: %s\n", __func__);
 
+#ifdef PLATFORM_VR
+    // VR must shutdown before GL resources are freed
+    stdVR_Shutdown(); // Added: Cleanup VR/OpenXR
+#endif
     std3D_Shutdown(); // Added
 #ifdef QUAKE_CONSOLE
     jkQuakeConsole_Shutdown();

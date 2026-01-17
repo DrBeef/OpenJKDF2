@@ -455,4 +455,13 @@ extern FAST_FUNC void* __aeabi_memcpy8(void* dst, const void* src, size_t len);*
 #define UNLIKELY(cond) (cond)
 #endif
 
+// Added: Cross-compiler attribute macros
+#if defined(_MSC_VER)
+#define ALWAYS_INLINE __forceinline
+#define PURE_FUNC
+#else
+#define ALWAYS_INLINE __attribute__((always_inline)) inline
+#define PURE_FUNC __attribute__((pure))
+#endif
+
 #endif // _OPENJKDF2_ENGINE_CONFIG_H

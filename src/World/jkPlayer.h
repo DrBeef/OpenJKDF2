@@ -177,6 +177,18 @@ extern int jkPlayer_bEnableClassicLighting;
 extern int jkPlayer_bJankyPhysics;
 #endif
 
+// Added: VR settings
+#ifdef PLATFORM_VR
+extern int jkPlayer_vrEnabled;           // Is VR mode active
+extern int jkPlayer_vrSnapTurnAngle;     // Snap turn angle: 0, 30, 45, 90 degrees
+extern int jkPlayer_vrSmoothTurnSpeed;   // Smooth turn speed in deg/sec
+extern float jkPlayer_vrWorldScale;      // World scale multiplier (default 1.0)
+extern float jkPlayer_vrHeightOffset;    // Player height offset in meters
+extern int jkPlayer_vrComfortVignette;   // Enable comfort vignette (0/1)
+extern int jkPlayer_vrDominantHand;      // 0=left, 1=right
+extern int jkPlayer_vrMoveDirection;     // 0=head, 1=controller
+extern float jkPlayer_vrSupersampling;   // VR render scale multiplier
+#endif // PLATFORM_VR
 
 #define HUD_SCALED(x) ((int)((flex_t)(x) * jkPlayer_hudScale)) // FLEXTODO
 

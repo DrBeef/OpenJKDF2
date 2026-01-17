@@ -10,7 +10,9 @@
 #include "jk.h"
 
 #include <assert.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 static int sithCvar_numRegistered = 0;
 static stdHashTable* sithCvar_pHashTable = NULL;

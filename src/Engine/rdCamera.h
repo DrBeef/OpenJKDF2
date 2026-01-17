@@ -49,6 +49,7 @@ MATH_FUNC int rdCamera_SetAspectRatio(rdCamera *camera, flex_t ratio);
 MATH_FUNC int rdCamera_BuildFOV(rdCamera *camera);
 MATH_FUNC int rdCamera_BuildClipFrustum(rdCamera *camera, rdClipFrustum *outClip, signed int height, signed int width, signed int height2, signed int width2);
 MATH_FUNC void rdCamera_Update(rdMatrix34 *orthoProj);
+void rdCamera_UpdateCamMatrix(rdMatrix34 *cameraWorldMatrix); // Added: VR support
 MATH_FUNC void rdCamera_OrthoProject(rdVector3* out, const rdVector3* v);
 MATH_FUNC void rdCamera_OrthoProjectLst(rdVector3 *vertices_out, const rdVector3 *vertices_in, unsigned int num_vertices);
 MATH_FUNC void rdCamera_OrthoProjectSquare(rdVector3 *out, const rdVector3 *v);
@@ -64,6 +65,16 @@ int rdCamera_ClearLights(rdCamera *camera);
 void rdCamera_AdvanceFrame();
 flex_t rdCamera_GetMipmapScalar(); // MOTS added
 void rdCamera_SetMipmapScalar(flex_t val); // MOTS added
+
+// Added: VR asymmetric projection support
+#ifdef PLATFORM_VR
+void rdCamera_SetVRProjection(float* proj16);
+void rdCamera_SetVRTangents(float tanLeft, float tanRight, float tanUp, float tanDown);
+void rdCamera_SetVRRenderDimensions(int width, int height);
+void rdCamera_ClearVRProjection(void);
+int rdCamera_IsVRProjectionActive(void);
+float* rdCamera_GetVRProjection(void);
+#endif
 
 #ifdef TARGET_TWL
 MATH_FUNC FAST_FUNC void rdCamera_PerspProjectClip(rdVector3 *vertices_out, const rdVector3 *vertices_in); // Added

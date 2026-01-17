@@ -12,6 +12,18 @@
 static rdVector3 rdCamera_camRotation;
 static flex_t rdCamera_mipmapScalar = 1.0; // MOTS added
 
+#ifdef PLATFORM_VR
+static float rdCamera_vrProjection[16];
+static int rdCamera_bUsingVRProjection = 0;
+static float rdCamera_vrTanLeft = 0.0f;
+static float rdCamera_vrTanRight = 0.0f;
+static float rdCamera_vrTanUp = 0.0f;
+static float rdCamera_vrTanDown = 0.0f;
+// Added: VR render target dimensions (replaces canvas size for CPU projection)
+static int rdCamera_vrRenderWidth = 0;
+static int rdCamera_vrRenderHeight = 0;
+#endif
+
 #ifdef TARGET_TWL
 int rdCamera_bForceRealProj = 0;
 #endif
@@ -298,13 +310,38 @@ int rdCamera_BuildFOV(rdCamera *camera)
 }
 
 int rdCamera_BuildClipFrustum(rdCamera *camera, rdClipFrustum *outClip, signed int minX, signed int minY, signed int maxX, signed int maxY)
-{   
+{
     //jk_printf("%u %u %u %u\n", height, width, height2, width2);
 
     rdClipFrustum* cameraClip = camera->pClipFrustum;
     rdCanvas* canvas = camera->canvas;
     if ( !canvas )
         return 0;
+
+    outClip->bClipFar = cameraClip->bClipFar;
+    outClip->zNear = cameraClip->zNear;
+    outClip->zFar = cameraClip->zFar;
+
+#ifdef PLATFORM_VR
+    // When VR projection is active, use asymmetric VR tangents for frustum
+    // Note: OpenXR tanLeft is typically negative, tanDown is typically negative
+    // So we check that tangents are set (non-zero) rather than > 0
+    if (rdCamera_bUsingVRProjection
+        && (rdCamera_vrTanLeft != 0.0f || rdCamera_vrTanRight != 0.0f
+        ||  rdCamera_vrTanUp != 0.0f || rdCamera_vrTanDown != 0.0f))
+    {
+        // VR frustum uses asymmetric tangents directly
+        // tanLeft is negative (pointing left), so -tanLeft gives positive value for farLeft
+        // tanDown is negative (pointing down), so -tanDown gives positive value for bottom
+        outClip->farLeft = -rdCamera_vrTanLeft;
+        outClip->right = rdCamera_vrTanRight;
+        outClip->farTop = rdCamera_vrTanUp;
+        outClip->bottom = -rdCamera_vrTanDown;
+        outClip->nearLeft = outClip->farLeft;
+        outClip->nearTop = outClip->farTop;
+        return 1;
+    }
+#endif
 
 #if defined(QOL_IMPROVEMENTS)
     flex_t overdraw = 1.0; // Added: HACK for 1px off on the bottom of the screen
@@ -313,14 +350,10 @@ int rdCamera_BuildClipFrustum(rdCamera *camera, rdClipFrustum *outClip, signed i
 #endif
     flex_t project_width_half = overdraw + canvas->half_screen_height - ((flex_d_t)minY - 0.5);
     flex_t project_height_half = overdraw + canvas->half_screen_width - ((flex_d_t)minX - 0.5);
-    
+
     flex_t project_width_half_2 = -canvas->half_screen_height + ((flex_d_t)maxY - 0.5);
     flex_t project_height_half_2 = -canvas->half_screen_width + ((flex_d_t)maxX - 0.5);
 
-    outClip->bClipFar = cameraClip->bClipFar;
-    outClip->zNear = cameraClip->zNear;
-    outClip->zFar = cameraClip->zFar;
-    
     flex_t fovDx = camera->fovDx;
     flex_t fovDy = camera->fovDx;
 
@@ -357,6 +390,14 @@ void rdCamera_Update(rdMatrix34 *orthoProj)
 {
     rdMatrix_InvertOrtho34(&rdCamera_pCurCamera->view_matrix, orthoProj);
     rdMatrix_Copy34(&rdCamera_camMatrix, orthoProj);
+    rdMatrix_ExtractAngles34(&rdCamera_camMatrix, &rdCamera_camRotation);
+}
+
+// Added: Update camera matrix globals without changing view_matrix
+// Used by VR path which sets view_matrix separately
+void rdCamera_UpdateCamMatrix(rdMatrix34 *cameraWorldMatrix)
+{
+    rdMatrix_Copy34(&rdCamera_camMatrix, cameraWorldMatrix);
     rdMatrix_ExtractAngles34(&rdCamera_camMatrix, &rdCamera_camRotation);
 }
 
@@ -398,6 +439,55 @@ void rdCamera_OrthoProjectSquareLst(rdVector3 *vertices_out, const rdVector3 *ve
     }
 }
 
+#ifdef PLATFORM_VR
+static inline int rdCamera_UseVRProjection(void)
+{
+    // Note: OpenXR tanLeft and tanDown are typically negative
+    // So check for non-zero values, not positive values
+    return rdCamera_bUsingVRProjection
+        && rdCamera_pCurCamera
+        && rdCamera_pCurCamera->canvas
+        && (rdCamera_vrTanLeft != 0.0f || rdCamera_vrTanRight != 0.0f
+        ||  rdCamera_vrTanUp != 0.0f || rdCamera_vrTanDown != 0.0f);
+}
+
+static void rdCamera_PerspProjectVR(rdVector3 *out, const rdVector3 *v)
+{
+    // Use VR render dimensions if set, otherwise fall back to canvas
+    float half_w, half_h;
+    if (rdCamera_vrRenderWidth > 0 && rdCamera_vrRenderHeight > 0) {
+        half_w = rdCamera_vrRenderWidth * 0.5f;
+        half_h = rdCamera_vrRenderHeight * 0.5f;
+    } else {
+        rdCanvas* canvas = rdCamera_pCurCamera->canvas;
+        half_w = canvas->half_screen_width;
+        half_h = canvas->half_screen_height;
+    }
+    float y = v->y;
+    if (y == 0.0f) {
+        y = 0.000001f;
+    }
+
+    // Convert stored tangents into signed frustum bounds
+    float left = -rdCamera_vrTanLeft;
+    float right = rdCamera_vrTanRight;
+    float top = rdCamera_vrTanUp;
+    float bottom = -rdCamera_vrTanDown;
+
+    float invW = 1.0f / (right - left);
+    float invH = 1.0f / (top - bottom);
+
+    float scaleX = (2.0f * half_w * invW) / y;
+    float scaleY = (2.0f * half_h * invH) / y;
+    float offsetX = -2.0f * half_w * left * invW;
+    float offsetY = 2.0f * half_h * top * invH;
+
+    out->x = offsetX + v->x * scaleX;
+    out->y = offsetY - v->z * scaleY;
+    out->z = v->y;
+}
+#endif
+
 // TODO: The original game had an aspect ratio multiply here, 
 // DSi needs an aspect divide, OpenGL wants nothing??
 void rdCamera_PerspProject(rdVector3 *out, const rdVector3 *v)
@@ -408,6 +498,12 @@ void rdCamera_PerspProject(rdVector3 *out, const rdVector3 *v)
     out->y = v->y;
     out->z = v->z;
 #else
+#ifdef PLATFORM_VR
+    if (rdCamera_UseVRProjection()) {
+        rdCamera_PerspProjectVR(out, v);
+        return;
+    }
+#endif
     flex_t fov_y_calc = (rdCamera_pCurCamera->fovDx / v->y);
     flex_t fov_x_calc = fov_y_calc; // This is the same because the clipping is what actually handles the aspect change
     out->x = rdCamera_pCurCamera->canvas->half_screen_width + (v->x * fov_x_calc);
@@ -423,6 +519,18 @@ void rdCamera_PerspProjectLst(rdVector3 *pVerticesOut, const rdVector3 *pVertice
     // DSi does HW projection
     memcpy(pVerticesOut, pVerticesIn, numVertices * sizeof(rdVector3));
     return;
+#endif
+
+#ifdef PLATFORM_VR
+    if (rdCamera_UseVRProjection()) {
+        for (unsigned int i = 0; i < numVertices; i++)
+        {
+            rdCamera_PerspProjectVR(pVerticesOut, pVerticesIn);
+            ++pVerticesIn;
+            ++pVerticesOut;
+        }
+        return;
+    }
 #endif
 
     for (unsigned int i = 0; i < numVertices; i++)
@@ -463,6 +571,12 @@ void rdCamera_PerspProjectSquare(rdVector3 *out, const rdVector3 *v)
     out->y = v->y;
     out->z = v->z;
 #else
+#ifdef PLATFORM_VR
+    if (rdCamera_UseVRProjection()) {
+        rdCamera_PerspProjectVR(out, v);
+        return;
+    }
+#endif
     flex_t fov_y_calc = (rdCamera_pCurCamera->fovDx / v->y);
     out->x = rdCamera_pCurCamera->canvas->half_screen_width + (v->x * fov_y_calc);
     out->y = rdCamera_pCurCamera->canvas->half_screen_height - (v->z * fov_y_calc);
@@ -475,6 +589,17 @@ void rdCamera_PerspProjectSquareLst(rdVector3 *pVerticesOut, const rdVector3 *pV
 #ifdef TARGET_TWL
     memcpy(pVerticesOut, pVerticesIn, numVertices * sizeof(rdVector3));
     return;
+#endif
+#ifdef PLATFORM_VR
+    if (rdCamera_UseVRProjection()) {
+        for (unsigned int i = 0; i < numVertices; i++)
+        {
+            rdCamera_PerspProjectVR(pVerticesOut, pVerticesIn);
+            ++pVerticesIn;
+            ++pVerticesOut;
+        }
+        return;
+    }
 #endif
     for (unsigned int i = 0; i < numVertices; i++)
     {
@@ -576,3 +701,60 @@ void rdCamera_SetMipmapScalar(flex_t val)
 {
     rdCamera_mipmapScalar = val;
 }
+
+// Added: VR asymmetric projection support
+#ifdef PLATFORM_VR
+void rdCamera_SetVRProjection(float* proj16)
+{
+    if (proj16) {
+        memcpy(rdCamera_vrProjection, proj16, 16 * sizeof(float));
+        rdCamera_bUsingVRProjection = 1;
+    }
+}
+
+void rdCamera_SetVRTangents(float tanLeft, float tanRight, float tanUp, float tanDown)
+{
+    rdCamera_vrTanLeft = tanLeft;
+    rdCamera_vrTanRight = tanRight;
+    rdCamera_vrTanUp = tanUp;
+    rdCamera_vrTanDown = tanDown;
+    rdCamera_bUsingVRProjection = 1;
+
+    if (rdCamera_pCurCamera && rdCamera_pCurCamera->pClipFrustum) {
+        rdClipFrustum* frustum = rdCamera_pCurCamera->pClipFrustum;
+        frustum->farLeft = -tanLeft;
+        frustum->right = tanRight;
+        frustum->farTop = tanUp;
+        frustum->bottom = -tanDown;
+        frustum->nearLeft = frustum->farLeft;
+        frustum->nearTop = frustum->farTop;
+    }
+}
+
+void rdCamera_SetVRRenderDimensions(int width, int height)
+{
+    rdCamera_vrRenderWidth = width;
+    rdCamera_vrRenderHeight = height;
+}
+
+void rdCamera_ClearVRProjection(void)
+{
+    rdCamera_bUsingVRProjection = 0;
+    rdCamera_vrTanLeft = 0.0f;
+    rdCamera_vrTanRight = 0.0f;
+    rdCamera_vrTanUp = 0.0f;
+    rdCamera_vrTanDown = 0.0f;
+    rdCamera_vrRenderWidth = 0;
+    rdCamera_vrRenderHeight = 0;
+}
+
+int rdCamera_IsVRProjectionActive(void)
+{
+    return rdCamera_bUsingVRProjection;
+}
+
+float* rdCamera_GetVRProjection(void)
+{
+    return rdCamera_vrProjection;
+}
+#endif // PLATFORM_VR

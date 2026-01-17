@@ -14,6 +14,11 @@
 #include "General/stdMath.h"
 #include "jk.h"
 
+// Added: VR support
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 static rdVector3 sithCamera_trans = {0.0, 0.3, 0.0};
 static rdVector3 sithCamera_trans2 = {0.0, 0.2, 0.0};
 static rdVector3 sithCamera_trans3 = {0.0, 1.0, 1.0};
@@ -859,4 +864,65 @@ void sithCamera_UpdateZoom(sithCamera *pCamera)
     }
 }
 #endif
+
+// Added: VR view setup
+#ifdef PLATFORM_VR
+
+// Prepare camera for VR rendering (called once per frame, before eye loop)
+// This does all the per-frame camera updates without actually rendering
+void sithCamera_PrepareFrameVR(void)
+{
+    if (!sithCamera_currentCamera) return;
+
+    // Update camera position to follow the player/focus
+    sithCamera_FollowFocus(sithCamera_currentCamera);
+
+    // Set as current rdCamera (but don't update view matrix yet - that's per-eye)
+    rdCamera_SetCurrent(&sithCamera_currentCamera->rdCam);
+}
+
+// Set up VR view for a specific eye (called per-eye in the stereo loop)
+void sithCamera_SetVRView(int eye)
+{
+    extern void VR_Log(const char* fmt, ...);
+    static int vrViewCallCount = 0;
+    vrViewCallCount++;
+
+    if (!sithCamera_currentCamera) return;
+    if (eye < 0 || eye >= STDVR_EYE_COUNT) return;
+
+    // Get the combined camera+VR matrix
+    rdMatrix34 vrViewMatrix;
+    stdVR_CombineCameraWithEye(&sithCamera_currentCamera->viewMat, eye, &vrViewMatrix);
+
+    // Update the rdCamera with the VR view matrix
+    rdCamera_SetCurrent(&sithCamera_currentCamera->rdCam);
+    rdMatrix34 invertedView;
+    rdMatrix_InvertOrtho34(&invertedView, &vrViewMatrix);
+    rdMatrix_Copy34(&rdCamera_pCurCamera->view_matrix, &invertedView);
+
+    // Added: Update rdCamera_camMatrix global (used by culling and sky rendering)
+    // This was missing before, causing stale camera state for one eye
+    rdCamera_UpdateCamMatrix(&vrViewMatrix);
+
+    // Set the VR projection matrix for this eye
+    float proj[16];
+    stdVR_EyeView* pEye = &stdVR_clientInfo.eyes[eye];
+
+    if (vrViewCallCount <= 20 || vrViewCallCount % 600 == 0) {
+        VR_Log("sithCamera_SetVRView: eye %d - fovL=%.3f fovR=%.3f fovU=%.3f fovD=%.3f\n",
+            eye, pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
+    }
+
+    rdCamera_SetVRTangents(pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
+
+    // Set VR render dimensions for CPU projection (must match actual render target size)
+    rdCamera_SetVRRenderDimensions(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
+
+    stdVR_GetEyeProjectionMatrix44(eye, proj,
+        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zNear : 0.01f,
+        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zFar : 1000.0f);
+    rdCamera_SetVRProjection(proj);
+}
+#endif // PLATFORM_VR
 

@@ -23,6 +23,13 @@
 #include "General/stdMath.h"
 #include "jk.h"
 
+// Added: VR support
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#include "Platform/VR/stdVR_Input.h"
+#include <math.h>
+#endif
+
 // Added
 static int sithControl_followingPlayer = 0;
 static int sithControl_curDebugCam = 0;
@@ -270,7 +277,12 @@ void sithControl_Tick(flex_t deltaSecs, int deltaMs)
         if ( stdControl_bControlsIdle )
         {
             sithControl_msIdle += deltaMs;
+#ifdef PLATFORM_VR
+            // Added: Never switch to idle camera in VR mode - it would break immersion
+            if ( sithControl_msIdle > 30000 && sithCamera_currentCamera != &sithCamera_cameras[4] && !stdVR_bInitted )
+#else
             if ( sithControl_msIdle > 30000 && sithCamera_currentCamera != &sithCamera_cameras[4] )
+#endif
                 sithCamera_SetCurrentCamera(&sithCamera_cameras[4]);
 #ifdef QOL_IMPROVEMENTS
             else if (sithControl_msIdle < 30000 && sithCamera_currentCamera == &sithCamera_cameras[4] ) {
@@ -698,6 +710,50 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
     v6 = 0;
     if ( pOut )
         *pOut = 0;
+
+// Added: VR controller input mapping
+#ifdef PLATFORM_VR
+    if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+        int vrInput = 0;
+        switch (funcIdx) {
+            case INPUT_FUNC_FIRE1:
+                // Right trigger = primary fire
+                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_TRIGGER_R);
+                break;
+            case INPUT_FUNC_FIRE2:
+                // Right grip = secondary fire
+                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_R);
+                break;
+            case INPUT_FUNC_JUMP:
+                // A button = jump
+                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_A);
+                break;
+            case INPUT_FUNC_ACTIVATE:
+                // X button = activate/use
+                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_X);
+                break;
+            case INPUT_FUNC_DUCK:
+                // B button = duck/crouch
+                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_B);
+                break;
+            case INPUT_FUNC_USESKILL:
+                // Left trigger = use force power
+                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_TRIGGER_L);
+                break;
+            case INPUT_FUNC_USEINV:
+                // Left grip = use inventory item
+                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_L);
+                break;
+            default:
+                break;
+        }
+        if (vrInput) {
+            v6 = 1;
+            if (pOut) *pOut = 1;
+        }
+    }
+#endif // PLATFORM_VR
+
     v2 = 0;
     if ( sithControl_aInputFuncToKeyinfo[funcIdx].numEntries )
     {
@@ -1485,6 +1541,7 @@ void sithControl_PlayerMovement(sithThing *player)
     flex_t move_multiplier_; // [esp+4h] [ebp-8h]
     int v20; // [esp+8h] [ebp-4h] BYREF
     flex_t move_multiplier; // [esp+10h] [ebp+4h]
+    int vrMovementActive = 0;
 
     move_multiplier = 1.0;
     if ( (sithWeapon_controlOptions & 2) != 0 || sithControl_ReadFunctionMap(INPUT_FUNC_FAST, 0) )
@@ -1533,6 +1590,52 @@ void sithControl_PlayerMovement(sithThing *player)
         }
         else
         {
+// Added: VR decoupled movement
+#ifdef PLATFORM_VR
+            if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+                vrMovementActive = 1;
+                // VR movement: use controller/head direction for movement, not player orientation
+                float moveX = 0.0f, moveY = 0.0f;
+                stdVR_Input_GetMovementDirection(&moveX, &moveY);
+
+                // Calculate movement direction based on VR move yaw (controller or head)
+                float moveYawRad = stdVR_clientInfo.moveYaw * (3.14159265f / 180.0f);
+                float cosYaw = cosf(moveYawRad);
+                float sinYaw = sinf(moveYawRad);
+
+                // Get player's current yaw to calculate relative movement
+                float playerYawRad = player->lookOrientation.lvec.x != 0.0f || player->lookOrientation.lvec.z != 0.0f
+                    ? atan2f(player->lookOrientation.lvec.x, player->lookOrientation.lvec.z)
+                    : 0.0f;
+
+                // Calculate the relative yaw between VR orientation and player orientation
+                float relYawRad = moveYawRad - playerYawRad;
+                float relCos = cosf(relYawRad);
+                float relSin = sinf(relYawRad);
+
+                // Transform thumbstick input to player-relative movement
+                float transformedX = moveX * relCos - moveY * relSin;
+                float transformedY = moveX * relSin + moveY * relCos;
+
+                // Apply movement
+                flex_t thrust = player->actorParams.maxThrust + player->actorParams.extraSpeed;
+                player->physicsParams.acceleration.x = transformedX * thrust * 0.7f;
+                player->physicsParams.acceleration.y = transformedY * thrust;
+
+                // Handle VR turning (snap or smooth)
+                int snapAngle = stdVR_Input_GetSnapTurnAngle();
+                if (snapAngle != 0) {
+                    // Apply snap turn to player orientation
+                    rdVector3 rot = { 0.0f, (float)snapAngle, 0.0f };
+                    rdMatrix_PostRotate34(&player->lookOrientation, &rot);
+                    player->physicsParams.angVel.y = 0.0f;
+                } else {
+                    // Smooth turn from VR input
+                    player->physicsParams.angVel.y = stdVR_Input_GetSmoothTurnSpeed();
+                }
+            } else
+#endif // PLATFORM_VR
+            {
             // Player yaw handling
 
             // These base values only come from raw axis fetches
@@ -1546,7 +1649,7 @@ void sithControl_PlayerMovement(sithThing *player)
                 move_multiplier_ = move_multiplier;
             else
                 move_multiplier_ = 1.0;
-            
+
             // These axis values only come from non-raw axis fetches
 #ifdef QOL_IMPROVEMENTS
             // Scale appropriately to high framerates
@@ -1558,17 +1661,20 @@ void sithControl_PlayerMovement(sithThing *player)
             player->physicsParams.acceleration.x = sithControl_GetAxisTimeCorrected(INPUT_FUNC_SLIDE)
                                                             * (player->actorParams.maxThrust + player->actorParams.extraSpeed)
                                                             * 0.7;
+            }
         }
-        v11 = sithControl_GetAxisTimeCorrected(0);
-        y_vel = (player->actorParams.maxThrust + player->actorParams.extraSpeed) * v11;
-        if ( v11 < 0.0 )
-            y_vel = y_vel * 0.5;
-        player->physicsParams.acceleration.y = y_vel;
-        if ( v11 > 0.2 && (sithWeapon_controlOptions & 0x10) != 0 )
-        {
-            if ( (player->actorParams.typeflags & SITH_AF_HEAD_IS_CENTERED) == 0 )
+        if (!vrMovementActive) {
+            v11 = sithControl_GetAxisTimeCorrected(0);
+            y_vel = (player->actorParams.maxThrust + player->actorParams.extraSpeed) * v11;
+            if ( v11 < 0.0 )
+                y_vel = y_vel * 0.5;
+            player->physicsParams.acceleration.y = y_vel;
+            if ( v11 > 0.2 && (sithWeapon_controlOptions & 0x10) != 0 )
             {
-                player->actorParams.typeflags |= SITH_AF_CENTER_VIEW;
+                if ( (player->actorParams.typeflags & SITH_AF_HEAD_IS_CENTERED) == 0 )
+                {
+                    player->actorParams.typeflags |= SITH_AF_CENTER_VIEW;
+                }
             }
         }
         player->physicsParams.acceleration.z = 0;

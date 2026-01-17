@@ -32,6 +32,9 @@
 #include "General/stdJSON.h"
 #include "Platform/std3D.h"
 #include "Main/sithCvar.h"
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
 
 // DSi has *plenty* of time to read the text.
 #ifdef TARGET_TWL
@@ -76,6 +79,19 @@ int jkPlayer_bEnableClassicLighting = 0;
 #ifdef FIXED_TIMESTEP_PHYS
 int jkPlayer_bJankyPhysics = 0;
 #endif
+
+// Added: VR settings
+#ifdef PLATFORM_VR
+int jkPlayer_vrEnabled = 0;
+int jkPlayer_vrSnapTurnAngle = 45;      // 0 = smooth turn, 30/45/90 = snap turn degrees
+int jkPlayer_vrSmoothTurnSpeed = 120;   // degrees per second
+float jkPlayer_vrWorldScale = 1.0f;     // World scale multiplier
+float jkPlayer_vrHeightOffset = 0.0f;   // Player height offset in meters
+int jkPlayer_vrComfortVignette = 1;     // Enable comfort vignette (0/1)
+int jkPlayer_vrDominantHand = 1;        // 0=left, 1=right
+int jkPlayer_vrMoveDirection = 1;       // 0=head, 1=controller
+float jkPlayer_vrSupersampling = 1.0f;  // VR render scale multiplier
+#endif // PLATFORM_VR
 
 #ifdef JKM_DSS
 jkPlayerInfo jkPlayer_aMotsInfos[NUM_JKPLAYER_THINGS] = {0};
@@ -242,6 +258,18 @@ void jkPlayer_ResetVars()
 
 #ifdef FIXED_TIMESTEP_PHYS
     jkPlayer_bJankyPhysics = 0;
+#endif
+
+#ifdef PLATFORM_VR
+    jkPlayer_vrEnabled = 0;
+    jkPlayer_vrSnapTurnAngle = 45;
+    jkPlayer_vrSmoothTurnSpeed = 120;
+    jkPlayer_vrWorldScale = 1.0f;
+    jkPlayer_vrHeightOffset = 0.0f;
+    jkPlayer_vrComfortVignette = 1;
+    jkPlayer_vrDominantHand = 1;
+    jkPlayer_vrMoveDirection = 1;
+    jkPlayer_vrSupersampling = 1.0f;
 #endif
 
 #ifdef JKM_DSS
@@ -568,6 +596,9 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveFloat(ext_fpath, "ssaamultiple", jkPlayer_ssaaMultiple);
         stdJSON_SaveInt(ext_fpath, "enablessao", jkPlayer_enableSSAO);
         stdJSON_SaveFloat(ext_fpath, "gamma", jkPlayer_gamma);
+#ifdef PLATFORM_VR
+        stdJSON_SaveFloat(ext_fpath, "vrSupersampling", jkPlayer_vrSupersampling);
+#endif
         stdJSON_SaveBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         stdJSON_SaveBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
         stdJSON_SaveBool(ext_fpath, "bKeepCorpses", jkPlayer_bKeepCorpses);
@@ -762,6 +793,9 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_ssaaMultiple = stdJSON_GetFloat(ext_fpath, "ssaamultiple", jkPlayer_ssaaMultiple);
         jkPlayer_enableSSAO = stdJSON_GetInt(ext_fpath, "enablessao", jkPlayer_enableSSAO);
         jkPlayer_gamma = stdJSON_GetFloat(ext_fpath, "gamma", jkPlayer_gamma);
+#ifdef PLATFORM_VR
+        jkPlayer_vrSupersampling = stdJSON_GetFloat(ext_fpath, "vrSupersampling", jkPlayer_vrSupersampling);
+#endif
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         jkPlayer_bEnableTexturePrecache = stdJSON_GetBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
@@ -797,6 +831,19 @@ int jkPlayer_ReadConf(wchar_t *name)
         std3D_UpdateSettings();
 
         jkPlayer_bHasLoadedSettingsOnce = 1;
+#endif
+
+#ifdef PLATFORM_VR
+        stdVR_SyncConfigFromJkPlayer();
+        jk_printf("OpenJKDF2 VR: synced config from profile (moveDir=%d snap=%d smooth=%d world=%.2f height=%.2f comfort=%d hand=%d ssaa=%.2f)\n",
+            stdVR_config.moveDirection,
+            stdVR_config.snapTurnAngle,
+            (int)stdVR_config.smoothTurnSpeed,
+            stdVR_config.worldScale,
+            stdVR_config.heightOffset,
+            stdVR_config.bComfortVignette,
+            stdVR_config.dominantHand,
+            stdVR_config.supersampling);
 #endif
         
         stdConffile_Close();
