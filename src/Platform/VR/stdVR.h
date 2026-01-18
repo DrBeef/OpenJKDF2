@@ -98,6 +98,10 @@ void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection);
 void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix);
 int stdVR_IsSwingTriggered(void);
 float stdVR_GetSwingSpeed(void);
+int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat);
+
+// Debug visualization
+void stdVR_DrawDebugControllerAxes(int hand);
 
 // Settings sync functions (to/from jkPlayer settings)
 void stdVR_SyncConfigFromJkPlayer(void);

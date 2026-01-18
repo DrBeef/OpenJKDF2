@@ -14,6 +14,9 @@
 #include <string.h>
 #include <math.h>
 
+// For debug drawing
+#include <GL/glew.h>
+
 // Global VR state
 int stdVR_bEnabled = 0;
 int stdVR_bInitted = 0;
@@ -41,7 +44,7 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_config.turnMode = STDVR_TURN_SMOOTH;
     stdVR_config.snapTurnAngle = 30;
     stdVR_config.smoothTurnSpeed = 120.0f;
-    stdVR_config.worldScale = 0.15f;  // IPD multiplier - game units are small, reduce IPD for proper scale
+    stdVR_config.worldScale = 0.075f;  // IPD/roomscale multiplier - reduced for less physical movement
     stdVR_config.heightOffset = 0.0f;
     stdVR_config.bComfortVignette = 1;
     stdVR_config.dominantHand = STDVR_CONTROLLER_RIGHT;
@@ -619,16 +622,17 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
     //
     // The worldScale parameter is for adjusting perceived object sizes (IPD-related).
 
-    // HMD position offset for 6DOF head movement (in VR meters, not scaled)
-    // This allows leaning, ducking, etc. relative to game camera position
+    // HMD position offset for 6DOF head movement (roomscale)
+    // Scale by worldScale to control how much physical movement affects in-game position
+    // This also reduces the "strafing" effect when turning your head (pivot offset)
     rdVector3 hmdOffset;
-    hmdOffset.x = hmdPose.scale.x;
-    hmdOffset.y = hmdPose.scale.y;
-    hmdOffset.z = hmdPose.scale.z;
+    hmdOffset.x = hmdPose.scale.x * worldScale;
+    hmdOffset.y = hmdPose.scale.y * worldScale;
+    hmdOffset.z = hmdPose.scale.z * worldScale;
 
-    // Apply height offset if configured (in meters)
+    // Apply height offset if configured (in meters, then scaled)
     if (stdVR_config.heightOffset != 0.0f) {
-        hmdOffset.z += stdVR_config.heightOffset;
+        hmdOffset.z += stdVR_config.heightOffset * worldScale;
     }
 
     // Calculate per-eye offset from HMD center (IPD) - this stays in meters
@@ -864,6 +868,158 @@ float stdVR_GetSwingSpeed(void)
         return 0.0f;
     }
     return pCtrl->motion.swingSpeed;
+}
+
+// Get controller pose in view space (for rendering weapon at controller position)
+// Returns 1 if successful, 0 if controller not tracking
+int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
+{
+    static int debugCounter = 0;
+    debugCounter++;
+
+    if (!pViewMat || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
+        if (debugCounter % 100 == 0) {
+            VR_Log("GetControllerViewMatrix: invalid params pViewMat=%p hand=%d\n", (void*)pViewMat, hand);
+        }
+        return 0;
+    }
+
+    stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
+    if (!pCtrl->bTracking) {
+        if (debugCounter % 100 == 0) {
+            VR_Log("GetControllerViewMatrix: controller %d not tracking\n", hand);
+        }
+        return 0;
+    }
+
+    // Get current eye view matrix
+    rdMatrix34 eyeViewMat;
+    if (!stdVR_GetCurrentEyeViewMatrix(&eyeViewMat)) {
+        if (debugCounter % 100 == 0) {
+            VR_Log("GetControllerViewMatrix: no current eye view matrix\n");
+        }
+        return 0;
+    }
+
+    // Get controller world matrix
+    rdMatrix34 controllerWorld;
+    stdVR_GetControllerWorldMatrix(hand, &controllerWorld);
+
+    // Controller in view space = inverse(eyeView) * controllerWorld
+    // But since we want to render the weapon FROM the controller's perspective,
+    // we need to compute how the controller appears relative to the eye.
+    //
+    // eyeViewMat transforms world -> view space
+    // So we transform controller world position/orientation to view space
+
+    // Transform controller position to view space
+    rdVector3 controllerViewPos;
+    rdVector3 worldPos = { controllerWorld.scale.x, controllerWorld.scale.y, controllerWorld.scale.z };
+
+    // Subtract eye position, then rotate by eye orientation
+    rdVector3 relPos;
+    relPos.x = worldPos.x - eyeViewMat.scale.x;
+    relPos.y = worldPos.y - eyeViewMat.scale.y;
+    relPos.z = worldPos.z - eyeViewMat.scale.z;
+
+    // The eye view matrix's rotation part transforms world coords to view coords
+    // We need the transpose (inverse for orthonormal) to transform our vector
+    rdMatrix34 eyeRotInv;
+    rdMatrix_Copy34(&eyeRotInv, &eyeViewMat);
+    eyeRotInv.scale.x = 0; eyeRotInv.scale.y = 0; eyeRotInv.scale.z = 0;
+    rdMatrix_TransformVector34(&controllerViewPos, &relPos, &eyeRotInv);
+
+    // Combine controller orientation with eye orientation (in view space)
+    // Controller's forward should point where the controller aims in view space
+    rdMatrix34 controllerRot;
+    rdMatrix_Copy34(&controllerRot, &controllerWorld);
+    controllerRot.scale.x = 0; controllerRot.scale.y = 0; controllerRot.scale.z = 0;
+
+    // Transform controller orientation to view space
+    rdMatrix_Multiply34(pViewMat, &eyeRotInv, &controllerRot);
+
+    // Set the position
+    pViewMat->scale.x = controllerViewPos.x;
+    pViewMat->scale.y = controllerViewPos.y;
+    pViewMat->scale.z = controllerViewPos.z;
+
+    if (debugCounter % 100 == 0) {
+        VR_Log("GetControllerViewMatrix SUCCESS: ctrlWorld=(%.2f,%.2f,%.2f) viewPos=(%.2f,%.2f,%.2f)\n",
+            controllerWorld.scale.x, controllerWorld.scale.y, controllerWorld.scale.z,
+            controllerViewPos.x, controllerViewPos.y, controllerViewPos.z);
+    }
+
+    return 1;
+}
+
+// Debug: Draw controller axes at given world position using immediate mode GL
+// This draws RGB axes (X=Red, Y=Green, Z=Blue) to visualize controller orientation
+void stdVR_DrawDebugControllerAxes(int hand)
+{
+    if (!stdVR_bEnabled) return;
+
+    stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
+    if (!pCtrl->bTracking) return;
+
+    // Get controller world matrix
+    rdMatrix34 ctrlWorld;
+    stdVR_GetControllerWorldMatrix(hand, &ctrlWorld);
+
+    // Save GL state
+    GLint oldProgram;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &oldProgram);
+    GLboolean oldDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean oldBlend = glIsEnabled(GL_BLEND);
+
+    // Use fixed function pipeline for debug draw (no shader)
+    glUseProgram(0);
+    glDisable(GL_DEPTH_TEST);  // Draw on top of everything
+    glDisable(GL_BLEND);
+    glLineWidth(3.0f);
+
+    // Extract position and axes from matrix
+    float px = ctrlWorld.scale.x;
+    float py = ctrlWorld.scale.y;
+    float pz = ctrlWorld.scale.z;
+
+    // Axis length in world units
+    float axisLen = 0.1f;
+
+    // X axis (Red) - right vector
+    float rx = ctrlWorld.rvec.x * axisLen;
+    float ry = ctrlWorld.rvec.y * axisLen;
+    float rz = ctrlWorld.rvec.z * axisLen;
+
+    // Y axis (Green) - forward vector
+    float fx = ctrlWorld.lvec.x * axisLen;
+    float fy = ctrlWorld.lvec.y * axisLen;
+    float fz = ctrlWorld.lvec.z * axisLen;
+
+    // Z axis (Blue) - up vector
+    float ux = ctrlWorld.uvec.x * axisLen;
+    float uy = ctrlWorld.uvec.y * axisLen;
+    float uz = ctrlWorld.uvec.z * axisLen;
+
+    // Draw axes using deprecated immediate mode (simple debug viz)
+    glBegin(GL_LINES);
+    // X axis - Red
+    glColor3f(1.0f, 0.0f, 0.0f);
+    glVertex3f(px, py, pz);
+    glVertex3f(px + rx, py + ry, pz + rz);
+    // Y axis - Green
+    glColor3f(0.0f, 1.0f, 0.0f);
+    glVertex3f(px, py, pz);
+    glVertex3f(px + fx, py + fy, pz + fz);
+    // Z axis - Blue
+    glColor3f(0.0f, 0.0f, 1.0f);
+    glVertex3f(px, py, pz);
+    glVertex3f(px + ux, py + uy, pz + uz);
+    glEnd();
+
+    // Restore GL state
+    if (oldDepthTest) glEnable(GL_DEPTH_TEST);
+    if (oldBlend) glEnable(GL_BLEND);
+    glUseProgram(oldProgram);
 }
 
 // Sync jkPlayer VR settings to stdVR_config

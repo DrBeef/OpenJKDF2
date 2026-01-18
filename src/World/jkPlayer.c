@@ -957,16 +957,65 @@ void jkPlayer_DrawPov()
         // We also force matrix rebuild per eye since the per-eye viewMat differs between eyes.
 #ifdef PLATFORM_VR
         extern int stdVR_bEnabled;
-        if (stdVR_bEnabled && stdVR_GetCurrentEyeViewMatrix(&viewMat)) {
-            // Force weapon model to rebuild hierarchyNodeMatrices for this eye
-            // by invalidating the frame cache. Each eye needs its own matrices
-            // since the per-eye camera position differs.
-            playerThings[playerThingIdx].povModel.frameTrue = 0;
-        } else {
-            rdMatrix_Copy34(&viewMat, &sithCamera_currentCamera->viewMat);
+        extern stdVR_MotionConfig stdVR_motionConfig;
+        int vrMotionWeapon = 0;
+
+        // Debug: log motion control state periodically
+        static int vrDebugCounter = 0;
+        vrDebugCounter++;
+        extern void VR_Log(const char* fmt, ...);
+
+        if (stdVR_bEnabled && stdVR_motionConfig.bMotionAimEnabled) {
+            // Motion controls: render weapon at controller position/orientation
+            int hand = stdVR_GetDominantHand();
+            stdVR_ControllerState* pCtrl = stdVR_GetController(hand);
+
+            if (vrDebugCounter % 100 == 0) {
+                VR_Log("VR Motion: hand=%d, ctrl=%p, tracking=%d\n",
+                    hand, (void*)pCtrl, pCtrl ? pCtrl->bTracking : -1);
+                if (pCtrl) {
+                    VR_Log("  Controller pos: (%.3f, %.3f, %.3f)\n",
+                        pCtrl->position.x, pCtrl->position.y, pCtrl->position.z);
+                }
+            }
+
+            if (stdVR_GetControllerViewMatrix(hand, &viewMat)) {
+                vrMotionWeapon = 1;
+                // Force weapon model to rebuild hierarchyNodeMatrices for this eye
+                playerThings[playerThingIdx].povModel.frameTrue = 0;
+
+                // Apply weapon model offset - the gun model origin needs adjustment
+                // to align with the controller grip position
+                rdVector3 weaponOffset = { 0.0f, 0.0f, 0.0f };  // Tune as needed
+                rdMatrix_PreTranslate34(&viewMat, &weaponOffset);
+
+                if (vrDebugCounter % 100 == 0) {
+                    VR_Log("  vrMotionWeapon=1, ViewMat pos: (%.3f, %.3f, %.3f)\n",
+                        viewMat.scale.x, viewMat.scale.y, viewMat.scale.z);
+                }
+            } else if (vrDebugCounter % 100 == 0) {
+                VR_Log("  GetControllerViewMatrix FAILED\n");
+            }
+        } else if (vrDebugCounter % 100 == 0) {
+            VR_Log("VR Motion DISABLED: enabled=%d, motionAim=%d\n",
+                stdVR_bEnabled, stdVR_motionConfig.bMotionAimEnabled);
+        }
+
+        if (!vrMotionWeapon) {
+            // Fallback: use eye view matrix (HMD-attached weapon)
+            if (stdVR_bEnabled && stdVR_GetCurrentEyeViewMatrix(&viewMat)) {
+                playerThings[playerThingIdx].povModel.frameTrue = 0;
+            } else {
+                rdMatrix_Copy34(&viewMat, &sithCamera_currentCamera->viewMat);
+            }
         }
 #else
         rdMatrix_Copy34(&viewMat, &sithCamera_currentCamera->viewMat);
+#endif
+
+#ifdef PLATFORM_VR
+        // Only apply eye offset and weapon waggle for HMD-attached weapons, not motion-controlled
+        if (!vrMotionWeapon) {
 #endif
         rdVector_Copy3(&trans, &playerThings[playerThingIdx].actorThing->actorParams.eyeOffset);
         //printf("%f %f %f\n", (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.x, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.y, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.z);
@@ -989,6 +1038,9 @@ void jkPlayer_DrawPov()
         rdVector_Neg3Acc(&trans);
         rdMatrix_PreTranslate34(&viewMat, &trans);
         rdMatrix_PreMultiply34(&viewMat, &jkSaber_rotateMat);
+#ifdef PLATFORM_VR
+        }
+#endif
 
         // Moved: see below.
 #if !(defined(SDL2_RENDER) || defined(TARGET_TWL))
@@ -1024,6 +1076,14 @@ void jkPlayer_DrawPov()
         rdCache_Flush(); // Added: force polyline to be underneath model
 #endif
         rdSetZBufferMethod(RD_ZBUFFER_READ_WRITE);
+#endif
+
+#ifdef PLATFORM_VR
+        // Debug: Draw controller axes to visualize tracking
+        if (stdVR_bEnabled) {
+            int hand = stdVR_GetDominantHand();
+            stdVR_DrawDebugControllerAxes(hand);
+        }
 #endif
     }
 }
