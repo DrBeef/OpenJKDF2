@@ -25,6 +25,10 @@
 #include "General/stdMath.h"
 #include "jk.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 // MOTS added
 int sithWeapon_mots_5a3258 = -1;
 int sithWeapon_motsAConv[10] = {
@@ -1367,9 +1371,35 @@ sithThing* sithWeapon_FireProjectile(sithThing *sender, sithThing *projectileTem
     flex_t a5a; // [esp+90h] [ebp+14h]
 
     thingtype = sender->type;
-    _memcpy(&out, &sender->lookOrientation, sizeof(out));
-    if ( thingtype == SITH_THING_ACTOR || thingtype == SITH_THING_PLAYER )
-        rdMatrix_PreRotate34(&out, &sender->actorParams.eyePYR);
+
+#ifdef PLATFORM_VR
+    // VR motion controls: aim with controller instead of HMD
+    if (stdVR_bEnabled && stdVR_motionConfig.bMotionAimEnabled &&
+        thingtype == SITH_THING_PLAYER && sender == sithPlayer_pLocalPlayerThing)
+    {
+        stdVR_ControllerState* pCtrl = stdVR_GetDominantController();
+        if (pCtrl && pCtrl->bTracking)
+        {
+            // Get controller orientation combined with player body orientation
+            stdVR_GetControllerWorldMatrix(stdVR_GetDominantHand(), &out);
+        }
+        else
+        {
+            // Controller not tracking, fall back to HMD aiming
+            _memcpy(&out, &sender->lookOrientation, sizeof(out));
+            if (thingtype == SITH_THING_ACTOR || thingtype == SITH_THING_PLAYER)
+                rdMatrix_PreRotate34(&out, &sender->actorParams.eyePYR);
+        }
+    }
+    else
+#endif
+    {
+        // Original HMD-based aiming
+        _memcpy(&out, &sender->lookOrientation, sizeof(out));
+        if (thingtype == SITH_THING_ACTOR || thingtype == SITH_THING_PLAYER)
+            rdMatrix_PreRotate34(&out, &sender->actorParams.eyePYR);
+    }
+
     if ( fireOffset->x == 0.0 && fireOffset->y == 0.0 && fireOffset->z == 0.0 )
     {
         *fireOffset = sender->position;

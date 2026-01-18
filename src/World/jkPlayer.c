@@ -83,9 +83,9 @@ int jkPlayer_bJankyPhysics = 0;
 // Added: VR settings
 #ifdef PLATFORM_VR
 int jkPlayer_vrEnabled = 0;
-int jkPlayer_vrSnapTurnAngle = 45;      // 0 = smooth turn, 30/45/90 = snap turn degrees
+int jkPlayer_vrSnapTurnAngle = 0;       // 0 = smooth turn, 30/45/90 = snap turn degrees
 int jkPlayer_vrSmoothTurnSpeed = 120;   // degrees per second
-float jkPlayer_vrWorldScale = 1.0f;     // World scale multiplier
+float jkPlayer_vrWorldScale = 0.15f;    // World scale (game units per meter)
 float jkPlayer_vrHeightOffset = 0.0f;   // Player height offset in meters
 int jkPlayer_vrComfortVignette = 1;     // Enable comfort vignette (0/1)
 int jkPlayer_vrDominantHand = 1;        // 0=left, 1=right
@@ -262,9 +262,9 @@ void jkPlayer_ResetVars()
 
 #ifdef PLATFORM_VR
     jkPlayer_vrEnabled = 0;
-    jkPlayer_vrSnapTurnAngle = 45;
+    jkPlayer_vrSnapTurnAngle = 0;        // 0 = smooth turn
     jkPlayer_vrSmoothTurnSpeed = 120;
-    jkPlayer_vrWorldScale = 1.0f;
+    jkPlayer_vrWorldScale = 0.15f;       // Game units per meter
     jkPlayer_vrHeightOffset = 0.0f;
     jkPlayer_vrComfortVignette = 1;
     jkPlayer_vrDominantHand = 1;

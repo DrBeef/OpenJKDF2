@@ -56,8 +56,8 @@ void stdVR_Input_ProcessSnapTurn(void)
     if (stdVR_config.turnMode == STDVR_TURN_SNAP) {
         // Snap turn logic
         if (fabsf(turnInput) > STDVR_SNAP_TURN_THRESHOLD && fabsf(stdVR_lastSnapTurnInput) <= STDVR_SNAP_TURN_THRESHOLD) {
-            // Trigger snap turn
-            stdVR_snapTurnPending = (turnInput > 0) ? 1 : -1;
+            // Trigger snap turn (negate: positive X = right on stick, but positive yaw = left in JKDF2)
+            stdVR_snapTurnPending = (turnInput > 0) ? -1 : 1;
         } else if (fabsf(turnInput) <= STDVR_SNAP_TURN_THRESHOLD) {
             // Reset when returning to center
             stdVR_snapTurnPending = 0;
@@ -202,7 +202,8 @@ float stdVR_Input_GetSmoothTurnSpeed(void)
     }
 
     float turnInput = ApplyDeadzone(stdVR_clientInfo.analogTurn[0], STDVR_THUMBSTICK_DEADZONE);
-    return turnInput * stdVR_config.smoothTurnSpeed;
+    // Negate because positive X = right on stick, but positive yaw = left in JKDF2
+    return -turnInput * stdVR_config.smoothTurnSpeed;
 }
 
 // Check if a VR button is currently pressed

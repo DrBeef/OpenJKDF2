@@ -19,6 +19,7 @@ int stdVR_bEnabled = 0;
 int stdVR_bInitted = 0;
 stdVR_ClientInfo stdVR_clientInfo;
 stdVR_Config stdVR_config;
+stdVR_MotionConfig stdVR_motionConfig;
 
 // Debug mode for shader testing (0=normal, 1=solid, 2=UV, 3=depth, 4=vertex color)
 int std3D_vrDebugMode = 0;
@@ -37,14 +38,30 @@ static void stdVR_InitDefaultConfig(void)
     memset(&stdVR_config, 0, sizeof(stdVR_config));
 
     stdVR_config.moveDirection = STDVR_MOVE_CONTROLLER;
-    stdVR_config.turnMode = STDVR_TURN_SNAP;
-    stdVR_config.snapTurnAngle = 45;
+    stdVR_config.turnMode = STDVR_TURN_SMOOTH;
+    stdVR_config.snapTurnAngle = 30;
     stdVR_config.smoothTurnSpeed = 120.0f;
-    stdVR_config.worldScale = 1.0f;
+    stdVR_config.worldScale = 0.15f;  // IPD multiplier - game units are small, reduce IPD for proper scale
     stdVR_config.heightOffset = 0.0f;
     stdVR_config.bComfortVignette = 1;
     stdVR_config.dominantHand = STDVR_CONTROLLER_RIGHT;
     stdVR_config.supersampling = 1.0f;
+
+    // Initialize motion controls config
+    memset(&stdVR_motionConfig, 0, sizeof(stdVR_motionConfig));
+
+    stdVR_motionConfig.weaponVelocityTrigger = 2.0f;    // m/s for melee attack
+    stdVR_motionConfig.saberVelocityTrigger = 2.5f;     // m/s for saber attack
+    stdVR_motionConfig.forceVelocityTrigger = 1.5f;     // m/s for force gesture
+    stdVR_motionConfig.forceDistanceTrigger = 0.3f;     // meters for push/pull
+    stdVR_motionConfig.weaponPitchAdjust = 0.0f;        // degrees
+    stdVR_motionConfig.saberPitchAdjust = 0.0f;         // degrees
+    stdVR_motionConfig.bMotionAimEnabled = 1;           // Enable controller aiming by default
+    stdVR_motionConfig.bMotionSaberEnabled = 1;         // Enable swing-to-attack
+    stdVR_motionConfig.bMotionForceEnabled = 0;         // Disable force gestures for now
+    stdVR_motionConfig.bTwoHandedEnabled = 0;           // Disable two-handed for now
+    stdVR_motionConfig.positionSmoothingSamples = 3;
+    stdVR_motionConfig.velocitySmoothingFactor = 0.5f;
 }
 
 int stdVR_Startup(void)
@@ -565,61 +582,70 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
             pGameCamera->scale.x, pGameCamera->scale.y, pGameCamera->scale.z);
         VR_Log("  hmdPose pos=(%.4f, %.4f, %.4f)\n",
             hmdPose.scale.x, hmdPose.scale.y, hmdPose.scale.z);
-        VR_Log("  eyePose pos=(%.4f, %.4f, %.4f)\n",
-            eyePose.scale.x, eyePose.scale.y, eyePose.scale.z);
     }
 
     // === BUILD THE COMBINED VIEW MATRIX ===
     //
     // The view matrix combines:
-    // 1. Game camera position (player's location in game world)
-    // 2. HMD orientation (where player is looking in VR)
-    // 3. HMD position offset (6DOF head movement, scaled to game units)
-    // 4. Per-eye offset (IPD for stereo)
+    // 1. Game camera orientation (body direction from controller turning)
+    // 2. VR head orientation (head rotation relative to body)
+    // 3. Game camera position (player's location in game world)
+    // 4. HMD position offset (6DOF head movement, scaled to game units)
+    // 5. Per-eye offset (IPD for stereo)
     //
-    // We use the per-eye pose which already includes full orientation and IPD offset.
-    // We just need to:
-    // - Take orientation from VR (eyePose rotation vectors)
-    // - Compute position as: game_pos + (hmd_offset * worldScale) + (eye_ipd_offset * worldScale)
+    // We multiply: gameCamera * vrHeadPose * eyeOffset
+    // This makes controller turning rotate the body, and VR adds head movement on top.
 
+    // First, compute the VR head rotation relative to tracking origin
+    // The eyePose contains full orientation - we use this for head rotation
+    // We need to multiply game camera rotation by VR head rotation
+
+    // Build combined orientation: game camera rotation * VR head rotation
+    // This means: first apply VR head rotation, then apply game body rotation
+    // Result: looking left in VR while body faces north = looking northwest
     rdMatrix34 combined;
+    rdMatrix_Multiply34(&combined, pGameCamera, &eyePose);
 
-    // Copy VR orientation (rvec, lvec, uvec) from the eye pose
-    // This makes VR control the look direction
-    combined.rvec = eyePose.rvec;
-    combined.lvec = eyePose.lvec;
-    combined.uvec = eyePose.uvec;
+    // Now handle position:
+    //
+    // HMD position is in meters relative to tracking origin.
+    // We do NOT scale HMD position by worldScale - that would push the camera
+    // way outside the level. The game camera position already places us correctly
+    // in the game world.
+    //
+    // We only use HMD position for:
+    // 1. Small head movements (leaning, ducking) - these are already in meters
+    // 2. IPD offset for stereo separation
+    //
+    // The worldScale parameter is for adjusting perceived object sizes (IPD-related).
 
-    // Calculate HMD position offset from tracking origin (in VR tracking space)
-    // This represents how far the player has moved their head from center
+    // HMD position offset for 6DOF head movement (in VR meters, not scaled)
+    // This allows leaning, ducking, etc. relative to game camera position
     rdVector3 hmdOffset;
-    hmdOffset.x = hmdPose.scale.x * worldScale;
-    hmdOffset.y = hmdPose.scale.y * worldScale;
-    hmdOffset.z = hmdPose.scale.z * worldScale;
+    hmdOffset.x = hmdPose.scale.x;
+    hmdOffset.y = hmdPose.scale.y;
+    hmdOffset.z = hmdPose.scale.z;
 
-    // Apply height offset if configured
+    // Apply height offset if configured (in meters)
     if (stdVR_config.heightOffset != 0.0f) {
-        hmdOffset.z += stdVR_config.heightOffset * worldScale;
+        hmdOffset.z += stdVR_config.heightOffset;
     }
 
-    // Calculate per-eye offset from HMD center (IPD)
+    // Calculate per-eye offset from HMD center (IPD) - this stays in meters
+    // IPD is typically ~0.063 meters, worldScale adjusts how this translates to game units
     rdVector3 ipdOffset;
     ipdOffset.x = (eyePose.scale.x - hmdPose.scale.x) * worldScale;
     ipdOffset.y = (eyePose.scale.y - hmdPose.scale.y) * worldScale;
     ipdOffset.z = (eyePose.scale.z - hmdPose.scale.z) * worldScale;
 
-    // The HMD offset is in VR tracking space (which is aligned with the player's play area).
-    // We need to transform it to game world space based on the game camera's yaw.
-    // For now, we assume the game camera's forward (lvec) represents the player's body direction.
-    // We'll use the game camera's rotation to transform the HMD offset.
+    // Transform HMD offset by game camera orientation (body direction)
+    // This makes physical movement relative to where your body is facing
     rdVector3 hmdOffsetWorld;
     rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
 
-    // IPD offset should be transformed by the VR head orientation (already in eyePose)
-    // Since eyePose orientation is now used directly, IPD is already accounted for in eyePose.scale
-    // We just need to transform the IPD delta by the head orientation
+    // Transform IPD offset by the combined orientation (where you're actually looking)
     rdVector3 ipdOffsetWorld;
-    rdMatrix_TransformVector34(&ipdOffsetWorld, &ipdOffset, &eyePose);
+    rdMatrix_TransformVector34(&ipdOffsetWorld, &ipdOffset, &combined);
 
     // Final position = game camera position + HMD offset (in world) + IPD offset (in world)
     combined.scale.x = pGameCamera->scale.x + hmdOffsetWorld.x + ipdOffsetWorld.x;
@@ -628,8 +654,7 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
 
     if (combineCallCount <= 4) {
         extern void VR_Log(const char* fmt, ...);
-        VR_Log("  hmdOffset (scaled)=(%.4f, %.4f, %.4f)\n", hmdOffset.x, hmdOffset.y, hmdOffset.z);
-        VR_Log("  hmdOffsetWorld=(%.4f, %.4f, %.4f)\n", hmdOffsetWorld.x, hmdOffsetWorld.y, hmdOffsetWorld.z);
+        VR_Log("  hmdOffset (meters)=(%.4f, %.4f, %.4f)\n", hmdOffset.x, hmdOffset.y, hmdOffset.z);
         VR_Log("  ipdOffset (scaled)=(%.5f, %.5f, %.5f)\n", ipdOffset.x, ipdOffset.y, ipdOffset.z);
         VR_Log("  final pos=(%.3f, %.3f, %.3f)\n", combined.scale.x, combined.scale.y, combined.scale.z);
     }
@@ -663,6 +688,182 @@ int stdVR_GetCurrentEyeViewMatrix(rdMatrix34* pOut)
 void stdVR_ClearCurrentEyeViewMatrix(void)
 {
     stdVR_currentEyeViewMatValid = 0;
+}
+
+// ============================================================================
+// Motion Controls Helper Functions
+// ============================================================================
+
+// Get the dominant hand controller index
+int stdVR_GetDominantHand(void)
+{
+    return stdVR_config.dominantHand;
+}
+
+// Get controller state by hand index
+stdVR_ControllerState* stdVR_GetController(int hand)
+{
+    if (hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
+        return NULL;
+    }
+    return &stdVR_clientInfo.controllers[hand];
+}
+
+// Get dominant hand controller
+stdVR_ControllerState* stdVR_GetDominantController(void)
+{
+    return stdVR_GetController(stdVR_config.dominantHand);
+}
+
+// Get off-hand controller
+stdVR_ControllerState* stdVR_GetOffhandController(void)
+{
+    return stdVR_GetController(1 - stdVR_config.dominantHand);
+}
+
+// Transform controller position to game world coordinates
+// Takes controller position (in VR tracking space) and outputs world position
+void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
+{
+    if (!pWorldPos || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
+        return;
+    }
+
+    stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
+    if (!pCtrl->bTracking) {
+        return;
+    }
+
+    // Get player's world position and orientation
+    extern sithThing* sithPlayer_pLocalPlayerThing;
+    if (!sithPlayer_pLocalPlayerThing) {
+        return;
+    }
+
+    sithThing* player = sithPlayer_pLocalPlayerThing;
+
+    // Controller offset from HMD in tracking space
+    rdVector3 offset;
+    offset.x = pCtrl->position.x - stdVR_clientInfo.hmdPosition.x;
+    offset.y = pCtrl->position.y - stdVR_clientInfo.hmdPosition.y;
+    offset.z = pCtrl->position.z - stdVR_clientInfo.hmdPosition.z;
+
+    // Scale to game units (controller offset is in meters)
+    float scale = stdVR_config.worldScale;
+    if (scale <= 0.0f) scale = 1.0f;
+    offset.x *= scale;
+    offset.y *= scale;
+    offset.z *= scale;
+
+    // Transform offset by player orientation
+    rdVector3 worldOffset;
+    rdMatrix_TransformVector34(&worldOffset, &offset, &player->lookOrientation);
+
+    // Add to player position
+    pWorldPos->x = player->position.x + worldOffset.x;
+    pWorldPos->y = player->position.y + worldOffset.y;
+    pWorldPos->z = player->position.z + worldOffset.z;
+
+    // Apply height offset
+    pWorldPos->z += stdVR_config.heightOffset;
+}
+
+// Get controller aim direction in world space (where controller points)
+void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection)
+{
+    if (!pDirection || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
+        return;
+    }
+
+    stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
+    if (!pCtrl->bTracking) {
+        pDirection->x = 0.0f;
+        pDirection->y = 1.0f;  // Default forward
+        pDirection->z = 0.0f;
+        return;
+    }
+
+    // Get player orientation for combining
+    extern sithThing* sithPlayer_pLocalPlayerThing;
+    if (!sithPlayer_pLocalPlayerThing) {
+        pDirection->x = 0.0f;
+        pDirection->y = 1.0f;
+        pDirection->z = 0.0f;
+        return;
+    }
+
+    // Forward direction from controller pose (Y axis in JKDF2)
+    rdVector3 ctrlForward;
+    ctrlForward.x = pCtrl->poseMatrix.uvec.x;
+    ctrlForward.y = pCtrl->poseMatrix.uvec.y;
+    ctrlForward.z = pCtrl->poseMatrix.uvec.z;
+
+    // Apply ergonomic pitch adjustment if configured
+    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+        // Rotate around controller's right vector by pitch adjustment
+        rdMatrix34 pitchRot;
+        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
+        rdMatrix_TransformVector34(&ctrlForward, &ctrlForward, &pitchRot);
+    }
+
+    // Transform by player body orientation
+    rdMatrix_TransformVector34(pDirection, &ctrlForward, &sithPlayer_pLocalPlayerThing->lookOrientation);
+
+    // Normalize
+    rdVector_Normalize3Acc(pDirection);
+}
+
+// Get controller world matrix (for weapon rendering)
+void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix)
+{
+    if (!pMatrix || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
+        return;
+    }
+
+    stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
+    if (!pCtrl->bTracking) {
+        rdMatrix_Identity34(pMatrix);
+        return;
+    }
+
+    extern sithThing* sithPlayer_pLocalPlayerThing;
+    if (!sithPlayer_pLocalPlayerThing) {
+        rdMatrix_Identity34(pMatrix);
+        return;
+    }
+
+    sithThing* player = sithPlayer_pLocalPlayerThing;
+
+    // Combine player body orientation with controller orientation
+    rdMatrix_Multiply34(pMatrix, &player->lookOrientation, &pCtrl->poseMatrix);
+
+    // Set position
+    rdVector3 worldPos;
+    stdVR_ControllerToWorld(hand, &worldPos);
+    pMatrix->scale.x = worldPos.x;
+    pMatrix->scale.y = worldPos.y;
+    pMatrix->scale.z = worldPos.z;
+}
+
+// Check if a velocity-triggered attack occurred this frame for dominant hand
+int stdVR_IsSwingTriggered(void)
+{
+    stdVR_ControllerState* pCtrl = stdVR_GetDominantController();
+    if (!pCtrl || !pCtrl->bTracking) {
+        return 0;
+    }
+    return pCtrl->motion.bVelocityTriggeredAttack && !pCtrl->motion.bVelocityTriggeredAttackLast;
+}
+
+// Get the swing speed of dominant hand (m/s)
+float stdVR_GetSwingSpeed(void)
+{
+    stdVR_ControllerState* pCtrl = stdVR_GetDominantController();
+    if (!pCtrl || !pCtrl->bTracking) {
+        return 0.0f;
+    }
+    return pCtrl->motion.swingSpeed;
 }
 
 // Sync jkPlayer VR settings to stdVR_config

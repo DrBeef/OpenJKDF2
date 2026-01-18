@@ -79,12 +79,13 @@ extern "C" void VR_Log(const char* fmt, ...)
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     stdPlatform_Printf("%s", buffer);
 
-    // Also write to log file
+    // Also write to log file (buffered - no fflush for performance)
     if (vrLogFile) {
         va_list args2;
         va_start(args2, fmt);
         vfprintf(vrLogFile, fmt, args2);
-        fflush(vrLogFile);  // Ensure immediate write
+        // Removed: fflush(vrLogFile) - was causing major performance issues
+        // File will be flushed automatically on close or when buffer is full
         va_end(args2);
     }
 
@@ -153,6 +154,15 @@ static void stdVR_OpenXR_ReleaseSwapchainImage(int eye)
     stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrSwapchains[eye], "main", eye);
 }
 
+// Track null FBO validation (only validate once)
+static bool vrNullFBOValidated[STDVR_EYE_COUNT] = { false, false };
+
+// Manual FBO/viewport state tracking to avoid glGetIntegerv (GPU stalls)
+// Declared early so stdVR_OpenXR_ClearNullSwapchain can use them
+static GLint trackedFBO = 0;
+static GLint trackedViewport[4] = { 0, 0, 640, 480 };
+static bool stateTrackingActive = false;
+
 static int stdVR_OpenXR_ClearNullSwapchain(int eye)
 {
     if (eye < 0 || eye >= STDVR_EYE_COUNT) {
@@ -174,21 +184,30 @@ static int stdVR_OpenXR_ClearNullSwapchain(int eye)
         return 0;
     }
 
-    GLint savedFBO = 0;
-    GLint savedViewport[4] = { 0, 0, 0, 0 };
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFBO);
-    glGetIntegerv(GL_VIEWPORT, savedViewport);
+    // OPTIMIZATION: Use tracked state instead of GPU queries
+    GLint savedFBO = stateTrackingActive ? trackedFBO : 0;
+    GLint savedViewport[4];
+    if (stateTrackingActive) {
+        memcpy(savedViewport, trackedViewport, sizeof(savedViewport));
+    } else {
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFBO);
+        glGetIntegerv(GL_VIEWPORT, savedViewport);
+    }
 
     GLuint texture = xrNullSwapchainImages[eye][xrNullSwapchainImageIndex[eye]].image;
     glBindFramebuffer(GL_FRAMEBUFFER, vrNullFBO[eye]);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        VR_Log("stdVR_OpenXR: Null FBO incomplete for eye %d, status 0x%x\n", eye, status);
-        glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
-        stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrNullSwapchains[eye], "null", eye);
-        return 0;
+    // OPTIMIZATION: Only validate FBO on first use
+    if (!vrNullFBOValidated[eye]) {
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            VR_Log("stdVR_OpenXR: Null FBO incomplete for eye %d, status 0x%x\n", eye, status);
+            glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
+            stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrNullSwapchains[eye], "null", eye);
+            return 0;
+        }
+        vrNullFBOValidated[eye] = true;
     }
 
     int width = xrConfigViews[eye].recommendedImageRectWidth;
@@ -204,6 +223,12 @@ static int stdVR_OpenXR_ClearNullSwapchain(int eye)
     glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
     glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
 
+    // Update tracked state
+    if (stateTrackingActive) {
+        trackedFBO = savedFBO;
+        memcpy(trackedViewport, savedViewport, sizeof(trackedViewport));
+    }
+
     stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrNullSwapchains[eye], "null", eye);
     return 1;
 }
@@ -216,6 +241,7 @@ static int vrFrameCount = 0;  // Track frame count for debugging
 // VR FBO state for rendering (per-swapchain-image, like JKXR)
 static std::vector<GLuint> vrFBO[STDVR_EYE_COUNT];
 static std::vector<GLuint> vrDepthTex[STDVR_EYE_COUNT];
+static std::vector<bool> vrFBOValidated[STDVR_EYE_COUNT];  // Added: track which FBOs have been validated
 static GLuint vrCurrentFBO[STDVR_EYE_COUNT] = { 0, 0 };
 static GLint previousFBO = 0;
 static GLint previousViewport[4] = { 0, 0, 0, 0 };
@@ -834,6 +860,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
     }
 
     // Create per-swapchain-image FBOs and depth textures (mirrors JKXR approach)
+    // OPTIMIZATION: Keep depth textures permanently attached, only swap color per-frame
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
         const uint32_t imageCount = (uint32_t)xrSwapchainImages[eye].size();
         const int width = xrConfigViews[eye].recommendedImageRectWidth;
@@ -841,6 +868,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
 
         vrFBO[eye].resize(imageCount);
         vrDepthTex[eye].resize(imageCount);
+        vrFBOValidated[eye].resize(imageCount, false);  // Added: track validation state
 
         if (imageCount > 0) {
             glGenFramebuffers(imageCount, vrFBO[eye].data());
@@ -858,21 +886,13 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
                 width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
             glBindTexture(GL_TEXTURE_2D, 0);
 
-            // Bind FBO and attach color + depth once to validate completeness
+            // Bind FBO and attach depth permanently (color is swapped per-frame)
             glBindFramebuffer(GL_FRAMEBUFFER, vrFBO[eye][i]);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                xrSwapchainImages[eye][i].image, 0);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
                 vrDepthTex[eye][i], 0);
 
-            GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-            if (status != GL_FRAMEBUFFER_COMPLETE) {
-                VR_Log("stdVR_OpenXR: FBO incomplete on create for eye %d image %u, status 0x%x\n",
-                    eye, i, status);
-            }
-
-            // Detach color now; we reattach each frame to avoid runtime issues
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+            // Note: Color attachment validation happens on first use per swapchain image
+            // We don't detach color here - it will be attached when PrepareEyeBuffer is called
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         }
 
@@ -930,7 +950,7 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
 
     DestroyActionSet();
 
-    // Destroy VR FBOs
+    // Destroy VR FBOs and reset validation state
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
         if (!vrFBO[eye].empty()) {
             glDeleteFramebuffers((GLsizei)vrFBO[eye].size(), vrFBO[eye].data());
@@ -940,12 +960,15 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
             glDeleteTextures((GLsizei)vrDepthTex[eye].size(), vrDepthTex[eye].data());
             vrDepthTex[eye].clear();
         }
+        vrFBOValidated[eye].clear();  // Reset validation flags
         if (vrNullFBO[eye] != 0) {
             glDeleteFramebuffers(1, &vrNullFBO[eye]);
             vrNullFBO[eye] = 0;
         }
+        vrNullFBOValidated[eye] = false;  // Reset null FBO validation
         vrCurrentFBO[eye] = 0;
     }
+    stateTrackingActive = false;  // Reset state tracking
 
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
         if (xrSwapchains[eye] != XR_NULL_HANDLE) {
@@ -1049,8 +1072,6 @@ static void HandleSessionStateChange(XrSessionState newState)
     }
 }
 
-static int pollEventCount = 0;
-
 static void PollEvents(void)
 {
     if (xrInstance == XR_NULL_HANDLE) {
@@ -1085,12 +1106,6 @@ static void PollEvents(void)
         eventData = { XR_TYPE_EVENT_DATA_BUFFER };
     }
 
-    // Log periodically that we're polling
-    pollEventCount++;
-    if (pollEventCount % 300 == 1) {  // Every ~5 seconds at 60fps
-        VR_Log("stdVR_OpenXR: Polling events (count=%d, session=%s, running=%d)\n",
-            pollEventCount, SessionStateToString(xrSessionState), xrSessionRunning ? 1 : 0);
-    }
 }
 
 extern "C" void stdVR_OpenXR_PollEvents(void)
@@ -1283,8 +1298,13 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
     XrResult result = xrEndFrame(xrSession, &endInfo);
     if (XR_FAILED(result)) {
         VR_Log("stdVR_OpenXR: xrEndFrame failed with error %d\n", result);
+        stateTrackingActive = false;  // Reset state tracking for next frame
         return 0;
     }
+
+    // OPTIMIZATION: Reset state tracking at end of frame
+    // Next frame will re-query GPU state once if needed
+    stateTrackingActive = false;
 
     return 1;
 }
@@ -1309,17 +1329,18 @@ extern "C" int stdVR_OpenXR_EndFrameEmpty(void)
     XrResult result = xrEndFrame(xrSession, &endInfo);
     if (XR_FAILED(result)) {
         VR_Log("stdVR_OpenXR: xrEndFrame (empty) failed with error %d\n", result);
+        stateTrackingActive = false;  // Reset state tracking for next frame
         return 0;
     }
+
+    // OPTIMIZATION: Reset state tracking at end of frame
+    stateTrackingActive = false;
 
     return 1;
 }
 
 extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
 {
-    static int prepareCallCount = 0;
-    prepareCallCount++;
-
     if (!xrSessionRunning || eye < 0 || eye >= STDVR_EYE_COUNT) {
         if (eye >= 0 && eye < STDVR_EYE_COUNT) {
             vrCurrentFBO[eye] = 0;
@@ -1347,12 +1368,19 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
         return 0;
     }
 
-    // Save current FBO and viewport state
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFBO);
-    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    // OPTIMIZATION: Track state manually instead of GPU queries (avoids pipeline stalls)
+    // Only query once at start of VR frame, then track manually
+    if (!stateTrackingActive) {
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &trackedFBO);
+        glGetIntegerv(GL_VIEWPORT, trackedViewport);
+        stateTrackingActive = true;
+    }
+    previousFBO = trackedFBO;
+    memcpy(previousViewport, trackedViewport, sizeof(previousViewport));
 
     // Get the swapchain texture for this frame
     GLuint texture = xrSwapchainImages[eye][xrSwapchainImageIndex[eye]].image;
+    uint32_t imageIdx = xrSwapchainImageIndex[eye];
 
     if (vrFBO[eye].empty() || vrDepthTex[eye].empty()) {
         VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) no FBOs/depth textures allocated (images=%zu)\n",
@@ -1363,9 +1391,9 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
         vrCurrentFBO[eye] = 0;
         return 0;
     }
-    if (xrSwapchainImageIndex[eye] >= vrFBO[eye].size()) {
+    if (imageIdx >= vrFBO[eye].size()) {
         VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) image index out of range: %u (images=%zu)\n",
-            eye, xrSwapchainImageIndex[eye], vrFBO[eye].size());
+            eye, imageIdx, vrFBO[eye].size());
         if (swapchainAcquired) {
             stdVR_OpenXR_ReleaseSwapchainImage(eye);
         }
@@ -1373,31 +1401,41 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
         return 0;
     }
 
-    GLuint fbo = vrFBO[eye][xrSwapchainImageIndex[eye]];
+    GLuint fbo = vrFBO[eye][imageIdx];
     vrCurrentFBO[eye] = fbo;
 
-    // Bind our VR FBO and attach the swapchain texture
+    // Bind our VR FBO and attach the swapchain color texture
+    // OPTIMIZATION: Depth is permanently attached, only need to swap color
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-        vrDepthTex[eye][xrSwapchainImageIndex[eye]], 0);
 
-    // Verify FBO is complete
-    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-    if (status != GL_FRAMEBUFFER_COMPLETE) {
-        VR_Log("stdVR_OpenXR: FBO incomplete for eye %d, status 0x%x\n", eye, status);
-        glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-        if (swapchainAcquired) {
-            stdVR_OpenXR_ReleaseSwapchainImage(eye);
+    // OPTIMIZATION: Only validate FBO on first use of each swapchain image
+    // This avoids expensive glCheckFramebufferStatus every frame
+    if (!vrFBOValidated[eye][imageIdx]) {
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            VR_Log("stdVR_OpenXR: FBO incomplete for eye %d image %u, status 0x%x\n", eye, imageIdx, status);
+            glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
+            if (swapchainAcquired) {
+                stdVR_OpenXR_ReleaseSwapchainImage(eye);
+            }
+            vrCurrentFBO[eye] = 0;
+            return 0;
         }
-        vrCurrentFBO[eye] = 0;
-        return 0;
+        vrFBOValidated[eye][imageIdx] = true;
     }
 
     // Set viewport to VR render target size
     int width = xrConfigViews[eye].recommendedImageRectWidth;
     int height = xrConfigViews[eye].recommendedImageRectHeight;
     glViewport(0, 0, width, height);
+
+    // Update tracked state
+    trackedFBO = fbo;
+    trackedViewport[0] = 0;
+    trackedViewport[1] = 0;
+    trackedViewport[2] = width;
+    trackedViewport[3] = height;
 
     // Tell std3D to route all "window" FBO bindings to our VR FBO
     std3D_SetVRTargetFBO(fbo, width, height);
@@ -1434,16 +1472,18 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
     // Restore std3D's window FBO routing
     std3D_ClearVRTargetFBO();
 
-    // Detach texture from FBO (required for some OpenXR runtimes)
-    // Must bind the correct eye's FBO first since std3D_ClearVRTargetFBO() may have changed the binding
+    // Detach color texture from FBO (required for some OpenXR runtimes to release the swapchain image)
+    // Note: Depth remains attached permanently for performance
     if (fbo != 0) {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
     }
 
-    // Restore previous FBO and viewport
+    // Restore previous FBO and viewport, update tracked state
     glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
     glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+    trackedFBO = previousFBO;
+    memcpy(trackedViewport, previousViewport, sizeof(trackedViewport));
 
     // Release the swapchain image
     XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
@@ -1454,8 +1494,6 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
     }
 
     // Note: Don't reset stdVR_currentEye here - it needs to persist until the next PrepareEyeBuffer
-    // The old code was: stdVR_currentEye = -1;
-    // This was causing std3D_DrawSceneFbo to fail for eye 1 if there were any timing issues
     vrCurrentFBO[eye] = 0;
 
     return 1;
@@ -1526,7 +1564,7 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
         // Tracking lost - keep last known pose, don't update
         static int trackingLostCount = 0;
         trackingLostCount++;
-        if (trackingLostCount <= 5 || trackingLostCount % 100 == 0) {
+        if (trackingLostCount <= 5) {
             VR_Log("stdVR_OpenXR: Tracking invalid (pos=%d, ori=%d) - using last known pose\n",
                 positionValid ? 1 : 0, orientationValid ? 1 : 0);
         }
@@ -1572,9 +1610,13 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
         PoseToMatrix(&xrViews[eye].pose, &pEye->viewMatrix);
     }
 
-    // Locate controllers
+    // Locate controllers with velocity tracking
     for (int hand = 0; hand < STDVR_CONTROLLER_COUNT; hand++) {
+        // Chain velocity query to location query
+        XrSpaceVelocity velocity = { XR_TYPE_SPACE_VELOCITY };
         XrSpaceLocation location = { XR_TYPE_SPACE_LOCATION };
+        location.next = &velocity;  // Chain velocity struct
+
         if (xrControllerSpaces[hand] != XR_NULL_HANDLE) {
             xrLocateSpace(xrControllerSpaces[hand], xrLocalSpace, xrFrameState.predictedDisplayTime, &location);
 
@@ -1592,6 +1634,37 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
             if (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) {
                 QuatToEuler(&location.pose.orientation, &pCtrl->orientation);
                 PoseToMatrix(&location.pose, &pCtrl->poseMatrix);
+                // Use grip pose as the grip matrix too (same pose currently)
+                PoseToMatrix(&location.pose, &pCtrl->gripPoseMatrix);
+            }
+
+            // Store velocity data for motion controls
+            if (velocity.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) {
+                // Convert from OpenXR coords to JKDF2 coords (same as pose conversion)
+                pCtrl->motion.linearVelocity.x = velocity.linearVelocity.x;
+                pCtrl->motion.linearVelocity.y = -velocity.linearVelocity.z;  // OpenXR Z -> JKDF2 -Y
+                pCtrl->motion.linearVelocity.z = velocity.linearVelocity.y;   // OpenXR Y -> JKDF2 Z
+
+                // Calculate swing speed (velocity magnitude)
+                float vx = pCtrl->motion.linearVelocity.x;
+                float vy = pCtrl->motion.linearVelocity.y;
+                float vz = pCtrl->motion.linearVelocity.z;
+                pCtrl->motion.swingSpeed = sqrtf(vx*vx + vy*vy + vz*vz);
+            } else {
+                pCtrl->motion.linearVelocity.x = 0.0f;
+                pCtrl->motion.linearVelocity.y = 0.0f;
+                pCtrl->motion.linearVelocity.z = 0.0f;
+                pCtrl->motion.swingSpeed = 0.0f;
+            }
+
+            if (velocity.velocityFlags & XR_SPACE_VELOCITY_ANGULAR_VALID_BIT) {
+                pCtrl->motion.angularVelocity.x = velocity.angularVelocity.x;
+                pCtrl->motion.angularVelocity.y = -velocity.angularVelocity.z;
+                pCtrl->motion.angularVelocity.z = velocity.angularVelocity.y;
+            } else {
+                pCtrl->motion.angularVelocity.x = 0.0f;
+                pCtrl->motion.angularVelocity.y = 0.0f;
+                pCtrl->motion.angularVelocity.z = 0.0f;
             }
         }
     }

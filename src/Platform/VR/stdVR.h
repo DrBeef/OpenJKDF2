@@ -17,6 +17,7 @@ extern int stdVR_bEnabled;              // Is VR enabled
 extern int stdVR_bInitted;              // Is VR module initialized
 extern stdVR_ClientInfo stdVR_clientInfo;
 extern stdVR_Config stdVR_config;
+extern stdVR_MotionConfig stdVR_motionConfig;
 
 // Lifecycle functions
 int stdVR_Startup(void);
@@ -86,6 +87,17 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
 void stdVR_SetCurrentEyeViewMatrix(const rdMatrix34* pMat);
 int stdVR_GetCurrentEyeViewMatrix(rdMatrix34* pOut);
 void stdVR_ClearCurrentEyeViewMatrix(void);
+
+// Motion controls helper functions
+int stdVR_GetDominantHand(void);
+stdVR_ControllerState* stdVR_GetController(int hand);
+stdVR_ControllerState* stdVR_GetDominantController(void);
+stdVR_ControllerState* stdVR_GetOffhandController(void);
+void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos);
+void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection);
+void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix);
+int stdVR_IsSwingTriggered(void);
+float stdVR_GetSwingSpeed(void);
 
 // Settings sync functions (to/from jkPlayer settings)
 void stdVR_SyncConfigFromJkPlayer(void);

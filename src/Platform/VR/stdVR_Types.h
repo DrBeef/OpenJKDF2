@@ -42,6 +42,80 @@ extern "C" {
 #define STDVR_TURN_SMOOTH     0
 #define STDVR_TURN_SNAP       1
 
+// Motion tracking constants
+#define STDVR_MOTION_HISTORY_SIZE   10
+#define STDVR_OFFHAND_HISTORY_SIZE  5
+
+// Angle set indices (different interpretations of controller orientation)
+typedef enum stdVR_AngleSet {
+    STDVR_ANGLES_DEFAULT = 0,   // Raw controller orientation
+    STDVR_ANGLES_ADJUSTED = 1,  // Ergonomic pitch offset for weapons
+    STDVR_ANGLES_SABER = 2,     // Grip-aligned for saber
+    STDVR_ANGLES_COUNT = 3
+} stdVR_AngleSet;
+
+// Swing type detection for melee/saber
+typedef enum stdVR_SwingType {
+    STDVR_SWING_NONE = 0,
+    STDVR_SWING_HORIZONTAL_LEFT,
+    STDVR_SWING_HORIZONTAL_RIGHT,
+    STDVR_SWING_VERTICAL_DOWN,
+    STDVR_SWING_VERTICAL_UP,
+    STDVR_SWING_DIAGONAL_DL,    // Down-left
+    STDVR_SWING_DIAGONAL_DR,    // Down-right
+    STDVR_SWING_DIAGONAL_UL,    // Up-left
+    STDVR_SWING_DIAGONAL_UR,    // Up-right
+    STDVR_SWING_STAB
+} stdVR_SwingType;
+
+// Gesture types for Force powers
+typedef enum stdVR_GestureType {
+    STDVR_GESTURE_NONE = 0,
+    STDVR_GESTURE_PUSH,
+    STDVR_GESTURE_PULL,
+    STDVR_GESTURE_GRIP,         // Force grip (hand closing)
+    STDVR_GESTURE_LIGHTNING,    // Palm forward, fingers spread
+    STDVR_GESTURE_WAVE          // Mind trick wave
+} stdVR_GestureType;
+
+// Motion state for a single controller
+typedef struct stdVR_MotionState {
+    // Velocity tracking (from OpenXR)
+    rdVector3 linearVelocity;       // Linear velocity in m/s
+    rdVector3 angularVelocity;      // Angular velocity in rad/s
+    float swingSpeed;               // Magnitude of linear velocity
+
+    // Multiple angle interpretations
+    rdVector3 angles[STDVR_ANGLES_COUNT];       // Current angles per set
+    rdVector3 anglesLast[STDVR_ANGLES_COUNT];   // Previous frame angles
+    rdVector3 anglesDelta[STDVR_ANGLES_COUNT];  // Frame-to-frame change
+
+    // Position relative to HMD (for gesture detection)
+    rdVector3 offset;               // Position relative to HMD
+    rdVector3 offsetHistory[STDVR_MOTION_HISTORY_SIZE];
+    uint32_t offsetTimestamps[STDVR_MOTION_HISTORY_SIZE];
+    int offsetHistoryIndex;
+
+    // Attack state
+    int bVelocityTriggeredAttack;       // Swing exceeded threshold this frame
+    int bVelocityTriggeredAttackLast;   // Previous frame state
+    stdVR_SwingType currentSwing;       // Detected swing type
+
+    // Saber-specific
+    int bSaberBlockDebounce;
+    uint32_t saberBlockTime;
+    rdVector3 saberBounceAngles;
+} stdVR_MotionState;
+
+// Gesture state for Force powers
+typedef struct stdVR_GestureState {
+    stdVR_GestureType activeGesture;
+    float gestureStrength;      // 0.0 - 1.0
+    rdVector3 gestureDirection;
+    int gestureStartFrame;
+    rdVector3 gestureStartPosition;
+} stdVR_GestureState;
+
 // Per-eye view information
 typedef struct stdVR_EyeView {
     rdMatrix34 viewMatrix;          // Eye view matrix (camera space)
@@ -54,11 +128,15 @@ typedef struct stdVR_EyeView {
 
 // Controller pose and state
 typedef struct stdVR_ControllerState {
-    rdVector3 position;             // Position in world space
+    rdVector3 position;             // Position in tracking space
     rdVector3 orientation;          // Pitch, Yaw, Roll in degrees
-    rdMatrix34 poseMatrix;          // Full pose matrix
+    rdMatrix34 poseMatrix;          // Aim pose matrix (where controller points)
+    rdMatrix34 gripPoseMatrix;      // Grip pose matrix (where hand holds)
     int bTracking;                  // Is controller being tracked
     int bActive;                    // Is controller active/connected
+
+    // Motion tracking data
+    stdVR_MotionState motion;       // Velocity and swing tracking
 } stdVR_ControllerState;
 
 // Main VR client information structure
@@ -138,6 +216,29 @@ typedef struct stdVR_Config {
     // Quality settings
     float supersampling;            // Render scale multiplier
 } stdVR_Config;
+
+// Motion controls configuration
+typedef struct stdVR_MotionConfig {
+    // Velocity thresholds (m/s)
+    float weaponVelocityTrigger;    // Swing speed for melee attack (default: 2.0)
+    float saberVelocityTrigger;     // Swing speed for saber attack (default: 2.5)
+    float forceVelocityTrigger;     // Speed for force gesture (default: 1.5)
+    float forceDistanceTrigger;     // Distance movement for push/pull (default: 0.3m)
+
+    // Ergonomic offsets (degrees)
+    float weaponPitchAdjust;        // Controller pitch offset for weapons
+    float saberPitchAdjust;         // Controller pitch offset for saber
+
+    // Feature toggles
+    int bMotionAimEnabled;          // Aim with controller instead of HMD
+    int bMotionSaberEnabled;        // Swing to attack with saber
+    int bMotionForceEnabled;        // Gestures for Force powers
+    int bTwoHandedEnabled;          // Off-hand for rifle grip stabilization
+
+    // Smoothing
+    int positionSmoothingSamples;   // 1-10 samples (default: 3)
+    float velocitySmoothingFactor;  // 0.0-1.0 (default: 0.5)
+} stdVR_MotionConfig;
 
 #ifdef __cplusplus
 }

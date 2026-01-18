@@ -1594,35 +1594,12 @@ void sithControl_PlayerMovement(sithThing *player)
 #ifdef PLATFORM_VR
             if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
                 vrMovementActive = 1;
-                // VR movement: use controller/head direction for movement, not player orientation
+
+                // Get thumbstick input
                 float moveX = 0.0f, moveY = 0.0f;
                 stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
-                // Calculate movement direction based on VR move yaw (controller or head)
-                float moveYawRad = stdVR_clientInfo.moveYaw * (3.14159265f / 180.0f);
-                float cosYaw = cosf(moveYawRad);
-                float sinYaw = sinf(moveYawRad);
-
-                // Get player's current yaw to calculate relative movement
-                float playerYawRad = player->lookOrientation.lvec.x != 0.0f || player->lookOrientation.lvec.z != 0.0f
-                    ? atan2f(player->lookOrientation.lvec.x, player->lookOrientation.lvec.z)
-                    : 0.0f;
-
-                // Calculate the relative yaw between VR orientation and player orientation
-                float relYawRad = moveYawRad - playerYawRad;
-                float relCos = cosf(relYawRad);
-                float relSin = sinf(relYawRad);
-
-                // Transform thumbstick input to player-relative movement
-                float transformedX = moveX * relCos - moveY * relSin;
-                float transformedY = moveX * relSin + moveY * relCos;
-
-                // Apply movement
-                flex_t thrust = player->actorParams.maxThrust + player->actorParams.extraSpeed;
-                player->physicsParams.acceleration.x = transformedX * thrust * 0.7f;
-                player->physicsParams.acceleration.y = transformedY * thrust;
-
-                // Handle VR turning (snap or smooth)
+                // Handle VR turning first (so movement uses updated direction)
                 int snapAngle = stdVR_Input_GetSnapTurnAngle();
                 if (snapAngle != 0) {
                     // Apply snap turn to player orientation
@@ -1633,6 +1610,12 @@ void sithControl_PlayerMovement(sithThing *player)
                     // Smooth turn from VR input
                     player->physicsParams.angVel.y = stdVR_Input_GetSmoothTurnSpeed();
                 }
+
+                // Movement is relative to player's facing direction (includes snap turns)
+                // Forward on stick = forward in game (where player body faces)
+                flex_t thrust = player->actorParams.maxThrust + player->actorParams.extraSpeed;
+                player->physicsParams.acceleration.x = moveY * thrust;           // Forward/back (up stick = forward)
+                player->physicsParams.acceleration.y = -moveX * thrust * 0.7f;   // Strafe (right stick = right)
             } else
 #endif // PLATFORM_VR
             {
