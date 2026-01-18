@@ -549,71 +549,89 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
         worldScale = 1.0f;
     }
 
-    // Reference position: neutral standing position in VR tracking space (converted to JKDF2 coords)
-    // OpenXR: Y-up, -Z forward. JKDF2: Z-up, Y-forward
-    // Conversion: JKDF2.x = XR.x, JKDF2.y = -XR.z, JKDF2.z = XR.y
-    // OpenXR standing height (0, 1.7, 0) becomes JKDF2 (0, 0, 1.7)
-    static const rdVector3 referencePos = { 0.0f, 0.0f, 1.7f };
-
-    // Get the HMD center pose (already converted to JKDF2 coordinates)
-    rdMatrix34 hmdPose;
-    rdMatrix_Copy34(&hmdPose, &stdVR_clientInfo.hmdPoseMatrix);
-
-    // Get the per-eye pose for IPD calculation
+    // Get the per-eye pose (complete transform in VR tracking space, already in JKDF2 coords)
     rdMatrix34 eyePose;
     rdMatrix_Copy34(&eyePose, &stdVR_clientInfo.eyes[eye].viewMatrix);
 
-    // Calculate HMD position offset from reference (6DOF tracking offset)
-    rdVector3 hmdOffset;
-    hmdOffset.x = (hmdPose.scale.x - referencePos.x) * worldScale;
-    hmdOffset.y = (hmdPose.scale.y - referencePos.y) * worldScale;
-    hmdOffset.z = (hmdPose.scale.z - referencePos.z) * worldScale;
+    // Get the HMD center pose for reference
+    rdMatrix34 hmdPose;
+    rdMatrix_Copy34(&hmdPose, &stdVR_clientInfo.hmdPoseMatrix);
 
-    // Calculate per-eye IPD offset (difference from HMD center)
+    // Log for debugging (first few frames only)
+    if (combineCallCount <= 4) {
+        extern void VR_Log(const char* fmt, ...);
+        VR_Log("stdVR_CombineCameraWithEye: eye %d, worldScale=%.2f\n", eye, worldScale);
+        VR_Log("  gameCamera pos=(%.3f, %.3f, %.3f)\n",
+            pGameCamera->scale.x, pGameCamera->scale.y, pGameCamera->scale.z);
+        VR_Log("  hmdPose pos=(%.4f, %.4f, %.4f)\n",
+            hmdPose.scale.x, hmdPose.scale.y, hmdPose.scale.z);
+        VR_Log("  eyePose pos=(%.4f, %.4f, %.4f)\n",
+            eyePose.scale.x, eyePose.scale.y, eyePose.scale.z);
+    }
+
+    // === BUILD THE COMBINED VIEW MATRIX ===
+    //
+    // The view matrix combines:
+    // 1. Game camera position (player's location in game world)
+    // 2. HMD orientation (where player is looking in VR)
+    // 3. HMD position offset (6DOF head movement, scaled to game units)
+    // 4. Per-eye offset (IPD for stereo)
+    //
+    // We use the per-eye pose which already includes full orientation and IPD offset.
+    // We just need to:
+    // - Take orientation from VR (eyePose rotation vectors)
+    // - Compute position as: game_pos + (hmd_offset * worldScale) + (eye_ipd_offset * worldScale)
+
+    rdMatrix34 combined;
+
+    // Copy VR orientation (rvec, lvec, uvec) from the eye pose
+    // This makes VR control the look direction
+    combined.rvec = eyePose.rvec;
+    combined.lvec = eyePose.lvec;
+    combined.uvec = eyePose.uvec;
+
+    // Calculate HMD position offset from tracking origin (in VR tracking space)
+    // This represents how far the player has moved their head from center
+    rdVector3 hmdOffset;
+    hmdOffset.x = hmdPose.scale.x * worldScale;
+    hmdOffset.y = hmdPose.scale.y * worldScale;
+    hmdOffset.z = hmdPose.scale.z * worldScale;
+
+    // Apply height offset if configured
+    if (stdVR_config.heightOffset != 0.0f) {
+        hmdOffset.z += stdVR_config.heightOffset * worldScale;
+    }
+
+    // Calculate per-eye offset from HMD center (IPD)
     rdVector3 ipdOffset;
     ipdOffset.x = (eyePose.scale.x - hmdPose.scale.x) * worldScale;
     ipdOffset.y = (eyePose.scale.y - hmdPose.scale.y) * worldScale;
     ipdOffset.z = (eyePose.scale.z - hmdPose.scale.z) * worldScale;
 
-    // Log first few calls for debugging
-    if (combineCallCount <= 4) {
-        extern void VR_Log(const char* fmt, ...);
-        VR_Log("stdVR_CombineCameraWithEye: eye %d\n", eye);
-        VR_Log("  HMD pos=(%.4f,%.4f,%.4f)\n", hmdPose.scale.x, hmdPose.scale.y, hmdPose.scale.z);
-        VR_Log("  Eye pos=(%.4f,%.4f,%.4f)\n", eyePose.scale.x, eyePose.scale.y, eyePose.scale.z);
-        VR_Log("  IPD offset raw=(%.5f,%.5f,%.5f)\n", ipdOffset.x, ipdOffset.y, ipdOffset.z);
-    }
-
-    // Build the combined view matrix:
-    // 1. Start with game camera (player's view in game world)
-    // 2. Apply 6DOF head position offset (physical head movement in VR space)
-    // 3. Apply per-eye IPD offset
-    //
-    // Note: For now, we keep the game camera's orientation and only apply position offsets.
-    // This gives 6DOF position tracking while the player's look direction is controlled
-    // by the game's input system. Full orientation integration would require combining
-    // the HMD rotation with the game camera rotation.
-
-    rdMatrix34 combined;
-    rdMatrix_Copy34(&combined, pGameCamera);  // Start with game camera orientation + position
-
-    // Transform the offsets from VR tracking space to game world space
-    // The HMD offset is in VR tracking coordinates, we need to rotate it by the body orientation
-    rdVector3 hmdOffsetWorld, ipdOffsetWorld;
+    // The HMD offset is in VR tracking space (which is aligned with the player's play area).
+    // We need to transform it to game world space based on the game camera's yaw.
+    // For now, we assume the game camera's forward (lvec) represents the player's body direction.
+    // We'll use the game camera's rotation to transform the HMD offset.
+    rdVector3 hmdOffsetWorld;
     rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
-    rdMatrix_TransformVector34(&ipdOffsetWorld, &ipdOffset, pGameCamera);
 
-    // Apply position offsets
-    combined.scale.x += hmdOffsetWorld.x + ipdOffsetWorld.x;
-    combined.scale.y += hmdOffsetWorld.y + ipdOffsetWorld.y;
-    combined.scale.z += hmdOffsetWorld.z + ipdOffsetWorld.z;
+    // IPD offset should be transformed by the VR head orientation (already in eyePose)
+    // Since eyePose orientation is now used directly, IPD is already accounted for in eyePose.scale
+    // We just need to transform the IPD delta by the head orientation
+    rdVector3 ipdOffsetWorld;
+    rdMatrix_TransformVector34(&ipdOffsetWorld, &ipdOffset, &eyePose);
 
-    // Log transformed offsets and final position
+    // Final position = game camera position + HMD offset (in world) + IPD offset (in world)
+    combined.scale.x = pGameCamera->scale.x + hmdOffsetWorld.x + ipdOffsetWorld.x;
+    combined.scale.y = pGameCamera->scale.y + hmdOffsetWorld.y + ipdOffsetWorld.y;
+    combined.scale.z = pGameCamera->scale.z + hmdOffsetWorld.z + ipdOffsetWorld.z;
+
     if (combineCallCount <= 4) {
         extern void VR_Log(const char* fmt, ...);
-        VR_Log("  IPD offset transformed=(%.5f,%.5f,%.5f)\n", ipdOffsetWorld.x, ipdOffsetWorld.y, ipdOffsetWorld.z);
-        VR_Log("  Game camera pos=(%.4f,%.4f,%.4f)\n", pGameCamera->scale.x, pGameCamera->scale.y, pGameCamera->scale.z);
-        VR_Log("  Final combined pos=(%.4f,%.4f,%.4f)\n", combined.scale.x, combined.scale.y, combined.scale.z);
+        VR_Log("  hmdOffset (scaled)=(%.4f, %.4f, %.4f)\n", hmdOffset.x, hmdOffset.y, hmdOffset.z);
+        VR_Log("  hmdOffsetWorld=(%.4f, %.4f, %.4f)\n", hmdOffsetWorld.x, hmdOffsetWorld.y, hmdOffsetWorld.z);
+        VR_Log("  ipdOffset (scaled)=(%.5f, %.5f, %.5f)\n", ipdOffset.x, ipdOffset.y, ipdOffset.z);
+        VR_Log("  final pos=(%.3f, %.3f, %.3f)\n", combined.scale.x, combined.scale.y, combined.scale.z);
     }
 
     rdMatrix_Copy34(pOut, &combined);
