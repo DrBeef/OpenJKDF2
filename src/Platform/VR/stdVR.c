@@ -226,6 +226,11 @@ int stdVR_EndFrame(void)
         return 0;
     }
 
+    // Don't call EndFrame if no frame is in progress (prevents duplicate calls)
+    if (!stdVR_bFrameInProgress) {
+        return 0;
+    }
+
     int result = stdVR_OpenXR_EndFrame();
     if (result) {
         stdVR_bFramePending = 0;  // Frame completed
@@ -396,6 +401,47 @@ int stdVR_GetCurrentEye(void)
     // Don't check bEnabled - the OpenXR layer manages the actual state
     // The extern variable may be set even when the wrapper thinks VR is disabled
     return stdVR_OpenXR_GetCurrentEye();
+}
+
+// ============================================================================
+// HUD Buffer Functions - Wrapper for dedicated HUD quad layer
+// ============================================================================
+
+int stdVR_PrepareHudBuffer(void)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return 0;
+    }
+    return stdVR_OpenXR_PrepareHudBuffer();
+}
+
+int stdVR_FinishHudBuffer(void)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return 0;
+    }
+    return stdVR_OpenXR_FinishHudBuffer();
+}
+
+int stdVR_GetHudFBO(void)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return 0;
+    }
+    return stdVR_OpenXR_GetHudFBO();
+}
+
+void stdVR_GetHudSize(int* pWidth, int* pHeight)
+{
+    stdVR_OpenXR_GetHudSize(pWidth, pHeight);
+}
+
+int stdVR_IsHudEnabled(void)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return 0;
+    }
+    return stdVR_OpenXR_IsHudEnabled();
 }
 
 void stdVR_UpdateTracking(void)

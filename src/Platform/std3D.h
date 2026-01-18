@@ -134,6 +134,10 @@ void std3D_DebugLogGLState(const char* tag, int eye, int frame);
 void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame);
 void std3D_DebugClearTestColor(int eye);
 void std3D_DebugSaveInternalFbo(const char* filename);
+// VR HUD rendering - draws overlay buffer to currently bound FBO
+void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight);
+// VR HUD rendering - draws UI render list to currently bound FBO with specified dimensions
+void std3D_DrawUIRenderListToCurrentFBO(int width, int height);
 #endif
 
 void std3D_ResetUIRenderList();

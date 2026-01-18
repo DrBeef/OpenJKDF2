@@ -1151,9 +1151,17 @@ void Window_SdlUpdate()
     static int jkPlayer_enableVsync_last = 0;
     int menu_framelimit_amt_ms = 16;
 
-    if (jkPlayer_enableVsync_last != jkPlayer_enableVsync)
+    // Added: Disable VSync when VR is active - OpenXR compositor handles frame timing
+#ifdef PLATFORM_VR
+    int effectiveVsync = (stdVR_bEnabled && stdVR_IsSessionRunning()) ? 0 : jkPlayer_enableVsync;
+#else
+    int effectiveVsync = jkPlayer_enableVsync;
+#endif
+
+    if (jkPlayer_enableVsync_last != effectiveVsync)
     {
-        SDL_GL_SetSwapInterval(jkPlayer_enableVsync);
+        SDL_GL_SetSwapInterval(effectiveVsync);
+        jkPlayer_enableVsync_last = effectiveVsync;
     }
 
     if (!jkGame_isDDraw)

@@ -1154,7 +1154,21 @@ void std3D_DrawMenu()
     if (Main_bHeadless) return;
 
     //printf("Draw menu\n");
+#ifdef PLATFORM_VR
+    // In VR menu mode, skip std3D_DrawSceneFbo() - we only need the 2D menu texture.
+    // std3D_DrawSceneFbo() would potentially return early for non-DDraw mode.
+    // But we DO need to clear the buffer to black for the menu background.
+    if (!std3D_vrTargetActive || jkGame_isDDraw) {
+        std3D_DrawSceneFbo();
+    } else {
+        // VR menu mode: clear to black before drawing menu texture
+        glBindFramebuffer(GL_FRAMEBUFFER, std3D_windowFbo);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+    }
+#else
     std3D_DrawSceneFbo();
+#endif
     //glFlush();
 
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_windowFbo);
@@ -1163,14 +1177,26 @@ void std3D_DrawMenu()
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthFunc(GL_ALWAYS);
     glUseProgram(programMenu);
-    
-    float menu_w, menu_h, menu_u, menu_v, menu_x;
-    menu_w = (double)Window_xSize;
-    menu_h = (double)Window_ySize;
+
+    // Get the actual render target dimensions
+    // In VR mode, use VR target size; otherwise use window size
+    int targetWidth = Window_xSize;
+    int targetHeight = Window_ySize;
+#ifdef PLATFORM_VR
+    if (std3D_vrTargetActive && std3D_vrTargetWidth > 0 && std3D_vrTargetHeight > 0) {
+        targetWidth = std3D_vrTargetWidth;
+        targetHeight = std3D_vrTargetHeight;
+    }
+#endif
+
+    float menu_w, menu_h, menu_u, menu_v, menu_x, menu_y;
+    menu_w = (double)targetWidth;
+    menu_h = (double)targetHeight;
     menu_u = 1.0;
     menu_v = 1.0;
     menu_x = 0.0;
-    
+    menu_y = 0.0;
+
     int bFixHudScale = 0;
 
     double fake_windowW = (double)Window_xSize;
@@ -1185,9 +1211,23 @@ void std3D_DrawMenu()
         menu_u = (1.0 / Video_menuBuffer.format.width) * 640.0;
         menu_v = (1.0 / Video_menuBuffer.format.height) * 480.0;
 
-        // Keep 4:3 aspect
-        menu_x = (menu_w - (menu_h * (640.0 / 480.0))) / 2.0;
-        menu_w = (menu_h * (640.0 / 480.0));
+        // Keep 4:3 aspect - fit within target while maintaining aspect ratio
+        // Calculate what 4:3 dimensions would be if constrained by height vs width
+        float aspectRatio = 640.0 / 480.0;  // 1.333
+        float menu4to3Width = menu_h * aspectRatio;
+        float menu4to3Height = menu_w / aspectRatio;
+
+        if (menu4to3Width <= menu_w) {
+            // Target is wider than 4:3 - fit by height, pillarbox sides
+            menu_w = menu4to3Width;
+            menu_x = (targetWidth - menu_w) / 2.0;
+            // menu_y stays 0
+        } else {
+            // Target is taller than 4:3 - fit by width, letterbox top/bottom
+            menu_h = menu4to3Height;
+            menu_x = 0.0;
+            menu_y = (targetHeight - menu_h) / 2.0;
+        }
     }
     else if (jkCutscene_isRendering) {
         bFixHudScale = 1;
@@ -1215,9 +1255,22 @@ void std3D_DrawMenu()
         menu_u = (1.0 / Video_menuBuffer.format.width) * 640.0;
         menu_v = (1.0 / Video_menuBuffer.format.height) * 480.0;
 
-        // Keep 4:3 aspect
-        menu_x = (menu_w - (menu_h * (640.0 / 480.0))) / 2.0;
-        menu_w = (menu_h * (640.0 / 480.0));
+        // Keep 4:3 aspect - fit within target while maintaining aspect ratio
+        float aspectRatio = 640.0 / 480.0;  // 1.333
+        float menu4to3Width = menu_h * aspectRatio;
+        float menu4to3Height = menu_w / aspectRatio;
+
+        if (menu4to3Width <= menu_w) {
+            // Target is wider than 4:3 - fit by height, pillarbox sides
+            menu_w = menu4to3Width;
+            menu_x = (targetWidth - menu_w) / 2.0;
+            // menu_y stays 0
+        } else {
+            // Target is taller than 4:3 - fit by width, letterbox top/bottom
+            menu_h = menu4to3Height;
+            menu_x = 0.0;
+            menu_y = (targetHeight - menu_h) / 2.0;
+        }
     }
     else
     {
@@ -1230,34 +1283,34 @@ void std3D_DrawMenu()
     if (!bFixHudScale)
     {
         GL_tmpVertices[0].x = menu_x;
-        GL_tmpVertices[0].y = 0.0;
+        GL_tmpVertices[0].y = menu_y;
         GL_tmpVertices[0].z = 0.0;
         GL_tmpVertices[0].tu = 0.0;
         GL_tmpVertices[0].tv = 0.0;
         *(uint32_t*)&GL_tmpVertices[0].nx = 0;
         GL_tmpVertices[0].color = 0xFFFFFFFF;
         *(uint32_t*)&GL_tmpVertices[0].nz = 0;
-        
+
         GL_tmpVertices[1].x = menu_x;
-        GL_tmpVertices[1].y = menu_h;
+        GL_tmpVertices[1].y = menu_y + menu_h;
         GL_tmpVertices[1].z = 0.0;
         GL_tmpVertices[1].tu = 0.0;
         GL_tmpVertices[1].tv = menu_v;
         *(uint32_t*)&GL_tmpVertices[1].nx = 0;
         GL_tmpVertices[1].color = 0xFFFFFFFF;
         *(uint32_t*)&GL_tmpVertices[1].nz = 0;
-        
+
         GL_tmpVertices[2].x = menu_x + menu_w;
-        GL_tmpVertices[2].y = menu_h;
+        GL_tmpVertices[2].y = menu_y + menu_h;
         GL_tmpVertices[2].z = 0.0;
         GL_tmpVertices[2].tu = menu_u;
         GL_tmpVertices[2].tv = menu_v;
         *(uint32_t*)&GL_tmpVertices[2].nx = 0;
         GL_tmpVertices[2].color = 0xFFFFFFFF;
         *(uint32_t*)&GL_tmpVertices[2].nz = 0;
-        
+
         GL_tmpVertices[3].x = menu_x + menu_w;
-        GL_tmpVertices[3].y = 0.0;
+        GL_tmpVertices[3].y = menu_y;
         GL_tmpVertices[3].z = 0.0;
         GL_tmpVertices[3].tu = menu_u;
         GL_tmpVertices[3].tv = 0.0;
@@ -1282,7 +1335,7 @@ void std3D_DrawMenu()
         GL_tmpTrisAmt = 0;
 
         // Main View
-        std3D_DrawMenuSubrect(0, 0, 640, 480, menu_x, 0, menu_w/640.0);
+        std3D_DrawMenuSubrect(0, 0, 640, 480, menu_x, menu_y, menu_w/640.0);
     }
     else if (jkCutscene_isRendering)
     {
@@ -1458,20 +1511,21 @@ void std3D_DrawMenu()
 
     float maxX, maxY, scaleX, scaleY, width, height;
 
-    scaleX = 1.0/((double)Window_xSize / 2.0);
-    scaleY = 1.0/((double)Window_ySize / 2.0);
+    // Use VR-aware dimensions for the transformation matrix and viewport
+    scaleX = 1.0/((double)targetWidth / 2.0);
+    scaleY = 1.0/((double)targetHeight / 2.0);
     maxX = 1.0;
     maxY = 1.0;
-    width = Window_xSize;
-    height = Window_ySize;
-    
+    width = targetWidth;
+    height = targetHeight;
+
     float d3dmat[16] = {
        maxX*scaleX,      0,                                          0,      0, // right
        0,                                       -maxY*scaleY,               0,      0, // up
        0,                                       0,                                          1,     0, // forward
        -(width/2)*scaleX,  (height/2)*scaleY,     -1,      1  // pos
     };
-    
+
     glUniformMatrix4fv(programMenu_uniform_mvp, 1, GL_FALSE, d3dmat);
     glViewport(0, 0, width, height);
 
@@ -2135,56 +2189,7 @@ void std3D_DrawUIRenderList()
 
 void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo, GLuint texId, GLuint texId2, GLuint texId3, flex_t param1, flex_t param2, flex_t param3, int gen_mips)
 {
-#ifdef PLATFORM_VR
-    // DEBUG: Log blit parameters for VR
-    extern int stdVR_bEnabled;
-    extern int stdVR_currentEye;
-    extern void VR_Log(const char* fmt, ...);
-    static int blitCallCountPerEye[2] = {0, 0};
-    int eye = stdVR_currentEye;
-    if (stdVR_bEnabled && eye >= 0 && eye < 2) {
-        blitCallCountPerEye[eye]++;
-        if (blitCallCountPerEye[eye] <= 10 || blitCallCountPerEye[eye] % 300 == 0) {
-            GLint viewport[4];
-            glGetIntegerv(GL_VIEWPORT, viewport);
-            VR_Log("DrawSimpleTex[eye%d] #%d: targetFbo=%d (%dx%d), srcTex=%u, viewport=(%d,%d,%d,%d)\n",
-                eye, blitCallCountPerEye[eye], pFbo->fbo, pFbo->w, pFbo->h, texId,
-                viewport[0], viewport[1], viewport[2], viewport[3]);
-        }
-    }
-#endif
-
     glBindFramebuffer(GL_FRAMEBUFFER, pFbo->fbo);
-
-#ifdef PLATFORM_VR
-    // DEBUG: Comprehensive logging for eye 1 blit
-    if (stdVR_bEnabled && eye == 1) {
-        GLint boundFBO = 0;
-        GLint viewport[4];
-        GLint currentProgram = 0;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFBO);
-        glGetIntegerv(GL_VIEWPORT, viewport);
-        glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
-
-        // Check FBO completeness
-        GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-
-        // Check color attachment
-        GLint colorAttachment = 0;
-        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &colorAttachment);
-
-        if (blitCallCountPerEye[1] <= 10 || blitCallCountPerEye[1] % 300 == 0) {
-            VR_Log("  DrawSimpleTex[eye1] BEFORE draw:\n");
-            VR_Log("    pFbo->fbo=%d, actual bound=%d, status=0x%x (complete=0x%x)\n",
-                pFbo->fbo, boundFBO, fboStatus, GL_FRAMEBUFFER_COMPLETE);
-            VR_Log("    colorAttachment=%d, viewport=(%d,%d,%d,%d)\n",
-                colorAttachment, viewport[0], viewport[1], viewport[2], viewport[3]);
-            VR_Log("    srcTex=%u, pFbo->w=%d, pFbo->h=%d\n", texId, pFbo->w, pFbo->h);
-        }
-    }
-#endif
-
     glDepthFunc(GL_ALWAYS);
     glUseProgram(pStage->program);
     
@@ -2346,19 +2351,6 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
     glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &tris_size);
     glDrawElements(GL_TRIANGLES, tris_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
 
-#ifdef PLATFORM_VR
-    // DEBUG: Log after draw for eye 1
-    if (stdVR_bEnabled && eye == 1) {
-        GLenum err = glGetError();
-        GLint boundFBO = 0;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFBO);
-        if (blitCallCountPerEye[1] <= 10 || blitCallCountPerEye[1] % 300 == 0) {
-            VR_Log("  DrawSimpleTex AFTER draw: boundFBO=%d, tris=%d, glError=0x%x\n",
-                boundFBO, tris_size / (int)sizeof(GLushort) / 3, err);
-        }
-    }
-#endif
-
     glDisableVertexAttribArray(pStage->attribute_v_uv);
     glDisableVertexAttribArray(pStage->attribute_v_color);
     glDisableVertexAttribArray(pStage->attribute_coord3d);
@@ -2373,56 +2365,20 @@ void std3D_DrawSceneFbo()
     //printf("Draw scene FBO\n");
 
 #ifdef PLATFORM_VR
-    // DEBUG: Log FBO state for VR debugging - per-eye tracking
-    static int drawSceneFboCallCount = 0;
-    static int drawSceneFboCallCountPerEye[2] = {0, 0};
-    static int lastEyeLogged = -2;
-    drawSceneFboCallCount++;
+    // Get current eye and VR FBO target
+    extern int stdVR_OpenXR_GetCurrentEyeFBO(int eye);
+    extern int stdVR_OpenXR_GetCurrentEye(void);
     extern void VR_Log(const char* fmt, ...);
-    extern int stdVR_OpenXR_GetCurrentEyeFBO(int eye);  // Call OpenXR directly
-    extern int stdVR_OpenXR_GetCurrentEye(void);        // Call OpenXR directly
-    int eye = stdVR_OpenXR_GetCurrentEye();  // Bypass wrapper, call OpenXR directly
-    if (eye != lastEyeLogged) {
-        VR_Log("std3D_DrawSceneFbo: eye change %d -> %d (call #%d)\n", lastEyeLogged, eye, drawSceneFboCallCount);
-        lastEyeLogged = eye;
-    }
-    if (eye >= 0 && eye < 2) {
-        drawSceneFboCallCountPerEye[eye]++;
-    }
-    // Log first 30 calls per eye, then every 300th per eye
-    int shouldLog = 0;
-    if (eye >= 0 && eye < 2) {
-        shouldLog = (drawSceneFboCallCountPerEye[eye] <= 30 || drawSceneFboCallCountPerEye[eye] % 300 == 0);
-    } else {
-        shouldLog = (drawSceneFboCallCount <= 60 || drawSceneFboCallCount % 600 == 0);
-    }
+    int eye = stdVR_OpenXR_GetCurrentEye();
+    GLint vrFboTarget = (eye >= 0 && eye < 2) ? stdVR_OpenXR_GetCurrentEyeFBO(eye) : 0;
 
-    // Get the VR FBO directly from the VR layer - bypasses the broken window.fbo override
-    GLint vrFboTarget = 0;
-    if (eye >= 0 && eye < 2) {
-        vrFboTarget = stdVR_OpenXR_GetCurrentEyeFBO(eye);  // Call OpenXR directly
-    }
-
-    if (shouldLog) {
-        VR_Log("std3D_DrawSceneFbo #%d [eye%d #%d]: window.fbo=%d, vrFboTarget=%d, w=%d, h=%d, vrTargetActive=%d\n",
-            drawSceneFboCallCount, eye, (eye >= 0 && eye < 2) ? drawSceneFboCallCountPerEye[eye] : -1,
-            std3D_pFb->window.fbo, vrFboTarget, std3D_pFb->window.w, std3D_pFb->window.h, std3D_vrTargetActive);
-        VR_Log("  internal fbo=%d, tex0=%d, w=%d, h=%d\n",
-            std3D_pFb->fbo, std3D_pFb->tex0, std3D_pFb->w, std3D_pFb->h);
-    }
+    static int drawSceneFboCount = 0;
+    drawSceneFboCount++;
 #endif
 
     glEnable(GL_BLEND);
 
     glBlendEquation(GL_FUNC_ADD);
-
-#ifdef PLATFORM_VR
-    // Ensure all rendering to internal FBO is complete before blitting
-    // This fixes potential synchronization issues where the blit reads stale data
-    if (std3D_vrTargetActive || vrFboTarget > 0) {
-        glFinish();
-    }
-#endif
 
     // In VR mode, use the direct VR FBO instead of relying on window.fbo override
 #ifdef PLATFORM_VR
@@ -2432,57 +2388,6 @@ void std3D_DrawSceneFbo()
 #endif
     glBindFramebuffer(GL_FRAMEBUFFER, targetFbo);
     glClear( GL_COLOR_BUFFER_BIT );
-
-#ifdef PLATFORM_VR
-    // DEBUG: Verify the binding happened
-    GLint actualFBO = 0;
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &actualFBO);
-    if (shouldLog) {
-        VR_Log("  After glBindFramebuffer: actualFBO=%d (wanted %d)\n", actualFBO, targetFbo);
-    }
-
-    // DEBUG: Check internal FBO content for BOTH eyes - sample multiple points
-    if (vrFboTarget > 0) {
-        glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
-
-        // Read from multiple locations to find any content
-        unsigned char pixelCenter[4] = {0};
-        unsigned char pixelTL[4] = {0};  // top-left
-        unsigned char pixelBR[4] = {0};  // bottom-right
-        int w = std3D_pFb->w;
-        int h = std3D_pFb->h;
-
-        glReadPixels(w / 2, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelCenter);
-        glReadPixels(w / 4, h / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelTL);
-        glReadPixels(3 * w / 4, 3 * h / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelBR);
-
-        // Check total non-zero content
-        int hasContent = (pixelCenter[0] + pixelCenter[1] + pixelCenter[2] +
-                          pixelTL[0] + pixelTL[1] + pixelTL[2] +
-                          pixelBR[0] + pixelBR[1] + pixelBR[2]) > 0;
-
-        if (shouldLog || (eye == 1 && !hasContent)) {
-            VR_Log("  Internal FBO (eye%d) fbo=%d: center=(%d,%d,%d) TL=(%d,%d,%d) BR=(%d,%d,%d)\n",
-                eye, std3D_pFb->fbo,
-                pixelCenter[0], pixelCenter[1], pixelCenter[2],
-                pixelTL[0], pixelTL[1], pixelTL[2],
-                pixelBR[0], pixelBR[1], pixelBR[2]);
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, targetFbo);
-    }
-
-    // DEBUG: Check FBO attachment status for eye 1 (magenta clear disabled - using jkGame diagnostics now)
-    if (eye == 1 && vrFboTarget > 0 && shouldLog) {
-        // Check what's attached to this FBO
-        GLint colorAttachment = 0;
-        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &colorAttachment);
-        GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-
-        VR_Log("  EYE1 VR FBO CHECK: fbo=%d, colorAttachment=%d, status=0x%x (complete=0x%x)\n",
-            vrFboTarget, colorAttachment, fboStatus, GL_FRAMEBUFFER_COMPLETE);
-    }
-#endif
 
     static float frameNum = 1.0;
     //frameNum += (rand() % 16);
@@ -2503,9 +2408,12 @@ void std3D_DrawSceneFbo()
     // even if jkGame_isDDraw is false (can happen during transitions)
 #ifdef PLATFORM_VR
     int skipEarlyReturn = std3D_vrTargetActive;
-    if (shouldLog) {
-        VR_Log("  Early return check: jkGame_isDDraw=%d, jkGuiBuildMulti=%d, vrTargetActive=%d, skip=%d\n",
-            jkGame_isDDraw, jkGuiBuildMulti_bRendering, std3D_vrTargetActive, skipEarlyReturn);
+
+    if (drawSceneFboCount <= 30 || drawSceneFboCount % 300 == 0) {
+        VR_Log("std3D_DrawSceneFbo #%d: eye=%d vrFboTarget=%d targetFbo=%d vrActive=%d isDDraw=%d\n",
+            drawSceneFboCount, eye, vrFboTarget, targetFbo, std3D_vrTargetActive, jkGame_isDDraw);
+        VR_Log("  window.fbo=%d window.w=%d window.h=%d tex0=%d\n",
+            std3D_pFb->window.fbo, std3D_pFb->window.w, std3D_pFb->window.h, std3D_pFb->tex0);
     }
 #else
     int skipEarlyReturn = 0;
@@ -2513,9 +2421,9 @@ void std3D_DrawSceneFbo()
     if (!jkGame_isDDraw && !jkGuiBuildMulti_bRendering && !skipEarlyReturn)
     {
 #ifdef PLATFORM_VR
-        if (shouldLog) {
-            VR_Log("  EARLY RETURN: jkGame_isDDraw=%d, jkGuiBuildMulti_bRendering=%d\n",
-                jkGame_isDDraw, jkGuiBuildMulti_bRendering);
+        if (drawSceneFboCount <= 30 || drawSceneFboCount % 300 == 0) {
+            VR_Log("std3D_DrawSceneFbo #%d: EARLY RETURN (isDDraw=%d, skipEarlyReturn=%d)\n",
+                drawSceneFboCount, jkGame_isDDraw, skipEarlyReturn);
         }
 #endif
         return;
@@ -2557,9 +2465,6 @@ void std3D_DrawSceneFbo()
     GLint savedWindowFbo = std3D_pFb->window.fbo;
     if (vrFboTarget > 0) {
         std3D_pFb->window.fbo = vrFboTarget;
-        if (shouldLog) {
-            VR_Log("  FIX: Redirecting window.fbo %d -> %d for eye %d blits\n", savedWindowFbo, vrFboTarget, eye);
-        }
     }
 #endif
 
@@ -2618,6 +2523,15 @@ void std3D_DrawSceneFbo()
     // Restore original window.fbo after blits
     if (vrFboTarget > 0) {
         std3D_pFb->window.fbo = savedWindowFbo;
+
+        // Debug: check what got rendered to VR FBO
+        if (drawSceneFboCount <= 30 || drawSceneFboCount % 300 == 0) {
+            glBindFramebuffer(GL_FRAMEBUFFER, vrFboTarget);
+            GLubyte pixel[4] = {0};
+            glReadPixels(640, 360, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            VR_Log("std3D_DrawSceneFbo #%d: DONE - vrFBO center pixel=[%d,%d,%d,%d]\n",
+                drawSceneFboCount, pixel[0], pixel[1], pixel[2], pixel[3]);
+        }
     }
 #endif
 }
@@ -2702,74 +2616,8 @@ void std3D_DrawRenderList()
 {
     if (Main_bHeadless) return;
 
-#ifdef PLATFORM_VR
-    // DEBUG: Log draw call info for VR with GL error checking
-    {
-        extern int stdVR_bEnabled;
-        extern int stdVR_currentEye;
-        extern void VR_Log(const char* fmt, ...);
-        static int drawCallCountPerEye[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
-            drawCallCountPerEye[eye]++;
-            int shouldLog = (drawCallCountPerEye[eye] <= 10 || drawCallCountPerEye[eye] % 300 == 0);
-
-            // Check for any pending GL errors before we start
-            GLenum err = glGetError();
-            if (err != GL_NO_ERROR && shouldLog) {
-                VR_Log("std3D_DrawRenderList[eye%d] PRE-ERROR: 0x%x\n", eye, err);
-            }
-
-            if (shouldLog) {
-                VR_Log("std3D_DrawRenderList[eye%d] #%d: GL_tmpVerticesAmt=%d, GL_tmpTrisAmt=%d, targetFbo=%d\n",
-                    eye, drawCallCountPerEye[eye], GL_tmpVerticesAmt, GL_tmpTrisAmt, std3D_pFb ? std3D_pFb->fbo : -1);
-            }
-        }
-    }
-#endif
-
     //printf("Draw render list\n");
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
-
-#ifdef PLATFORM_VR
-    // DEBUG: Log vertex/triangle counts for each eye to console
-    {
-        extern int stdVR_bEnabled;
-        extern int stdVR_currentEye;
-        static int logCount[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
-            logCount[eye]++;
-            // Log first 30 calls and every 100th after that
-            if (logCount[eye] <= 30 || logCount[eye] % 100 == 0) {
-                stdPlatform_Printf("DrawRenderList eye%d #%d: verts=%d tris=%d\n",
-                    eye, logCount[eye], GL_tmpVerticesAmt, GL_tmpTrisAmt);
-            }
-        }
-    }
-
-    // DEBUG: Verify FBO binding and check for errors
-    {
-        extern int stdVR_bEnabled;
-        extern int stdVR_currentEye;
-        extern void VR_Log(const char* fmt, ...);
-        static int bindCheckCount[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
-            bindCheckCount[eye]++;
-            int shouldLog = (bindCheckCount[eye] <= 10 || bindCheckCount[eye] % 300 == 0);
-
-            if (shouldLog) {
-                GLint actualFBO = 0;
-                glGetIntegerv(GL_FRAMEBUFFER_BINDING, &actualFBO);
-                GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-                GLenum err = glGetError();
-                VR_Log("  [eye%d] After FBO bind: actual=%d, wanted=%d, status=0x%x (complete=0x%x), glErr=0x%x\n",
-                    eye, actualFBO, std3D_pFb->fbo, fboStatus, GL_FRAMEBUFFER_COMPLETE, err);
-            }
-        }
-    }
-#endif
     glUseProgram(programDefault);
 
     GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
@@ -2902,39 +2750,6 @@ void std3D_DrawRenderList()
     glUniformMatrix4fv(uniform_mvp, 1, GL_FALSE, d3dmat);
     glViewport(0, 0, width, height);
 
-#ifdef PLATFORM_VR
-    // DEBUG: Log projection setup and GL state for VR
-    {
-        extern int stdVR_bEnabled;
-        extern int stdVR_currentEye;
-        extern void VR_Log(const char* fmt, ...);
-        static int projLogCount[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
-            projLogCount[eye]++;
-            int shouldLog = (projLogCount[eye] <= 5 || projLogCount[eye] % 300 == 0);
-            if (shouldLog) {
-                // Check viewport and scissor state
-                GLint viewport[4] = {0};
-                GLint scissor[4] = {0};
-                GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
-                glGetIntegerv(GL_VIEWPORT, viewport);
-                glGetIntegerv(GL_SCISSOR_BOX, scissor);
-
-                VR_Log("  [eye%d] PROJ: internalW=%.0f H=%.0f, width=%.0f height=%.0f, scaleX=%.4f scaleY=%.4f\n",
-                    eye, internalWidth, internalHeight, width, height, scaleX, scaleY);
-                VR_Log("  [eye%d] MVP diagonal: [%.4f, %.4f, %.4f, %.4f]\n",
-                    eye, d3dmat[0], d3dmat[5], d3dmat[10], d3dmat[15]);
-                VR_Log("  [eye%d] MVP translate: [%.4f, %.4f, %.4f]\n",
-                    eye, d3dmat[12], d3dmat[13], d3dmat[14]);
-                VR_Log("  [eye%d] viewport=(%d,%d,%d,%d) scissor=(%d,%d,%d,%d) scissorEnabled=%d\n",
-                    eye, viewport[0], viewport[1], viewport[2], viewport[3],
-                    scissor[0], scissor[1], scissor[2], scissor[3], scissorEnabled);
-            }
-        }
-    }
-#endif
-
     }
 
     glUniform2f(uniform_iResolution, width, height);
@@ -2984,113 +2799,7 @@ void std3D_DrawRenderList()
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, world_ibo_triangle);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpTrisAmt * 3 * sizeof(GLushort), world_data_elements, GL_STREAM_DRAW);
 
-#ifdef PLATFORM_VR
-    // DEBUG: Log vertex positions and verify buffers for VR
-    {
-        extern int stdVR_bEnabled;
-        extern int stdVR_currentEye;
-        extern void VR_Log(const char* fmt, ...);
-        static int bufCheckCount[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
-            bufCheckCount[eye]++;
-            if (bufCheckCount[eye] <= 3) {
-                // Log first few vertex positions to see where geometry is
-                VR_Log("[VERTS eye%d #%d] total=%d tris=%d\n", eye, bufCheckCount[eye], GL_tmpVerticesAmt, GL_tmpTrisAmt);
-                if (GL_tmpVerticesAmt > 0) {
-                    // Sample vertices to check their screen positions
-                    int sampleIndices[] = {0, GL_tmpVerticesAmt/4, GL_tmpVerticesAmt/2, 3*GL_tmpVerticesAmt/4, GL_tmpVerticesAmt-1};
-                    for (int i = 0; i < 5 && sampleIndices[i] < GL_tmpVerticesAmt; i++) {
-                        int idx = sampleIndices[i];
-                        VR_Log("  vert[%d]: pos=(%.1f,%.1f,%.4f) color=0x%08X\n",
-                            idx, vertexes[idx].x, vertexes[idx].y, vertexes[idx].z, vertexes[idx].color);
-                    }
-                }
-            }
-            if (bufCheckCount[eye] <= 5) {
-                // Check GL errors
-                GLenum err = glGetError();
-
-                // Get actual buffer sizes
-                GLint vboSize = 0, iboSize = 0;
-                glBindBuffer(GL_ARRAY_BUFFER, world_vbo_all);
-                glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vboSize);
-                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, world_ibo_triangle);
-                glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &iboSize);
-
-                // Expected sizes
-                int expectedVboSize = GL_tmpVerticesAmt * sizeof(D3DVERTEX);
-                int expectedIboSize = GL_tmpTrisAmt * 3 * sizeof(GLushort);
-
-                VR_Log("[BUFFER CHECK eye%d #%d] VBO=%d (expected %d), IBO=%d (expected %d), glErr=0x%x\n",
-                    eye, bufCheckCount[eye], vboSize, expectedVboSize, iboSize, expectedIboSize, err);
-            }
-        }
-    }
-#endif
-
-#ifdef PLATFORM_VR
-    // DEBUG: Log sample vertex positions for VR
-    {
-        extern int stdVR_bEnabled;
-        extern int stdVR_currentEye;
-        extern void VR_Log(const char* fmt, ...);
-        static int vertLogCount[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (stdVR_bEnabled && eye >= 0 && eye < 2 && GL_tmpVerticesAmt > 0) {
-            vertLogCount[eye]++;
-            int shouldLog = (vertLogCount[eye] <= 5 || vertLogCount[eye] % 300 == 0);
-            if (shouldLog) {
-                // Log first few vertices
-                int numToLog = GL_tmpVerticesAmt < 3 ? GL_tmpVerticesAmt : 3;
-                for (int v = 0; v < numToLog; v++) {
-                    VR_Log("  [eye%d] VERT[%d]: pos=(%.2f, %.2f, %.2f) uv=(%.3f, %.3f) color=0x%08x\n",
-                        eye, v, vertexes[v].x, vertexes[v].y, vertexes[v].z,
-                        vertexes[v].tu, vertexes[v].tv, vertexes[v].color);
-                }
-            }
-        }
-    }
-#endif
-
     int do_batch = 0;
-
-#ifdef PLATFORM_VR
-    // DEBUG: Inject test triangle at screen center for Eye 1 to verify draw pipeline
-    {
-        extern int stdVR_bEnabled;
-        extern int stdVR_currentEye;
-        extern void VR_Log(const char* fmt, ...);
-        static int testTriCount = 0;
-        static int checkCount[2] = {0, 0};
-        if (stdVR_bEnabled && stdVR_currentEye >= 0 && stdVR_currentEye < 2) {
-            checkCount[stdVR_currentEye]++;
-            if (checkCount[stdVR_currentEye] <= 3) {
-                VR_Log("[DRAW CHECK eye%d #%d] GL_tmpVerticesAmt=%d GL_tmpTrisAmt=%d internalW=%.0f H=%.0f\n",
-                    stdVR_currentEye, checkCount[stdVR_currentEye], GL_tmpVerticesAmt, GL_tmpTrisAmt, internalWidth, internalHeight);
-            }
-            // Only inject for eye 1 with sufficient vertices
-            if (stdVR_currentEye == 1 && testTriCount < 10 && GL_tmpVerticesAmt >= 3 && GL_tmpTrisAmt >= 1) {
-                testTriCount++;
-                // Inject a bright test triangle at screen center using z=1.0 (should always pass depth)
-                float cx = internalWidth / 2.0f;
-                float cy = internalHeight / 2.0f;
-                float sz = 150.0f;  // Large triangle size
-                // Overwrite first 3 vertices with test triangle
-                vertexes[0].x = cx;       vertexes[0].y = cy - sz;  vertexes[0].z = 1.0f; vertexes[0].color = 0xFFFF00FF; // top (magenta)
-                vertexes[1].x = cx - sz;  vertexes[1].y = cy + sz;  vertexes[1].z = 1.0f; vertexes[1].color = 0xFF00FFFF; // bottom-left (cyan)
-                vertexes[2].x = cx + sz;  vertexes[2].y = cy + sz;  vertexes[2].z = 1.0f; vertexes[2].color = 0xFFFFFF00; // bottom-right (yellow)
-                // Set first triangle indices to point to test vertices
-                tris[0].v1 = 0; tris[0].v2 = 1; tris[0].v3 = 2;
-                // Re-upload vertex buffer with modified data
-                glBindBuffer(GL_ARRAY_BUFFER, world_vbo_all);
-                glBufferSubData(GL_ARRAY_BUFFER, 0, 3 * sizeof(D3DVERTEX), vertexes);
-                VR_Log("[TEST TRI eye1 #%d] Injected test triangle at (%.0f,%.0f) size=%.0f verts=%d\n",
-                    testTriCount, cx, cy, sz, GL_tmpVerticesAmt);
-            }
-        }
-    }
-#endif
 
     //glDepthFunc(GL_LESS);
     //glDepthMask(GL_TRUE);
@@ -3599,6 +3308,302 @@ void std3D_DebugSaveInternalFbo(const char* filename)
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
+}
+
+// Added: Render overlay buffer to currently bound FBO for VR HUD
+void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
+{
+    extern void VR_Log(const char* fmt, ...);
+
+    if (Main_bHeadless) return;
+    if (!has_initted) return;
+    // HUD draws to Video_overlayMapBuffer (via Video_pCanvasOverlayMap->vbuffer), not Video_menuBuffer
+    if (!Video_overlayMapBuffer.sdlSurface) return;
+
+    static int overlayLogCount = 0;
+    if (++overlayLogCount <= 10) {
+        VR_Log("std3D_DrawOverlayToCurrentFBO: target=%dx%d, overlayMapBuffer=%dx%d\n",
+               targetWidth, targetHeight,
+               (int)Video_overlayMapBuffer.format.width,
+               (int)Video_overlayMapBuffer.format.height);
+    }
+
+    // Set up GL state for 2D overlay rendering (matching std3D_DrawMenu pattern)
+    glDepthMask(GL_TRUE);
+    glCullFace(GL_FRONT);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthFunc(GL_ALWAYS);
+    glUseProgram(programMenu);
+
+    // Set viewport to target size
+    glViewport(0, 0, targetWidth, targetHeight);
+
+    // Use Video_overlayMapBuffer dimensions (where HUD is drawn by jkHud_Draw)
+    float srcW = (float)Video_overlayMapBuffer.format.width;
+    float srcH = (float)Video_overlayMapBuffer.format.height;
+
+    // Build quad vertices for full overlay
+    GL_tmpVerticesAmt = 0;
+    GL_tmpTrisAmt = 0;
+    std3D_DrawMenuSubrect(0, 0, srcW, srcH, 0, 0, 0.0);
+
+    // Clear texture slots
+    glActiveTexture(GL_TEXTURE0 + 4);
+    glBindTexture(GL_TEXTURE_2D, blank_tex);
+    glActiveTexture(GL_TEXTURE0 + 3);
+    glBindTexture(GL_TEXTURE_2D, blank_tex);
+    glActiveTexture(GL_TEXTURE0 + 2);
+    glBindTexture(GL_TEXTURE_2D, blank_tex);
+    glActiveTexture(GL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, blank_tex);
+    glActiveTexture(GL_TEXTURE0 + 0);
+    glBindTexture(GL_TEXTURE_2D, blank_tex);
+
+    // Upload overlay map buffer to texture (this is where HUD content is drawn)
+    // HUD functions draw to Video_pCanvasOverlayMap->vbuffer which is Video_overlayMapBuffer
+    glActiveTexture(GL_TEXTURE0 + 0);
+    glBindTexture(GL_TEXTURE_2D, Video_overlayTexId);
+    if (Video_overlayMapBuffer.sdlSurface && Video_overlayMapBuffer.sdlSurface->pixels) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                        (GLsizei)Video_overlayMapBuffer.format.width, (GLsizei)Video_overlayMapBuffer.format.height,
+                        GL_RED, GL_UNSIGNED_BYTE, Video_overlayMapBuffer.sdlSurface->pixels);
+
+        // Debug: check if there's any non-zero content
+        static int contentCheckCount = 0;
+        if (++contentCheckCount <= 5) {
+            uint8_t* pixels = (uint8_t*)Video_overlayMapBuffer.sdlSurface->pixels;
+            int nonZero = 0;
+            int total = Video_overlayMapBuffer.format.width * Video_overlayMapBuffer.format.height;
+            for (int i = 0; i < total && i < 10000; i++) {
+                if (pixels[i] != 0) nonZero++;
+            }
+            VR_Log("std3D_DrawOverlayToCurrentFBO: overlayMapBuffer has %d non-zero pixels in first 10000\n", nonZero);
+        }
+    }
+
+    // Bind palette texture
+    glActiveTexture(GL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, displaypal_texture);
+
+    // Set uniforms for menu shader
+    glActiveTexture(GL_TEXTURE0 + 0);
+    glUniform1i(programMenu_uniform_tex, 0);
+    glUniform1i(programMenu_uniform_displayPalette, 1);
+
+    // Upload vertices
+    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
+    glBufferData(GL_ARRAY_BUFFER, GL_tmpVerticesAmt * sizeof(D3DVERTEX), GL_tmpVertices, GL_STREAM_DRAW);
+
+    glVertexAttribPointer(programMenu_attribute_coord3d, 3, GL_FLOAT, GL_FALSE,
+                          sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, x));
+    glVertexAttribPointer(programMenu_attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE,
+                          sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, color));
+    glVertexAttribPointer(programMenu_attribute_v_uv, 2, GL_FLOAT, GL_FALSE,
+                          sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, tu));
+
+    glEnableVertexAttribArray(programMenu_attribute_coord3d);
+    glEnableVertexAttribArray(programMenu_attribute_v_color);
+    glEnableVertexAttribArray(programMenu_attribute_v_uv);
+
+    // Set up transformation matrix
+    float scaleX = 1.0f / ((float)targetWidth / 2.0f);
+    float scaleY = 1.0f / ((float)targetHeight / 2.0f);
+    float d3dmat[16] = {
+       scaleX, 0, 0, 0,
+       0, -scaleY, 0, 0,
+       0, 0, 1, 0,
+       -(targetWidth/2.0f)*scaleX, (targetHeight/2.0f)*scaleY, -1, 1
+    };
+    glUniformMatrix4fv(programMenu_uniform_mvp, 1, GL_FALSE, d3dmat);
+
+    // Upload and draw indices
+    for (int j = 0; j < GL_tmpTrisAmt; j++) {
+        menu_data_elements[(j*3)+0] = GL_tmpTris[j].v1;
+        menu_data_elements[(j*3)+1] = GL_tmpTris[j].v2;
+        menu_data_elements[(j*3)+2] = GL_tmpTris[j].v3;
+    }
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpTrisAmt * 3 * sizeof(GLushort), menu_data_elements, GL_STREAM_DRAW);
+
+    int tris_size = 0;
+    glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &tris_size);
+    glDrawElements(GL_TRIANGLES, tris_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
+
+    // Cleanup
+    glDisableVertexAttribArray(programMenu_attribute_v_uv);
+    glDisableVertexAttribArray(programMenu_attribute_v_color);
+    glDisableVertexAttribArray(programMenu_attribute_coord3d);
+
+    GL_tmpVerticesAmt = 0;
+    GL_tmpTrisAmt = 0;
+}
+
+// Added: Draw UI render list to the currently bound FBO with specified dimensions
+// This is a VR-specific version that doesn't bind std3D_windowFbo
+void std3D_DrawUIRenderListToCurrentFBO(int width, int height)
+{
+    extern void VR_Log(const char* fmt, ...);
+
+    if (Main_bHeadless) return;
+    if (!GL_tmpUITrisAmt) {
+        static int noTriLogCount = 0;
+        if (++noTriLogCount <= 5) {
+            VR_Log("std3D_DrawUIRenderListToCurrentFBO: No UI tris to draw (GL_tmpUITrisAmt=0)\n");
+        }
+        return;
+    }
+
+    // The HUD elements are positioned for desktop resolution (Window_xSize x Window_ySize)
+    // but we're rendering to the VR HUD buffer (width x height).
+    // Scale the vertex positions to fit the target buffer.
+    float scaleFromX = (float)Window_xSize;
+    float scaleFromY = (float)Window_ySize;
+    float scaleToX = (float)width;
+    float scaleToY = (float)height;
+    float scaleX_factor = scaleToX / scaleFromX;
+    float scaleY_factor = scaleToY / scaleFromY;
+
+    // Scale all vertex positions
+    D3DVERTEX* verts = GL_tmpUIVertices;
+    for (int i = 0; i < GL_tmpUIVerticesAmt; i++) {
+        verts[i].x *= scaleX_factor;
+        verts[i].y *= scaleY_factor;
+    }
+
+    static int drawUILogCount = 0;
+    if (++drawUILogCount <= 10) {
+        VR_Log("std3D_DrawUIRenderListToCurrentFBO: target=%dx%d, from=%dx%d, scale=(%.3f,%.3f), tris=%d verts=%d\n",
+            width, height, (int)scaleFromX, (int)scaleFromY, scaleX_factor, scaleY_factor,
+            GL_tmpUITrisAmt, GL_tmpUIVerticesAmt);
+        // Log scaled vertex positions
+        for (int i = 0; i < GL_tmpUIVerticesAmt && i < 8; i++) {
+            VR_Log("  vert[%d]: pos=(%.1f, %.1f, %.1f) uv=(%.2f, %.2f)\n",
+                i, verts[i].x, verts[i].y, verts[i].z, verts[i].tu, verts[i].tv);
+        }
+    }
+
+    // NOTE: We do NOT bind a specific FBO here - caller must have bound the target FBO already
+    glDepthMask(GL_TRUE);
+    glCullFace(GL_FRONT);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthFunc(GL_ALWAYS);
+    glUseProgram(std3D_uiProgram.program);
+
+    last_ui_tex = 0;
+    last_ui_flags = -1;
+
+    float internalWidth = (float)width;
+    float internalHeight = (float)height;
+
+    float maxX = 1.0f;
+    float maxY = 1.0f;
+    float scaleX = 1.0f / (internalWidth / 2.0f);
+    float scaleY = 1.0f / (internalHeight / 2.0f);
+
+    glUniform1i(std3D_uiProgram.uniform_tex, 0);
+    glUniform1i(std3D_uiProgram.uniform_tex2, 1);
+    glUniform1i(std3D_uiProgram.uniform_tex3, 2);
+
+    glActiveTexture(GL_TEXTURE0 + 0);
+    glBindTexture(GL_TEXTURE_2D, blank_tex_white);
+
+    float d3dmat[16] = {
+        maxX * scaleX, 0, 0, 0,
+        0, -maxY * scaleY, 0, 0,
+        0, 0, 1, 0,
+        -(width / 2.0f) * scaleX, (height / 2.0f) * scaleY, -1, 1
+    };
+
+    glUniformMatrix4fv(std3D_uiProgram.uniform_mvp, 1, GL_FALSE, d3dmat);
+    glViewport(0, 0, width, height);
+    glUniform2f(std3D_uiProgram.uniform_iResolution, internalWidth, internalHeight);
+
+    glUniform1f(std3D_uiProgram.uniform_param1, 1.0f);
+    glUniform1f(std3D_uiProgram.uniform_param2, 1.0f);
+    glUniform1f(std3D_uiProgram.uniform_param3, jkPlayer_gamma);
+
+    rdUITri* tris = GL_tmpUITris;
+    glEnableVertexAttribArray(std3D_uiProgram.attribute_coord3d);
+    glEnableVertexAttribArray(std3D_uiProgram.attribute_v_color);
+    glEnableVertexAttribArray(std3D_uiProgram.attribute_v_uv);
+
+    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
+    glBufferData(GL_ARRAY_BUFFER, GL_tmpUIVerticesAmt * sizeof(D3DVERTEX), GL_tmpUIVertices, GL_STREAM_DRAW);
+    glVertexAttribPointer(std3D_uiProgram.attribute_coord3d, 3, GL_FLOAT, GL_FALSE,
+                          sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, x));
+    glVertexAttribPointer(std3D_uiProgram.attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE,
+                          sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, color));
+    glVertexAttribPointer(std3D_uiProgram.attribute_v_uv, 2, GL_FLOAT, GL_FALSE,
+                          sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, tu));
+
+    for (int j = 0; j < GL_tmpUITrisAmt; j++) {
+        menu_data_elements[(j * 3) + 0] = tris[j].v1;
+        menu_data_elements[(j * 3) + 1] = tris[j].v2;
+        menu_data_elements[(j * 3) + 2] = tris[j].v3;
+    }
+
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpUITrisAmt * 3 * sizeof(GLushort), menu_data_elements, GL_STREAM_DRAW);
+
+    int last_tex_idx = 0;
+    int tex_id = tris[0].texture;
+    glActiveTexture(GL_TEXTURE0 + 0);
+    if (tex_id == 0)
+        glBindTexture(GL_TEXTURE_2D, blank_tex_white);
+    else
+        glBindTexture(GL_TEXTURE_2D, tex_id);
+
+    if (tris[0].flags) {
+        glUniform1f(std3D_uiProgram.uniform_param1, 1.0f);
+    } else {
+        glUniform1f(std3D_uiProgram.uniform_param1, 0.0f);
+    }
+
+    last_ui_tex = tris[0].texture;
+    last_ui_flags = tris[0].flags;
+
+    for (int j = 1; j < GL_tmpUITrisAmt; j++) {
+        if (tris[j].texture == last_ui_tex && tris[j].flags == last_ui_flags) {
+            continue;
+        }
+
+        int num_tris_batch = j - last_tex_idx;
+        if (num_tris_batch) {
+            glDrawElements(GL_TRIANGLES, num_tris_batch * 3, GL_UNSIGNED_SHORT,
+                (GLvoid*)((intptr_t)&menu_data_elements[last_tex_idx * 3] - (intptr_t)&menu_data_elements[0]));
+        }
+
+        tex_id = tris[j].texture;
+        glActiveTexture(GL_TEXTURE0 + 0);
+        if (tex_id == 0)
+            glBindTexture(GL_TEXTURE_2D, blank_tex_white);
+        else
+            glBindTexture(GL_TEXTURE_2D, tex_id);
+
+        if (tris[j].flags) {
+            glUniform1f(std3D_uiProgram.uniform_param1, 1.0f);
+        } else {
+            glUniform1f(std3D_uiProgram.uniform_param1, 0.0f);
+        }
+
+        last_ui_tex = tris[j].texture;
+        last_ui_flags = tris[j].flags;
+        last_tex_idx = j;
+    }
+
+    int remaining_batch = GL_tmpUITrisAmt - last_tex_idx;
+    if (remaining_batch) {
+        glDrawElements(GL_TRIANGLES, remaining_batch * 3, GL_UNSIGNED_SHORT,
+            (GLvoid*)((intptr_t)&menu_data_elements[last_tex_idx * 3] - (intptr_t)&menu_data_elements[0]));
+    }
+
+    glBindTexture(GL_TEXTURE_2D, blank_tex_white);
+    glDisableVertexAttribArray(std3D_uiProgram.attribute_coord3d);
+    glDisableVertexAttribArray(std3D_uiProgram.attribute_v_color);
+    glDisableVertexAttribArray(std3D_uiProgram.attribute_v_uv);
+
+    std3D_ResetUIRenderList();
 }
 #endif
 

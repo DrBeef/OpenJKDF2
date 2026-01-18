@@ -139,19 +139,6 @@ int jkGame_Update()
     int result; // eax
     int v6; // [esp+1Ch] [ebp-1Ch]
 
-    // Debug: unconditional log to verify function is called
-    {
-        static int unconditionalCount = 0;
-        unconditionalCount++;
-        if (unconditionalCount <= 10 || unconditionalCount % 300 == 0) {
-            stdPlatform_Printf("jkGame_Update CALLED #%d\n", unconditionalCount);
-#ifdef PLATFORM_VR
-            extern void VR_Log(const char* fmt, ...);
-            VR_Log("jkGame_Update CALLED #%d (PLATFORM_VR defined)\n", unconditionalCount);
-#endif
-        }
-    }
-
     static int jkGame_Update_Start = 0;
     static int jkGame_Update_ClearScreen = 0;
     static int jkGame_Update_AdvanceFrame = 0;
@@ -211,16 +198,6 @@ int jkGame_Update()
     extern void VR_Log(const char* fmt, ...);
     extern int stdVR_currentEye;
 
-    // Debug: log every call to jkGame_Update to verify it's being called
-    {
-        static int jkGameCallCount = 0;
-        jkGameCallCount++;
-        if (jkGameCallCount <= 10 || jkGameCallCount % 300 == 0) {
-            VR_Log("jkGame_Update #%d: enabled=%d, running=%d, pending=%d\n",
-                jkGameCallCount, stdVR_bEnabled, stdVR_IsSessionRunning(), stdVR_IsFramePending());
-        }
-    }
-
     // Check for VR test without headset mode
     extern int32_t Main_bVRTest;
     extern int32_t Main_bVRTestNoHeadset;
@@ -232,10 +209,6 @@ int jkGame_Update()
     if (Main_bVRTestNoHeadset && jkGame_isDDraw && (!stdVR_bEnabled || !stdVR_IsSessionRunning())) {
         static int simVRFrameCount = 0;
         simVRFrameCount++;
-
-        if (simVRFrameCount <= 10 || simVRFrameCount % 100 == 0) {
-            VR_Log("VR-SIM: Frame %d (target=%d, state=%d)\n", simVRFrameCount, Main_vrTestFrameTarget, Main_vrTestState);
-        }
 
         // Mark gameplay started
         if (Main_vrTestState == 0) {
@@ -463,6 +436,87 @@ int jkGame_Update()
         rdCache_Flush();
         rdCache_ClearFrameCounters();
 
+        // Added: Render HUD to dedicated VR HUD buffer (quad layer)
+        // This must happen AFTER eye rendering but BEFORE EndFrame
+        if (stdVR_IsHudEnabled()) {
+            int vrHudPrepared = stdVR_PrepareHudBuffer();
+            if (vrHudPrepared) {
+                static int vrHudRenderCount = 0;
+                if (++vrHudRenderCount <= 10) {
+                    VR_Log("jkGame: VR HUD rendering to quad layer, vrHudPrepared=%d\n", vrHudPrepared);
+                }
+
+                // Draw HUD elements (these render to Video overlay buffers)
+                if (!Main_bMotsCompat) {
+                    if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                        jkHud_Draw();
+                    }
+                }
+                else {
+                    if (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_SCOPEHUD) {
+                        jkHudScope_Draw();
+                    }
+                    if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_80000000) == 0) {
+                        if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                            jkHud_Draw();
+                        }
+                    }
+                    else {
+                        jkHudCameraView_Draw();
+                    }
+                }
+                jkHudInv_Draw();
+
+                // Flush the UI render list to the VR HUD FBO
+                // HUD elements are queued via std3D_DrawUIBitmap and need to be flushed
+                int hudWidth, hudHeight;
+                stdVR_GetHudSize(&hudWidth, &hudHeight);
+                std3D_DrawUIRenderListToCurrentFBO(hudWidth, hudHeight);
+
+                // Also blit the overlay buffer content (crosshair, target rings, overlay map)
+                // These are drawn via rdPrimit2 to Video_pCanvasOverlayMap
+                std3D_DrawOverlayToCurrentFBO(hudWidth, hudHeight);
+
+                // Debug: Save HUD FBO content to file for inspection
+                {
+                    extern int32_t Main_bVRTest;
+                    extern int32_t Main_vrTestFrameCount;
+                    static int hudSaveCount = 0;
+                    if (Main_bVRTest && Main_vrTestFrameCount == 59 && hudSaveCount == 0) {
+                        hudSaveCount++;
+                        int hudFbo = stdVR_GetHudFBO();
+                        if (hudFbo > 0) {
+                            VR_Log("Saving HUD FBO content: fbo=%d size=%dx%d\n", hudFbo, hudWidth, hudHeight);
+                            // Read pixels from HUD FBO
+                            glBindFramebuffer(GL_FRAMEBUFFER, hudFbo);
+                            uint8_t* pixels = (uint8_t*)malloc(hudWidth * hudHeight * 4);
+                            if (pixels) {
+                                glReadPixels(0, 0, hudWidth, hudHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+                                // Save as PPM
+                                FILE* fp = fopen("vrtest_hud.ppm", "wb");
+                                if (fp) {
+                                    fprintf(fp, "P6\n%d %d\n255\n", hudWidth, hudHeight);
+                                    for (int y = hudHeight - 1; y >= 0; y--) {
+                                        for (int x = 0; x < hudWidth; x++) {
+                                            int idx = (y * hudWidth + x) * 4;
+                                            fputc(pixels[idx], fp);     // R
+                                            fputc(pixels[idx+1], fp);   // G
+                                            fputc(pixels[idx+2], fp);   // B
+                                        }
+                                    }
+                                    fclose(fp);
+                                    VR_Log("Saved vrtest_hud.ppm\n");
+                                }
+                                free(pixels);
+                            }
+                        }
+                    }
+                }
+
+                stdVR_FinishHudBuffer();
+            }
+        }
+
         // End VR frame
         stdVR_EndFrame();
 
@@ -595,6 +649,7 @@ non_vr_path:
 #endif
 
     // MOTS added: scope/security cam overlays
+    // Note: VR HUD rendering is handled in the VR render path above, not here
     if (!Main_bMotsCompat) {
         if ( (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0 ) {
             jkHud_Draw();

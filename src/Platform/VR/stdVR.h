@@ -44,6 +44,13 @@ int stdVR_FinishEyeBuffer(int eye);     // Release eye swapchain image
 int stdVR_GetCurrentEyeFBO(int eye);    // Get the FBO for the current eye (0 if not active)
 int stdVR_GetCurrentEye(void);          // Get which eye is currently being rendered (-1 if none)
 
+// HUD rendering (dedicated quad layer for in-game HUD)
+int stdVR_PrepareHudBuffer(void);       // Acquire HUD swapchain and bind FBO
+int stdVR_FinishHudBuffer(void);        // Release HUD swapchain image
+int stdVR_GetHudFBO(void);              // Get HUD FBO (0 if not active)
+void stdVR_GetHudSize(int* pWidth, int* pHeight);  // Get HUD render target size
+int stdVR_IsHudEnabled(void);           // Check if HUD quad layer is available
+
 // Tracking
 void stdVR_UpdateTracking(void);        // Update HMD and controller poses
 void stdVR_GetHMDPose(rdVector3* pPosition, rdVector3* pOrientation);
@@ -126,6 +133,11 @@ static inline int stdVR_PrepareEyeBuffer(int eye) { (void)eye; return 0; }
 static inline int stdVR_FinishEyeBuffer(int eye) { (void)eye; return 0; }
 static inline int stdVR_GetCurrentEyeFBO(int eye) { (void)eye; return 0; }
 static inline int stdVR_GetCurrentEye(void) { return -1; }
+static inline int stdVR_PrepareHudBuffer(void) { return 0; }
+static inline int stdVR_FinishHudBuffer(void) { return 0; }
+static inline int stdVR_GetHudFBO(void) { return 0; }
+static inline void stdVR_GetHudSize(int* pWidth, int* pHeight) { if (pWidth) *pWidth = 0; if (pHeight) *pHeight = 0; }
+static inline int stdVR_IsHudEnabled(void) { return 0; }
 static inline void stdVR_UpdateTracking(void) {}
 static inline void stdVR_UpdateInput(void) {}
 static inline void stdVR_MapInputToGame(void) {}

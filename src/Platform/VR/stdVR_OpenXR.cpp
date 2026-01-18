@@ -79,13 +79,13 @@ extern "C" void VR_Log(const char* fmt, ...)
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     stdPlatform_Printf("%s", buffer);
 
-    // Also write to log file (buffered - no fflush for performance)
+    // Also write to log file
     if (vrLogFile) {
         va_list args2;
         va_start(args2, fmt);
         vfprintf(vrLogFile, fmt, args2);
-        // Removed: fflush(vrLogFile) - was causing major performance issues
-        // File will be flushed automatically on close or when buffer is full
+        // Temporarily re-enabled fflush for debugging motion controls
+        fflush(vrLogFile);
         va_end(args2);
     }
 
@@ -112,6 +112,18 @@ static uint32_t xrNullSwapchainImageIndex[STDVR_EYE_COUNT] = { 0, 0 };
 static GLuint vrNullFBO[STDVR_EYE_COUNT] = { 0, 0 };
 static XrViewConfigurationView xrConfigViews[STDVR_EYE_COUNT];
 static XrView xrViews[STDVR_EYE_COUNT];
+
+// HUD swapchain state (dedicated quad layer for in-game HUD)
+static XrSwapchain xrHudSwapchain = XR_NULL_HANDLE;
+static std::vector<XrSwapchainImageOpenGLKHR> xrHudSwapchainImages;
+static uint32_t xrHudSwapchainImageIndex = 0;
+static GLuint vrHudFBO = 0;
+static GLuint vrHudDepthTex = 0;
+static int vrHudWidth = 1024;
+static int vrHudHeight = 768;
+static bool vrHudEnabled = true;
+static bool vrHudRenderActive = false;
+static bool vrHudFrameStarted = false;
 
 static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* label, int eye)
 {
@@ -903,6 +915,51 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
     VR_Log("stdVR_OpenXR: VR FBOs created - eye0 images=%zu, eye1 images=%zu, nullFBO[0]=%u, nullFBO[1]=%u\n",
         vrFBO[0].size(), vrFBO[1].size(), vrNullFBO[0], vrNullFBO[1]);
 
+    // Create HUD swapchain (dedicated quad layer for in-game HUD)
+    {
+        XrSwapchainCreateInfo hudSwapchainInfo = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
+        hudSwapchainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        hudSwapchainInfo.format = GL_RGBA8;  // Use RGBA8 for HUD (non-sRGB for clean UI)
+        hudSwapchainInfo.sampleCount = 1;
+        hudSwapchainInfo.width = vrHudWidth;
+        hudSwapchainInfo.height = vrHudHeight;
+        hudSwapchainInfo.faceCount = 1;
+        hudSwapchainInfo.arraySize = 1;
+        hudSwapchainInfo.mipCount = 1;
+
+        result = xrCreateSwapchain(xrSession, &hudSwapchainInfo, &xrHudSwapchain);
+        if (XR_FAILED(result)) {
+            VR_Log("stdVR_OpenXR: WARNING - xrCreateSwapchain(HUD) returned %d, HUD disabled\n", result);
+            vrHudEnabled = false;
+        } else {
+            uint32_t hudImageCount = 0;
+            xrEnumerateSwapchainImages(xrHudSwapchain, 0, &hudImageCount, nullptr);
+            xrHudSwapchainImages.resize(hudImageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+            xrEnumerateSwapchainImages(xrHudSwapchain, hudImageCount, &hudImageCount,
+                (XrSwapchainImageBaseHeader*)xrHudSwapchainImages.data());
+
+            // Create HUD FBO
+            glGenFramebuffers(1, &vrHudFBO);
+            glGenTextures(1, &vrHudDepthTex);
+
+            // Create depth texture for HUD FBO
+            glBindTexture(GL_TEXTURE_2D, vrHudDepthTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, vrHudWidth, vrHudHeight, 0,
+                GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, vrHudFBO);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, vrHudDepthTex, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glBindTexture(GL_TEXTURE_2D, 0);
+
+            VR_Log("stdVR_OpenXR: HUD swapchain created - %dx%d, %u images, FBO=%u\n",
+                vrHudWidth, vrHudHeight, hudImageCount, vrHudFBO);
+            vrHudEnabled = true;
+        }
+    }
+
     // Create action set
     if (!CreateActionSet()) {
         VR_Log("stdVR_OpenXR: Failed to create action set\n");
@@ -983,6 +1040,24 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
         }
         xrNullSwapchainImages[eye].clear();
     }
+
+    // Destroy HUD swapchain
+    if (vrHudFBO != 0) {
+        glDeleteFramebuffers(1, &vrHudFBO);
+        vrHudFBO = 0;
+    }
+    if (vrHudDepthTex != 0) {
+        glDeleteTextures(1, &vrHudDepthTex);
+        vrHudDepthTex = 0;
+    }
+    if (xrHudSwapchain != XR_NULL_HANDLE) {
+        xrDestroySwapchain(xrHudSwapchain);
+        xrHudSwapchain = XR_NULL_HANDLE;
+    }
+    xrHudSwapchainImages.clear();
+    vrHudEnabled = false;
+    vrHudRenderActive = false;
+    vrHudFrameStarted = false;
 
     if (xrStageSpace != XR_NULL_HANDLE && xrStageSpace != xrLocalSpace) {
         xrDestroySpace(xrStageSpace);
@@ -1286,6 +1361,30 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             projectionLayer.viewCount = STDVR_EYE_COUNT;
             projectionLayer.views = projectionViews.data();
             layers.push_back((XrCompositionLayerBaseHeader*)&projectionLayer);
+
+            // Add HUD quad layer on top of 3D projection (during gameplay)
+            if (vrHudEnabled && vrHudFrameStarted && xrHudSwapchain != XR_NULL_HANDLE) {
+                static XrCompositionLayerQuad hudQuadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
+                hudQuadLayer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                hudQuadLayer.space = xrViewSpace;  // Head-locked HUD
+                hudQuadLayer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+
+                hudQuadLayer.subImage.swapchain = xrHudSwapchain;
+                hudQuadLayer.subImage.imageRect.offset = { 0, 0 };
+                hudQuadLayer.subImage.imageRect.extent = { vrHudWidth, vrHudHeight };
+                hudQuadLayer.subImage.imageArrayIndex = 0;
+
+                // Position HUD in front of player (head-locked at comfortable distance)
+                float hudDistance = 2.0f;  // 2 meters in front
+                hudQuadLayer.pose.position = { 0.0f, -0.3f, -hudDistance };  // Slightly below eye level
+                hudQuadLayer.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };  // Face player
+
+                // HUD size in meters (maintain ~4:3 aspect ratio)
+                hudQuadLayer.size = { hudDistance * 1.2f, hudDistance * 0.9f };
+
+                layers.push_back((XrCompositionLayerBaseHeader*)&hudQuadLayer);
+                vrHudFrameStarted = false;  // Reset for next frame
+            }
         }
     }
 
@@ -1404,10 +1503,27 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     GLuint fbo = vrFBO[eye][imageIdx];
     vrCurrentFBO[eye] = fbo;
 
+    // DEBUG: Log texture and FBO info including GL context
+    static int prepareLogCount = 0;
+    if (++prepareLogCount <= 30 || prepareLogCount % 300 == 0) {
+        // Check current GL context
+        void* currentRC = wglGetCurrentContext();
+        void* currentDC = wglGetCurrentDC();
+        VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) idx=%u tex=%u fbo=%u swapchain=%llu RC=%p DC=%p\n",
+               eye, imageIdx, texture, fbo, (unsigned long long)xrSwapchains[eye], currentRC, currentDC);
+    }
+
     // Bind our VR FBO and attach the swapchain color texture
     // OPTIMIZATION: Depth is permanently attached, only need to swap color
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+    // DEBUG: Verify FBO is actually bound after attaching texture
+    GLint boundFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFbo);
+    if (prepareLogCount <= 30 || prepareLogCount % 300 == 0) {
+        VR_Log("stdVR_OpenXR:   After bind: boundFbo=%d (expected %u)\n", boundFbo, fbo);
+    }
 
     // OPTIMIZATION: Only validate FBO on first use of each swapchain image
     // This avoids expensive glCheckFramebufferStatus every frame
@@ -1440,9 +1556,40 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     // Tell std3D to route all "window" FBO bindings to our VR FBO
     std3D_SetVRTargetFBO(fbo, width, height);
 
-    // Clear the buffer
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    // Clear the buffer - DEBUG: use a visible color to verify texture binding works
+    // Use different colors for left/right eye to confirm proper eye routing
+    if (eye == 0) {
+        glClearColor(1.0f, 0.0f, 0.0f, 1.0f);  // BRIGHT RED for left eye
+    } else {
+        glClearColor(0.0f, 0.0f, 1.0f, 1.0f);  // BRIGHT BLUE for right eye
+    }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+    // DEBUG: Read a pixel back to verify the clear worked
+    if (prepareLogCount <= 10) {
+        // Method 1: Read from currently bound FBO
+        uint8_t pixel1[4] = {0};
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel1);
+
+        // Method 2: Create a new FBO and read from the texture directly
+        uint8_t pixel2[4] = {0};
+        GLuint verifyFBO;
+        glGenFramebuffers(1, &verifyFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, verifyFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel2);
+        }
+        glDeleteFramebuffers(1, &verifyFBO);
+
+        // Rebind original FBO
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+        VR_Log("stdVR_OpenXR:   After clear eye=%d: fbo_pixel=[%d,%d,%d,%d] tex_pixel=[%d,%d,%d,%d] tex=%u\n",
+               eye, pixel1[0], pixel1[1], pixel1[2], pixel1[3],
+               pixel2[0], pixel2[1], pixel2[2], pixel2[3], texture);
+    }
+
     glDisable(GL_FRAMEBUFFER_SRGB);
 
     return 1;
@@ -1467,6 +1614,15 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);  // Restore full color mask
+
+        // DEBUG: Read right after alpha clear (FBO still has texture attached)
+        static int postAlphaLogCount = 0;
+        if (++postAlphaLogCount <= 10) {
+            uint8_t pixel[4] = {0};
+            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            VR_Log("stdVR_OpenXR: PostAlpha eye=%d fbo=%u pixel=[%d,%d,%d,%d]\n",
+                   eye, fbo, pixel[0], pixel[1], pixel[2], pixel[3]);
+        }
     }
 
     // Restore std3D's window FBO routing
@@ -1484,6 +1640,32 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
     glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
     trackedFBO = previousFBO;
     memcpy(trackedViewport, previousViewport, sizeof(trackedViewport));
+
+    // DEBUG: Read texture content right before release to verify it still has content
+    static int preReleaseLogCount = 0;
+    if (++preReleaseLogCount <= 10) {
+        uint32_t imgIdx = xrSwapchainImageIndex[eye];
+        if (imgIdx < xrSwapchainImages[eye].size()) {
+            GLuint texture = xrSwapchainImages[eye][imgIdx].image;
+
+            // Re-attach texture to read it
+            GLuint verifyFBO;
+            glGenFramebuffers(1, &verifyFBO);
+            glBindFramebuffer(GL_FRAMEBUFFER, verifyFBO);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+            uint8_t pixel[4] = {0};
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+            }
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(1, &verifyFBO);
+
+            VR_Log("stdVR_OpenXR: PreRelease eye=%d tex=%u pixel=[%d,%d,%d,%d]\n",
+                   eye, texture, pixel[0], pixel[1], pixel[2], pixel[3]);
+        }
+    }
 
     // Release the swapchain image
     XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
@@ -1510,6 +1692,127 @@ extern "C" int stdVR_OpenXR_GetCurrentEyeFBO(int eye)
 extern "C" int stdVR_OpenXR_GetCurrentEye(void)
 {
     return stdVR_currentEye;
+}
+
+// ============================================================================
+// HUD Buffer Functions - Dedicated quad layer for in-game HUD rendering
+// ============================================================================
+
+extern "C" int stdVR_OpenXR_PrepareHudBuffer(void)
+{
+    if (!xrSessionRunning || !vrHudEnabled || xrHudSwapchain == XR_NULL_HANDLE) {
+        return 0;
+    }
+
+    // If HUD render is already active, finish it first
+    if (vrHudRenderActive) {
+        stdVR_OpenXR_FinishHudBuffer();
+    }
+
+    // Acquire swapchain image
+    XrSwapchainImageAcquireInfo acquireInfo = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+    XrResult result = xrAcquireSwapchainImage(xrHudSwapchain, &acquireInfo, &xrHudSwapchainImageIndex);
+    if (XR_FAILED(result)) {
+        VR_Log("stdVR_OpenXR: xrAcquireSwapchainImage(HUD) failed: error %d\n", result);
+        return 0;
+    }
+
+    // Wait for the image to be available
+    if (!stdVR_OpenXR_WaitSwapchainImage(xrHudSwapchain, "HUD", -1)) {
+        XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+        xrReleaseSwapchainImage(xrHudSwapchain, &releaseInfo);
+        return 0;
+    }
+
+    // Get the swapchain texture
+    if (xrHudSwapchainImageIndex >= xrHudSwapchainImages.size()) {
+        VR_Log("stdVR_OpenXR: HUD image index out of range: %u\n", xrHudSwapchainImageIndex);
+        XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+        xrReleaseSwapchainImage(xrHudSwapchain, &releaseInfo);
+        return 0;
+    }
+
+    GLuint texture = xrHudSwapchainImages[xrHudSwapchainImageIndex].image;
+
+    // Bind HUD FBO and attach the swapchain color texture
+    glBindFramebuffer(GL_FRAMEBUFFER, vrHudFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+    // Validate FBO
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        VR_Log("stdVR_OpenXR: HUD FBO incomplete, status 0x%x\n", status);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+        xrReleaseSwapchainImage(xrHudSwapchain, &releaseInfo);
+        return 0;
+    }
+
+    // Set viewport to HUD size
+    glViewport(0, 0, vrHudWidth, vrHudHeight);
+
+    // Clear HUD buffer with transparent black
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    vrHudRenderActive = true;
+    vrHudFrameStarted = true;  // Signal that HUD was rendered this frame
+
+    static int hudPrepareLogCount = 0;
+    if (++hudPrepareLogCount <= 10) {
+        VR_Log("stdVR_OpenXR: PrepareHudBuffer - FBO=%u tex=%u size=%dx%d\n",
+               vrHudFBO, texture, vrHudWidth, vrHudHeight);
+    }
+
+    return 1;
+}
+
+extern "C" int stdVR_OpenXR_FinishHudBuffer(void)
+{
+    if (!vrHudRenderActive) {
+        return 0;
+    }
+
+    // Detach color texture from FBO
+    glBindFramebuffer(GL_FRAMEBUFFER, vrHudFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // Release swapchain image
+    XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+    XrResult result = xrReleaseSwapchainImage(xrHudSwapchain, &releaseInfo);
+    if (XR_FAILED(result)) {
+        VR_Log("stdVR_OpenXR: xrReleaseSwapchainImage(HUD) failed: error %d\n", result);
+    }
+
+    vrHudRenderActive = false;
+
+    static int hudFinishLogCount = 0;
+    if (++hudFinishLogCount <= 10) {
+        VR_Log("stdVR_OpenXR: FinishHudBuffer complete\n");
+    }
+
+    return 1;
+}
+
+extern "C" int stdVR_OpenXR_GetHudFBO(void)
+{
+    if (!vrHudEnabled || !vrHudRenderActive) {
+        return 0;
+    }
+    return (int)vrHudFBO;
+}
+
+extern "C" void stdVR_OpenXR_GetHudSize(int* pWidth, int* pHeight)
+{
+    if (pWidth) *pWidth = vrHudWidth;
+    if (pHeight) *pHeight = vrHudHeight;
+}
+
+extern "C" int stdVR_OpenXR_IsHudEnabled(void)
+{
+    return vrHudEnabled ? 1 : 0;
 }
 
 // Helper to build asymmetric projection matrix from FOV tangents

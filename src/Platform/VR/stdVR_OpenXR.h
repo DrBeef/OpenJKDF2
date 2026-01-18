@@ -32,6 +32,13 @@ int stdVR_OpenXR_FinishEyeBuffer(int eye);
 int stdVR_OpenXR_GetCurrentEyeFBO(int eye);
 int stdVR_OpenXR_GetCurrentEye(void);
 
+// HUD buffer (dedicated quad layer for in-game HUD)
+int stdVR_OpenXR_PrepareHudBuffer(void);
+int stdVR_OpenXR_FinishHudBuffer(void);
+int stdVR_OpenXR_GetHudFBO(void);
+void stdVR_OpenXR_GetHudSize(int* pWidth, int* pHeight);
+int stdVR_OpenXR_IsHudEnabled(void);
+
 // Tracking
 void stdVR_OpenXR_UpdateTracking(void);
 
