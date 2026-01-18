@@ -19,6 +19,10 @@
 #include "jk.h"
 #include "types.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 #include <math.h>
 
 static char *jkGuiRend_LoadedSounds[4] = {0};
@@ -90,6 +94,101 @@ void jkGuiRend_SetPalette(uint8_t* pal)
 
     _memcpy(jkGuiRend_palette, pal, 0x300); // TODO sizeof(jkGuiRend_palette)
 }
+
+#ifdef PLATFORM_VR
+// Added: Draw VR cursor crosshair at the given position
+static void jkGuiRend_DrawVRCursor(stdVBuffer *vbuf, int32_t cursorX, int32_t cursorY)
+{
+    if (!g_app_suspended || jkGuiRend_bIsSurfaceValid)
+        return;
+
+    if (!stdDisplay_VBufferLock(vbuf))
+        return;
+
+    // Crosshair parameters
+    const int32_t cursorSize = 8;  // Half-size of crosshair arms
+    const int32_t cursorThick = 2; // Thickness of crosshair lines
+    const int32_t gap = 3;         // Gap at center
+
+    int32_t width = vbuf->format.width;
+    int32_t height = vbuf->format.height;
+    int32_t pitch = vbuf->format.width_in_pixels;
+    int32_t bpp = vbuf->format.format.bpp;
+
+    // Use white (0xFFFF for 16-bit, 0xFF for 8-bit)
+    uint16_t colorWhite16 = 0xFFFF;
+    uint8_t colorWhite8 = 0xFF;
+
+    // Draw horizontal line (left and right arms with gap)
+    for (int32_t dx = -cursorSize; dx <= cursorSize; dx++)
+    {
+        if (dx >= -gap && dx <= gap) continue; // Skip center gap
+
+        for (int32_t dy = -cursorThick/2; dy <= cursorThick/2; dy++)
+        {
+            int32_t px = cursorX + dx;
+            int32_t py = cursorY + dy;
+            if (px < 0 || px >= width || py < 0 || py >= height) continue;
+
+            if (bpp == 16)
+            {
+                uint16_t* pixel = (uint16_t*)&vbuf->surface_lock_alloc[2 * (py * pitch + px)];
+                *pixel = colorWhite16;
+            }
+            else if (bpp == 8)
+            {
+                vbuf->surface_lock_alloc[py * pitch + px] = colorWhite8;
+            }
+        }
+    }
+
+    // Draw vertical line (top and bottom arms with gap)
+    for (int32_t dy = -cursorSize; dy <= cursorSize; dy++)
+    {
+        if (dy >= -gap && dy <= gap) continue; // Skip center gap
+
+        for (int32_t dx = -cursorThick/2; dx <= cursorThick/2; dx++)
+        {
+            int32_t px = cursorX + dx;
+            int32_t py = cursorY + dy;
+            if (px < 0 || px >= width || py < 0 || py >= height) continue;
+
+            if (bpp == 16)
+            {
+                uint16_t* pixel = (uint16_t*)&vbuf->surface_lock_alloc[2 * (py * pitch + px)];
+                *pixel = colorWhite16;
+            }
+            else if (bpp == 8)
+            {
+                vbuf->surface_lock_alloc[py * pitch + px] = colorWhite8;
+            }
+        }
+    }
+
+    // Draw center dot
+    for (int32_t dy = -1; dy <= 1; dy++)
+    {
+        for (int32_t dx = -1; dx <= 1; dx++)
+        {
+            int32_t px = cursorX + dx;
+            int32_t py = cursorY + dy;
+            if (px < 0 || px >= width || py < 0 || py >= height) continue;
+
+            if (bpp == 16)
+            {
+                uint16_t* pixel = (uint16_t*)&vbuf->surface_lock_alloc[2 * (py * pitch + px)];
+                *pixel = colorWhite16;
+            }
+            else if (bpp == 8)
+            {
+                vbuf->surface_lock_alloc[py * pitch + px] = colorWhite8;
+            }
+        }
+    }
+
+    stdDisplay_VBufferUnlock(vbuf);
+}
+#endif // PLATFORM_VR
 
 void jkGuiRend_DrawRect(stdVBuffer *vbuf, rdRect *rect, int16_t color)
 {
@@ -291,7 +390,16 @@ void jkGuiRend_Paint(jkGuiMenu *menu)
     menu->focusedElement = lastFocused;
     menu->lastMouseDownClickable = lastDown;
 #endif
-    
+
+#ifdef PLATFORM_VR
+    // Added: Draw VR cursor on menu before flip
+    if (stdVR_bEnabled && stdVR_IsMenuCursorActive()) {
+        int cursorX, cursorY;
+        stdVR_GetMenuCursorPos(&cursorX, &cursorY);
+        jkGuiRend_DrawVRCursor(jkGuiRend_menuBuffer, cursorX, cursorY);
+    }
+#endif
+
     jkGuiRend_FlipAndDraw(menu, 0);
 
     jkGuiRend_UpdateCursor();
@@ -329,9 +437,41 @@ int32_t jkGuiRend_DisplayAndReturnClicked(jkGuiMenu *menu)
     jkGuiRend_SetCursorVisible(1);
     while ( !menu->lastClicked )
     {
+#ifdef PLATFORM_VR
+        // Update VR cursor position and trigger state
+        if (stdVR_bEnabled && stdVR_clientInfo.bUseScreenLayer) {
+            stdVR_UpdateMenuCursor();
+            jkGuiRend_UpdateMouse();
+
+            // Handle VR trigger as mouse button
+            if (stdVR_GetMenuTriggerPressed()) {
+                // Simulate mouse button down
+                menu->lastMouseDownClickable = menu->lastMouseOverClickable;
+                jkGuiRend_RenderFocused(menu, menu->lastMouseOverClickable);
+                if (menu->lastMouseDownClickable) {
+                    jkGuiRend_UpdateAndDrawClickable(menu->lastMouseDownClickable, menu, 1);
+                    jkGuiRend_InvokeEvent(menu->lastMouseDownClickable, menu, JKGUI_EVENT_MOUSEDOWN, 0);
+                }
+            }
+            if (stdVR_GetMenuTriggerReleased()) {
+                // Simulate mouse button up / click
+                if (menu->lastMouseDownClickable) {
+                    if (menu->lastMouseDownClickable == menu->lastMouseOverClickable) {
+                        jkGuiRend_InvokeClicked(menu->lastMouseOverClickable, menu,
+                            jkGuiRend_mouseX, jkGuiRend_mouseY, 0);
+                    }
+                    if (menu->lastMouseDownClickable && menu->lastMouseDownClickable->bIsVisible) {
+                        jkGuiRend_UpdateAndDrawClickable(menu->lastMouseDownClickable, menu, 1);
+                    }
+                    menu->lastMouseDownClickable = 0;
+                }
+            }
+        }
+#endif
+
         msgret = Window_MessageLoop();
         if ( jkGuiRend_thing_four && jkGuiRend_thing_five )
-        { 
+        {
             // Added: this makes the menu that appears when pressing ESC in jkGUISingleTally flicker,
             //        I think due to how we handle window message emulation.
 #if !defined(SDL2_RENDER) && !defined(TARGET_TWL)
@@ -1801,6 +1941,17 @@ void jkGuiRend_UpdateMouse()
     int32_t mouseX; // eax
     int32_t mouseY; // ecx
     struct tagPOINT Point; // [esp+0h] [ebp-8h]
+
+#ifdef PLATFORM_VR
+    // In VR screen layer mode, use VR controller cursor position
+    if (stdVR_bEnabled && stdVR_IsMenuCursorActive()) {
+        stdVR_GetMenuCursorPos(&mouseX, &mouseY);
+        jkGuiRend_mouseX = mouseX;
+        jkGuiRend_mouseY = mouseY;
+        jkGuiRend_MouseMovedCallback(jkGuiRend_activeMenu, mouseX, mouseY);
+        return;
+    }
+#endif
 
     if ( stdDisplay_pCurDevice->video_device[0].windowedMaybe )
     {

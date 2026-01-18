@@ -485,6 +485,22 @@ static void rdCamera_PerspProjectVR(rdVector3 *out, const rdVector3 *v)
     out->x = offsetX + v->x * scaleX;
     out->y = offsetY - v->z * scaleY;
     out->z = v->y;
+
+    // DEBUG: Log projection details for first few vertices
+    {
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int logCount[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (eye >= 0 && eye < 2) {
+            logCount[eye]++;
+            if (logCount[eye] <= 5 || logCount[eye] == 100 || logCount[eye] == 1000) {
+                VR_Log("ProjVR[eye%d] #%d: in=(%.1f,%.1f,%.1f) out=(%.1f,%.1f,%.4f) half=(%.0f,%.0f) tan=(%.3f,%.3f,%.3f,%.3f)\n",
+                    eye, logCount[eye], v->x, v->y, v->z, out->x, out->y, out->z,
+                    half_w, half_h, left, right, top, bottom);
+            }
+        }
+    }
 }
 #endif
 
@@ -522,6 +538,23 @@ void rdCamera_PerspProjectLst(rdVector3 *pVerticesOut, const rdVector3 *pVertice
 #endif
 
 #ifdef PLATFORM_VR
+    // DEBUG: Log whether VR projection is being used
+    {
+        extern int stdVR_currentEye;
+        extern int stdVR_bEnabled;
+        extern void VR_Log(const char* fmt, ...);
+        static int checkCount[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+            checkCount[eye]++;
+            int useVR = rdCamera_UseVRProjection();
+            if (checkCount[eye] <= 3 || checkCount[eye] == 50 || checkCount[eye] == 500) {
+                VR_Log("ProjLst[eye%d] #%d: UseVR=%d, numVerts=%d, bUsingVR=%d, tanL=%.3f tanR=%.3f tanU=%.3f tanD=%.3f\n",
+                    eye, checkCount[eye], useVR, numVertices,
+                    rdCamera_bUsingVRProjection, rdCamera_vrTanLeft, rdCamera_vrTanRight, rdCamera_vrTanUp, rdCamera_vrTanDown);
+            }
+        }
+    }
     if (rdCamera_UseVRProjection()) {
         for (unsigned int i = 0; i < numVertices; i++)
         {

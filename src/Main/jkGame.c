@@ -33,6 +33,7 @@
 #ifdef PLATFORM_VR
 #include "Platform/VR/stdVR.h"
 #include "Engine/rdCamera.h"
+#include <GL/glew.h>
 #endif
 
 int jkGame_Startup()
@@ -206,8 +207,9 @@ int jkGame_Update()
 
 // Added: VR stereo rendering path
 #ifdef PLATFORM_VR
-    // Forward declaration for VR logging
+    // Forward declarations for VR logging and state
     extern void VR_Log(const char* fmt, ...);
+    extern int stdVR_currentEye;
 
     // Debug: log every call to jkGame_Update to verify it's being called
     {
@@ -216,6 +218,142 @@ int jkGame_Update()
         if (jkGameCallCount <= 10 || jkGameCallCount % 300 == 0) {
             VR_Log("jkGame_Update #%d: enabled=%d, running=%d, pending=%d\n",
                 jkGameCallCount, stdVR_bEnabled, stdVR_IsSessionRunning(), stdVR_IsFramePending());
+        }
+    }
+
+    // Check for VR test without headset mode
+    extern int32_t Main_bVRTest;
+    extern int32_t Main_bVRTestNoHeadset;
+    extern int32_t Main_vrTestFrameTarget;
+    extern int32_t Main_vrTestFrameCount;
+    extern int32_t Main_vrTestState;
+
+    // Simulated VR test mode (no headset required) - works when gameplay starts via any method
+    if (Main_bVRTestNoHeadset && jkGame_isDDraw && (!stdVR_bEnabled || !stdVR_IsSessionRunning())) {
+        static int simVRFrameCount = 0;
+        simVRFrameCount++;
+
+        if (simVRFrameCount <= 10 || simVRFrameCount % 100 == 0) {
+            VR_Log("VR-SIM: Frame %d (target=%d, state=%d)\n", simVRFrameCount, Main_vrTestFrameTarget, Main_vrTestState);
+        }
+
+        // Mark gameplay started
+        if (Main_vrTestState == 0) {
+            Main_vrTestState = 1;
+            VR_Log("=== VR-SIM AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n", Main_vrTestFrameTarget);
+        }
+
+        // At target frame, render both eye views and save screenshots
+        if (simVRFrameCount == Main_vrTestFrameTarget) {
+            VR_Log("=== VR-SIM: Capturing stereo screenshots ===\n");
+
+            // Initialize simulated VR eye data if not already set up
+            // This provides fake stereo separation for testing without a headset
+            if (stdVR_clientInfo.eyes[0].fovRight == 0.0f) {
+                VR_Log("=== VR-SIM: Initializing simulated VR eye data ===\n");
+
+                // Set up render dimensions (use current display size)
+                stdVR_clientInfo.renderWidth = stdDisplay_pCurVideoMode->format.width;
+                stdVR_clientInfo.renderHeight = stdDisplay_pCurVideoMode->format.height;
+
+                // Set up FOV for both eyes (typical VR FOV ~90 degrees = ~0.78 radians)
+                // fovLeft/Right/Up/Down are tangent values
+                float fovTangent = 1.0f;  // tan(45 degrees) for ~90 degree total FOV
+
+                for (int e = 0; e < 2; e++) {
+                    // Note: fovLeft/Right/Up/Down are tangent values, all POSITIVE
+                    // (OpenXR angles are signed, but we store positive tangents)
+                    stdVR_clientInfo.eyes[e].fovLeft = fovTangent;   // tan(left half-angle)
+                    stdVR_clientInfo.eyes[e].fovRight = fovTangent;  // tan(right half-angle)
+                    stdVR_clientInfo.eyes[e].fovUp = fovTangent * 0.75f;    // tan(up half-angle)
+                    stdVR_clientInfo.eyes[e].fovDown = fovTangent * 0.75f;  // tan(down half-angle)
+
+                    // Set view matrix to identity initially (will be adjusted per-eye)
+                    rdMatrix_Identity34(&stdVR_clientInfo.eyes[e].viewMatrix);
+                }
+
+                // Apply eye separation (typical IPD ~63mm = 0.063m, we use 0.032m per eye from center)
+                float eyeOffset = 0.032f;  // Half IPD
+                stdVR_clientInfo.eyes[0].viewMatrix.scale.x = -eyeOffset;  // Left eye
+                stdVR_clientInfo.eyes[1].viewMatrix.scale.x = eyeOffset;   // Right eye
+
+                VR_Log("=== VR-SIM: Eye data initialized - renderSize=%dx%d, fov=%.2f, IPD=%.3f ===\n",
+                    stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight, fovTangent, eyeOffset * 2);
+            }
+
+            // Set up camera for VR frame
+            sithCamera_PrepareFrameVR();
+
+            // Initialize scene once (this sizes the framebuffer correctly)
+            // We do NOT want to call rdAdvanceFrame per-eye because:
+            // 1. It swaps framebuffers, and FBO regeneration during swaps can cause
+            //    both framebuffers to get the same FBO ID due to OpenGL ID recycling
+            // 2. We want to render both eyes to the same sized FBO, just with different views
+            rdAdvanceFrame();
+
+            // Render each eye to the same FBO (cleared between eyes)
+            for (int eye = 0; eye < 2; eye++) {
+                stdVR_currentEye = eye;
+
+                // Clear the internal FBO for this eye's render
+                std3D_ClearMainFbo();
+
+                VR_Log("=== VR-SIM: Rendering eye %d ===\n", eye);
+
+                // Set VR camera view for this eye
+                sithCamera_SetVRView(eye);
+
+                // Advance render tick so sectors aren't skipped
+                sithMain_sub_4C4D80();
+
+                // Render scene
+                sithRender_Draw();
+                jkPlayer_DrawPov();
+
+                // Flush all render commands
+                rdCache_Flush();
+                glFinish();  // Ensure all GL commands complete
+
+                // Save screenshot immediately (before clearing for next eye)
+                char filename[32];
+                snprintf(filename, sizeof(filename), "vrtest_eye%d.ppm", eye);
+                std3D_DebugSaveInternalFbo(filename);
+                VR_Log("=== VR-SIM: Saved %s ===\n", filename);
+            }
+
+            // Clear VR state
+            stdVR_currentEye = -1;
+            rdCamera_ClearVRProjection();
+            stdVR_ClearCurrentEyeViewMatrix();  // Added: Clear per-eye view matrix
+
+            VR_Log("=== VR-SIM AUTO-TEST COMPLETE ===\n");
+            Main_vrTestState = 2;
+
+            // Exit
+            extern void Main_Shutdown(void);
+            Main_Shutdown();
+            exit(0);
+        }
+
+        // Normal single-view render for frames before screenshot
+        goto non_vr_path;
+    }
+
+    // Non-test VR mode tracking for manual testing
+    // If VR test is enabled but no headset, just track frames and exit after target
+    if (Main_bVRTest && !Main_bVRTestNoHeadset && jkGame_isDDraw && (!stdVR_bEnabled || !stdVR_IsSessionRunning())) {
+        static int nonHeadsetFrameCount = 0;
+        nonHeadsetFrameCount++;
+
+        if (nonHeadsetFrameCount == 1) {
+            VR_Log("=== VR TEST: Gameplay started without headset, running for %d frames ===\n", Main_vrTestFrameTarget);
+        }
+
+        if (nonHeadsetFrameCount >= Main_vrTestFrameTarget) {
+            VR_Log("=== VR TEST: Frame target reached, exiting ===\n");
+            extern void Main_Shutdown(void);
+            Main_Shutdown();
+            exit(0);
         }
     }
 
@@ -231,32 +369,15 @@ int jkGame_Update()
             // Update VR input after WaitFrame (in 3D mode, Window_Main_Loop skips this)
             stdVR_UpdateInput();
             stdVR_MapInputToGame();
-
-            if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
-                VR_Log("jkGame: Called WaitFrame (frame #%d, now pending=%d)\n",
-                    vrRenderCount, stdVR_IsFramePending());
-            }
-        }
-
-        // Log first few frames and periodically
-        if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
-            VR_Log("jkGame: VR render frame #%d starting (framePending=%d, shouldRender=%d)\n",
-                vrRenderCount, stdVR_IsFramePending(), stdVR_clientInfo.bShouldRender);
         }
 
         // Check if we have a VR frame pending to work with
         if (!stdVR_IsFramePending()) {
-            if (vrRenderCount <= 10) {
-                VR_Log("jkGame: No VR frame pending after WaitFrame, skipping VR render\n");
-            }
             goto non_vr_path;
         }
 
         // VR frame timing - BeginFrame must be called first
         if (!stdVR_BeginFrame()) {
-            if (vrRenderCount <= 10) {
-                VR_Log("jkGame: VR BeginFrame failed, skipping VR render\n");
-            }
             goto non_vr_path;  // Fall back to non-VR if frame begin fails
         }
 
@@ -270,19 +391,12 @@ int jkGame_Update()
         // Only render if the runtime tells us to (headset visible, etc.)
         if (stdVR_clientInfo.bShouldRender) {
             // Do per-frame setup ONCE before eye loop
-            rdAdvanceFrame();
+            rdAdvanceFrame();  // This calls std3D_StartScene via rdCache_AdvanceFrame
             sithCamera_PrepareFrameVR();  // Updates camera position, sets rdCamera
 
             // Render each eye
             for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
-                if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
-                    VR_Log("jkGame: VR eye %d - starting render\n", eye);
-                }
-
                 if (!stdVR_PrepareEyeBuffer(eye)) {
-                    if (vrRenderCount <= 10) {
-                        VR_Log("jkGame: VR PrepareEyeBuffer(%d) failed\n", eye);
-                    }
                     continue;
                 }
 
@@ -292,39 +406,58 @@ int jkGame_Update()
                 // Set up VR view for this eye (applies eye offset and projection)
                 sithCamera_SetVRView(eye);
 
-                // Added: Advance render tick for each eye so sectors don't get skipped
+                // Advance render tick for each eye so sectors don't get skipped
                 // The render system uses sithRender_lastRenderTick to mark sectors as "already rendered"
                 // Without this, the second eye would skip all sectors because they were rendered for the first eye
                 sithMain_sub_4C4D80();
-
-                if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
-                    VR_Log("jkGame: VR eye %d - calling sithRender_Draw\n", eye);
-                }
 
                 // Render scene for this eye
                 sithRender_Draw();
                 jkPlayer_DrawPov();
 
-                // Added: Flush render cache per-eye so triangles are actually drawn to internal FBO
+                // Flush render cache per-eye so triangles are actually drawn to internal FBO
                 // before we blit to VR swapchain. Without this, both eyes get empty content.
                 rdCache_Flush();
+
+                // Save screenshot for VR auto-test mode
+                {
+                    extern int32_t Main_bVRTest;
+                    extern int32_t Main_vrTestFrameTarget;
+                    extern int32_t Main_vrTestState;
+
+                    static int screenshotSaved[2] = {0, 0};
+                    int targetFrame = Main_bVRTest ? Main_vrTestFrameTarget : 30;
+
+                    // Mark that we're in gameplay for VR test
+                    if (Main_bVRTest && Main_vrTestState == 0) {
+                        Main_vrTestState = 1;
+                        VR_Log("=== VR AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n", targetFrame);
+                    }
+
+                    if (vrRenderCount == targetFrame && eye >= 0 && eye < 2 && !screenshotSaved[eye]) {
+                        screenshotSaved[eye] = 1;
+                        char filename[256];
+                        snprintf(filename, sizeof(filename), "vrtest_eye%d.ppm", eye);
+                        std3D_DebugSaveInternalFbo(filename);
+                        VR_Log("=== VR AUTO-TEST: Saved %s ===\n", filename);
+                    }
+                }
 
                 // Resolve internal FBO to VR swapchain
                 std3D_DrawSceneFbo();
 
-                if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
-                    VR_Log("jkGame: VR eye %d - render complete\n", eye);
-                }
+                // Reset render lists per-eye; otherwise GL_tmpVertices accumulates and
+                // the second eye can exceed STD3D_MAX_VERTICES and render nothing.
+                rdCache_ResetRenderList();
 
                 // Release eye buffer
                 stdVR_FinishEyeBuffer(eye);
             }
-        } else if (vrRenderCount <= 10) {
-            VR_Log("jkGame: VR shouldRender=false, skipping render\n");
         }
 
         // Clear VR projection state before potentially falling through to non-VR code
         rdCamera_ClearVRProjection();
+        stdVR_ClearCurrentEyeViewMatrix();  // Added: Clear per-eye view matrix
 
         // Flush and clear render state (equivalent to what rdFinishFrame does for non-VR)
         rdCache_Flush();
@@ -333,8 +466,35 @@ int jkGame_Update()
         // End VR frame
         stdVR_EndFrame();
 
-        if (vrRenderCount <= 10 || vrRenderCount % 300 == 0) {
-            VR_Log("jkGame: VR render frame #%d complete\n", vrRenderCount);
+        // VR automated test mode - count frames and screenshot/exit
+        {
+            extern int32_t Main_bVRTest;
+            extern int32_t Main_vrTestFrameTarget;
+            extern int32_t Main_vrTestFrameCount;
+            extern int32_t Main_vrTestState;
+
+            if (Main_bVRTest && Main_vrTestState == 1) {
+                Main_vrTestFrameCount++;
+
+                // Check if we should exit after target frame count
+                // Note: Per-eye screenshots are saved in the render loop above
+                if (Main_vrTestFrameCount == Main_vrTestFrameTarget) {
+                    VR_Log("\n=== VR AUTO-TEST: Completed frame %d ===\n", Main_vrTestFrameCount);
+                    VR_Log("VR Test Complete. Check vrtest_eye0.ppm, vrtest_eye1.ppm and vr_debug.log\n");
+                    VR_Log("=== VR AUTO-TEST COMPLETE ===\n");
+
+                    Main_vrTestState = 2;  // Mark as done
+
+                    // Keep window visible for 20 seconds so user can see the result
+                    stdPlatform_Printf("VR Test Complete - window will close in 20 seconds...\n");
+                    SDL_Delay(20000);
+
+                    // Exit the game
+                    extern void Main_Shutdown(void);
+                    Main_Shutdown();
+                    exit(0);
+                }
+            }
         }
 
         jkGame_Update_AdvanceFrame = stdPlatform_GetTimeMsec();

@@ -109,6 +109,7 @@ static int std3D_vrTargetActive = 0;
 static int std3D_vrTargetSizeActive = 0;
 static int std3D_vrTargetWidth = 0;
 static int std3D_vrTargetHeight = 0;
+int g_vrOpSequence = 0;  // Global sequence counter for debugging VR operations
 
 static void std3D_ApplyWindowInfo(std3DFramebuffer* pFb, GLint fbo, int width, int height)
 {
@@ -152,6 +153,7 @@ GLint attribute_coord3d, attribute_v_color, attribute_v_light, attribute_v_uv, a
 GLint uniform_mvp, uniform_tex, uniform_texEmiss, uniform_displacement_map, uniform_tex_mode, uniform_blend_mode, uniform_worldPalette, uniform_worldPaletteLights;
 GLint uniform_tint, uniform_filter, uniform_fade, uniform_add, uniform_emissiveFactor, uniform_albedoFactor;
 GLint uniform_light_mult, uniform_displacement_factor, uniform_iResolution;
+GLint uniform_vr_debug_mode; // VR debug mode uniform
 
 GLint programMenu_attribute_coord3d, programMenu_attribute_v_color, programMenu_attribute_v_uv, programMenu_attribute_v_norm;
 GLint programMenu_uniform_mvp, programMenu_uniform_tex, programMenu_uniform_displayPalette;
@@ -550,7 +552,8 @@ int init_resources()
     uniform_light_mult = std3D_tryFindUniform(programDefault, "light_mult");
     uniform_displacement_factor = std3D_tryFindUniform(programDefault, "displacement_factor");
     uniform_iResolution = std3D_tryFindUniform(programDefault, "iResolution");
-    
+    uniform_vr_debug_mode = std3D_tryFindUniform(programDefault, "vr_debug_mode");
+
     programMenu_attribute_coord3d = std3D_tryFindAttribute(programMenu, "coord3d");
     programMenu_attribute_v_color = std3D_tryFindAttribute(programMenu, "v_color");
     programMenu_attribute_v_uv = std3D_tryFindAttribute(programMenu, "v_uv");
@@ -2132,7 +2135,56 @@ void std3D_DrawUIRenderList()
 
 void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo, GLuint texId, GLuint texId2, GLuint texId3, flex_t param1, flex_t param2, flex_t param3, int gen_mips)
 {
+#ifdef PLATFORM_VR
+    // DEBUG: Log blit parameters for VR
+    extern int stdVR_bEnabled;
+    extern int stdVR_currentEye;
+    extern void VR_Log(const char* fmt, ...);
+    static int blitCallCountPerEye[2] = {0, 0};
+    int eye = stdVR_currentEye;
+    if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+        blitCallCountPerEye[eye]++;
+        if (blitCallCountPerEye[eye] <= 10 || blitCallCountPerEye[eye] % 300 == 0) {
+            GLint viewport[4];
+            glGetIntegerv(GL_VIEWPORT, viewport);
+            VR_Log("DrawSimpleTex[eye%d] #%d: targetFbo=%d (%dx%d), srcTex=%u, viewport=(%d,%d,%d,%d)\n",
+                eye, blitCallCountPerEye[eye], pFbo->fbo, pFbo->w, pFbo->h, texId,
+                viewport[0], viewport[1], viewport[2], viewport[3]);
+        }
+    }
+#endif
+
     glBindFramebuffer(GL_FRAMEBUFFER, pFbo->fbo);
+
+#ifdef PLATFORM_VR
+    // DEBUG: Comprehensive logging for eye 1 blit
+    if (stdVR_bEnabled && eye == 1) {
+        GLint boundFBO = 0;
+        GLint viewport[4];
+        GLint currentProgram = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFBO);
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
+
+        // Check FBO completeness
+        GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+
+        // Check color attachment
+        GLint colorAttachment = 0;
+        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &colorAttachment);
+
+        if (blitCallCountPerEye[1] <= 10 || blitCallCountPerEye[1] % 300 == 0) {
+            VR_Log("  DrawSimpleTex[eye1] BEFORE draw:\n");
+            VR_Log("    pFbo->fbo=%d, actual bound=%d, status=0x%x (complete=0x%x)\n",
+                pFbo->fbo, boundFBO, fboStatus, GL_FRAMEBUFFER_COMPLETE);
+            VR_Log("    colorAttachment=%d, viewport=(%d,%d,%d,%d)\n",
+                colorAttachment, viewport[0], viewport[1], viewport[2], viewport[3]);
+            VR_Log("    srcTex=%u, pFbo->w=%d, pFbo->h=%d\n", texId, pFbo->w, pFbo->h);
+        }
+    }
+#endif
+
     glDepthFunc(GL_ALWAYS);
     glUseProgram(pStage->program);
     
@@ -2290,14 +2342,27 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpTrisAmt * 3 * sizeof(GLushort), data_elements, GL_STREAM_DRAW);
 
-    int tris_size;  
+    int tris_size;
     glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &tris_size);
     glDrawElements(GL_TRIANGLES, tris_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
+
+#ifdef PLATFORM_VR
+    // DEBUG: Log after draw for eye 1
+    if (stdVR_bEnabled && eye == 1) {
+        GLenum err = glGetError();
+        GLint boundFBO = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFBO);
+        if (blitCallCountPerEye[1] <= 10 || blitCallCountPerEye[1] % 300 == 0) {
+            VR_Log("  DrawSimpleTex AFTER draw: boundFBO=%d, tris=%d, glError=0x%x\n",
+                boundFBO, tris_size / (int)sizeof(GLushort) / 3, err);
+        }
+    }
+#endif
 
     glDisableVertexAttribArray(pStage->attribute_v_uv);
     glDisableVertexAttribArray(pStage->attribute_v_color);
     glDisableVertexAttribArray(pStage->attribute_coord3d);
-    
+
     //free(data_elements);
         
     //glBindTexture(GL_TEXTURE_2D, 0);
@@ -2306,12 +2371,118 @@ void std3D_DrawSimpleTex(std3DSimpleTexStage* pStage, std3DIntermediateFbo* pFbo
 void std3D_DrawSceneFbo()
 {
     //printf("Draw scene FBO\n");
+
+#ifdef PLATFORM_VR
+    // DEBUG: Log FBO state for VR debugging - per-eye tracking
+    static int drawSceneFboCallCount = 0;
+    static int drawSceneFboCallCountPerEye[2] = {0, 0};
+    static int lastEyeLogged = -2;
+    drawSceneFboCallCount++;
+    extern void VR_Log(const char* fmt, ...);
+    extern int stdVR_OpenXR_GetCurrentEyeFBO(int eye);  // Call OpenXR directly
+    extern int stdVR_OpenXR_GetCurrentEye(void);        // Call OpenXR directly
+    int eye = stdVR_OpenXR_GetCurrentEye();  // Bypass wrapper, call OpenXR directly
+    if (eye != lastEyeLogged) {
+        VR_Log("std3D_DrawSceneFbo: eye change %d -> %d (call #%d)\n", lastEyeLogged, eye, drawSceneFboCallCount);
+        lastEyeLogged = eye;
+    }
+    if (eye >= 0 && eye < 2) {
+        drawSceneFboCallCountPerEye[eye]++;
+    }
+    // Log first 30 calls per eye, then every 300th per eye
+    int shouldLog = 0;
+    if (eye >= 0 && eye < 2) {
+        shouldLog = (drawSceneFboCallCountPerEye[eye] <= 30 || drawSceneFboCallCountPerEye[eye] % 300 == 0);
+    } else {
+        shouldLog = (drawSceneFboCallCount <= 60 || drawSceneFboCallCount % 600 == 0);
+    }
+
+    // Get the VR FBO directly from the VR layer - bypasses the broken window.fbo override
+    GLint vrFboTarget = 0;
+    if (eye >= 0 && eye < 2) {
+        vrFboTarget = stdVR_OpenXR_GetCurrentEyeFBO(eye);  // Call OpenXR directly
+    }
+
+    if (shouldLog) {
+        VR_Log("std3D_DrawSceneFbo #%d [eye%d #%d]: window.fbo=%d, vrFboTarget=%d, w=%d, h=%d, vrTargetActive=%d\n",
+            drawSceneFboCallCount, eye, (eye >= 0 && eye < 2) ? drawSceneFboCallCountPerEye[eye] : -1,
+            std3D_pFb->window.fbo, vrFboTarget, std3D_pFb->window.w, std3D_pFb->window.h, std3D_vrTargetActive);
+        VR_Log("  internal fbo=%d, tex0=%d, w=%d, h=%d\n",
+            std3D_pFb->fbo, std3D_pFb->tex0, std3D_pFb->w, std3D_pFb->h);
+    }
+#endif
+
     glEnable(GL_BLEND);
-    
+
     glBlendEquation(GL_FUNC_ADD);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->window.fbo);
+#ifdef PLATFORM_VR
+    // Ensure all rendering to internal FBO is complete before blitting
+    // This fixes potential synchronization issues where the blit reads stale data
+    if (std3D_vrTargetActive || vrFboTarget > 0) {
+        glFinish();
+    }
+#endif
+
+    // In VR mode, use the direct VR FBO instead of relying on window.fbo override
+#ifdef PLATFORM_VR
+    GLint targetFbo = (vrFboTarget > 0) ? vrFboTarget : std3D_pFb->window.fbo;
+#else
+    GLint targetFbo = std3D_pFb->window.fbo;
+#endif
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFbo);
     glClear( GL_COLOR_BUFFER_BIT );
+
+#ifdef PLATFORM_VR
+    // DEBUG: Verify the binding happened
+    GLint actualFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &actualFBO);
+    if (shouldLog) {
+        VR_Log("  After glBindFramebuffer: actualFBO=%d (wanted %d)\n", actualFBO, targetFbo);
+    }
+
+    // DEBUG: Check internal FBO content for BOTH eyes - sample multiple points
+    if (vrFboTarget > 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+
+        // Read from multiple locations to find any content
+        unsigned char pixelCenter[4] = {0};
+        unsigned char pixelTL[4] = {0};  // top-left
+        unsigned char pixelBR[4] = {0};  // bottom-right
+        int w = std3D_pFb->w;
+        int h = std3D_pFb->h;
+
+        glReadPixels(w / 2, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelCenter);
+        glReadPixels(w / 4, h / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelTL);
+        glReadPixels(3 * w / 4, 3 * h / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixelBR);
+
+        // Check total non-zero content
+        int hasContent = (pixelCenter[0] + pixelCenter[1] + pixelCenter[2] +
+                          pixelTL[0] + pixelTL[1] + pixelTL[2] +
+                          pixelBR[0] + pixelBR[1] + pixelBR[2]) > 0;
+
+        if (shouldLog || (eye == 1 && !hasContent)) {
+            VR_Log("  Internal FBO (eye%d) fbo=%d: center=(%d,%d,%d) TL=(%d,%d,%d) BR=(%d,%d,%d)\n",
+                eye, std3D_pFb->fbo,
+                pixelCenter[0], pixelCenter[1], pixelCenter[2],
+                pixelTL[0], pixelTL[1], pixelTL[2],
+                pixelBR[0], pixelBR[1], pixelBR[2]);
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, targetFbo);
+    }
+
+    // DEBUG: Check FBO attachment status for eye 1 (magenta clear disabled - using jkGame diagnostics now)
+    if (eye == 1 && vrFboTarget > 0 && shouldLog) {
+        // Check what's attached to this FBO
+        GLint colorAttachment = 0;
+        glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &colorAttachment);
+        GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+
+        VR_Log("  EYE1 VR FBO CHECK: fbo=%d, colorAttachment=%d, status=0x%x (complete=0x%x)\n",
+            vrFboTarget, colorAttachment, fboStatus, GL_FRAMEBUFFER_COMPLETE);
+    }
+#endif
 
     static float frameNum = 1.0;
     //frameNum += (rand() % 16);
@@ -2328,8 +2499,25 @@ void std3D_DrawSceneFbo()
         draw_ssao = 0;
     }
 
-    if (!jkGame_isDDraw && !jkGuiBuildMulti_bRendering)
+    // Added: In VR mode, always blit the internal FBO to the VR target
+    // even if jkGame_isDDraw is false (can happen during transitions)
+#ifdef PLATFORM_VR
+    int skipEarlyReturn = std3D_vrTargetActive;
+    if (shouldLog) {
+        VR_Log("  Early return check: jkGame_isDDraw=%d, jkGuiBuildMulti=%d, vrTargetActive=%d, skip=%d\n",
+            jkGame_isDDraw, jkGuiBuildMulti_bRendering, std3D_vrTargetActive, skipEarlyReturn);
+    }
+#else
+    int skipEarlyReturn = 0;
+#endif
+    if (!jkGame_isDDraw && !jkGuiBuildMulti_bRendering && !skipEarlyReturn)
     {
+#ifdef PLATFORM_VR
+        if (shouldLog) {
+            VR_Log("  EARLY RETURN: jkGame_isDDraw=%d, jkGuiBuildMulti_bRendering=%d\n",
+                jkGame_isDDraw, jkGuiBuildMulti_bRendering);
+        }
+#endif
         return;
     }
 
@@ -2362,6 +2550,18 @@ void std3D_DrawSceneFbo()
     }
 
     float rad_scale = (float)std3D_pFb->w / 640.0;
+
+#ifdef PLATFORM_VR
+    // FIX: Ensure window.fbo matches vrFboTarget for the blit functions
+    // std3D_DrawSimpleTex binds to pFbo->fbo, so we need to redirect it to the VR swapchain
+    GLint savedWindowFbo = std3D_pFb->window.fbo;
+    if (vrFboTarget > 0) {
+        std3D_pFb->window.fbo = vrFboTarget;
+        if (shouldLog) {
+            VR_Log("  FIX: Redirecting window.fbo %d -> %d for eye %d blits\n", savedWindowFbo, vrFboTarget, eye);
+        }
+    }
+#endif
 
     if (!draw_ssao)
     {
@@ -2413,6 +2613,13 @@ void std3D_DrawSceneFbo()
         std3D_DrawSimpleTex(&std3D_texFboStage, &std3D_pFb->window, std3D_pFb->blur4.tex, 0, 0, 1.0, bloom_intensity * 0.8, jkPlayer_gamma, 0);
     }
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+#ifdef PLATFORM_VR
+    // Restore original window.fbo after blits
+    if (vrFboTarget > 0) {
+        std3D_pFb->window.fbo = savedWindowFbo;
+    }
+#endif
 }
 
 void std3D_DoTex(rdDDrawSurface* tex, rdTri* tri, int tris_left)
@@ -2495,8 +2702,74 @@ void std3D_DrawRenderList()
 {
     if (Main_bHeadless) return;
 
+#ifdef PLATFORM_VR
+    // DEBUG: Log draw call info for VR with GL error checking
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int drawCallCountPerEye[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+            drawCallCountPerEye[eye]++;
+            int shouldLog = (drawCallCountPerEye[eye] <= 10 || drawCallCountPerEye[eye] % 300 == 0);
+
+            // Check for any pending GL errors before we start
+            GLenum err = glGetError();
+            if (err != GL_NO_ERROR && shouldLog) {
+                VR_Log("std3D_DrawRenderList[eye%d] PRE-ERROR: 0x%x\n", eye, err);
+            }
+
+            if (shouldLog) {
+                VR_Log("std3D_DrawRenderList[eye%d] #%d: GL_tmpVerticesAmt=%d, GL_tmpTrisAmt=%d, targetFbo=%d\n",
+                    eye, drawCallCountPerEye[eye], GL_tmpVerticesAmt, GL_tmpTrisAmt, std3D_pFb ? std3D_pFb->fbo : -1);
+            }
+        }
+    }
+#endif
+
     //printf("Draw render list\n");
     glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+
+#ifdef PLATFORM_VR
+    // DEBUG: Log vertex/triangle counts for each eye to console
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        static int logCount[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+            logCount[eye]++;
+            // Log first 30 calls and every 100th after that
+            if (logCount[eye] <= 30 || logCount[eye] % 100 == 0) {
+                stdPlatform_Printf("DrawRenderList eye%d #%d: verts=%d tris=%d\n",
+                    eye, logCount[eye], GL_tmpVerticesAmt, GL_tmpTrisAmt);
+            }
+        }
+    }
+
+    // DEBUG: Verify FBO binding and check for errors
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int bindCheckCount[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+            bindCheckCount[eye]++;
+            int shouldLog = (bindCheckCount[eye] <= 10 || bindCheckCount[eye] % 300 == 0);
+
+            if (shouldLog) {
+                GLint actualFBO = 0;
+                glGetIntegerv(GL_FRAMEBUFFER_BINDING, &actualFBO);
+                GLenum fboStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+                GLenum err = glGetError();
+                VR_Log("  [eye%d] After FBO bind: actual=%d, wanted=%d, status=0x%x (complete=0x%x), glErr=0x%x\n",
+                    eye, actualFBO, std3D_pFb->fbo, fboStatus, GL_FRAMEBUFFER_COMPLETE, err);
+            }
+        }
+    }
+#endif
     glUseProgram(programDefault);
 
     GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
@@ -2593,6 +2866,12 @@ void std3D_DrawRenderList()
     
     glUniform1i(uniform_tex_mode, TEX_MODE_TEST);
     glUniform1i(uniform_blend_mode, 2);
+#ifdef PLATFORM_VR
+    extern int std3D_vrDebugMode;
+    glUniform1i(uniform_vr_debug_mode, std3D_vrDebugMode);
+#else
+    glUniform1i(uniform_vr_debug_mode, 0);
+#endif
     glActiveTexture(GL_TEXTURE0 + 4);
     glBindTexture(GL_TEXTURE_2D, blank_tex);
     glActiveTexture(GL_TEXTURE0 + 3);
@@ -2622,6 +2901,39 @@ void std3D_DrawRenderList()
 
     glUniformMatrix4fv(uniform_mvp, 1, GL_FALSE, d3dmat);
     glViewport(0, 0, width, height);
+
+#ifdef PLATFORM_VR
+    // DEBUG: Log projection setup and GL state for VR
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int projLogCount[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+            projLogCount[eye]++;
+            int shouldLog = (projLogCount[eye] <= 5 || projLogCount[eye] % 300 == 0);
+            if (shouldLog) {
+                // Check viewport and scissor state
+                GLint viewport[4] = {0};
+                GLint scissor[4] = {0};
+                GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+                glGetIntegerv(GL_VIEWPORT, viewport);
+                glGetIntegerv(GL_SCISSOR_BOX, scissor);
+
+                VR_Log("  [eye%d] PROJ: internalW=%.0f H=%.0f, width=%.0f height=%.0f, scaleX=%.4f scaleY=%.4f\n",
+                    eye, internalWidth, internalHeight, width, height, scaleX, scaleY);
+                VR_Log("  [eye%d] MVP diagonal: [%.4f, %.4f, %.4f, %.4f]\n",
+                    eye, d3dmat[0], d3dmat[5], d3dmat[10], d3dmat[15]);
+                VR_Log("  [eye%d] MVP translate: [%.4f, %.4f, %.4f]\n",
+                    eye, d3dmat[12], d3dmat[13], d3dmat[14]);
+                VR_Log("  [eye%d] viewport=(%d,%d,%d,%d) scissor=(%d,%d,%d,%d) scissorEnabled=%d\n",
+                    eye, viewport[0], viewport[1], viewport[2], viewport[3],
+                    scissor[0], scissor[1], scissor[2], scissor[3], scissorEnabled);
+            }
+        }
+    }
+#endif
 
     }
 
@@ -2671,9 +2983,115 @@ void std3D_DrawRenderList()
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, world_ibo_triangle);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, GL_tmpTrisAmt * 3 * sizeof(GLushort), world_data_elements, GL_STREAM_DRAW);
-    
+
+#ifdef PLATFORM_VR
+    // DEBUG: Log vertex positions and verify buffers for VR
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int bufCheckCount[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+            bufCheckCount[eye]++;
+            if (bufCheckCount[eye] <= 3) {
+                // Log first few vertex positions to see where geometry is
+                VR_Log("[VERTS eye%d #%d] total=%d tris=%d\n", eye, bufCheckCount[eye], GL_tmpVerticesAmt, GL_tmpTrisAmt);
+                if (GL_tmpVerticesAmt > 0) {
+                    // Sample vertices to check their screen positions
+                    int sampleIndices[] = {0, GL_tmpVerticesAmt/4, GL_tmpVerticesAmt/2, 3*GL_tmpVerticesAmt/4, GL_tmpVerticesAmt-1};
+                    for (int i = 0; i < 5 && sampleIndices[i] < GL_tmpVerticesAmt; i++) {
+                        int idx = sampleIndices[i];
+                        VR_Log("  vert[%d]: pos=(%.1f,%.1f,%.4f) color=0x%08X\n",
+                            idx, vertexes[idx].x, vertexes[idx].y, vertexes[idx].z, vertexes[idx].color);
+                    }
+                }
+            }
+            if (bufCheckCount[eye] <= 5) {
+                // Check GL errors
+                GLenum err = glGetError();
+
+                // Get actual buffer sizes
+                GLint vboSize = 0, iboSize = 0;
+                glBindBuffer(GL_ARRAY_BUFFER, world_vbo_all);
+                glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vboSize);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, world_ibo_triangle);
+                glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &iboSize);
+
+                // Expected sizes
+                int expectedVboSize = GL_tmpVerticesAmt * sizeof(D3DVERTEX);
+                int expectedIboSize = GL_tmpTrisAmt * 3 * sizeof(GLushort);
+
+                VR_Log("[BUFFER CHECK eye%d #%d] VBO=%d (expected %d), IBO=%d (expected %d), glErr=0x%x\n",
+                    eye, bufCheckCount[eye], vboSize, expectedVboSize, iboSize, expectedIboSize, err);
+            }
+        }
+    }
+#endif
+
+#ifdef PLATFORM_VR
+    // DEBUG: Log sample vertex positions for VR
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int vertLogCount[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2 && GL_tmpVerticesAmt > 0) {
+            vertLogCount[eye]++;
+            int shouldLog = (vertLogCount[eye] <= 5 || vertLogCount[eye] % 300 == 0);
+            if (shouldLog) {
+                // Log first few vertices
+                int numToLog = GL_tmpVerticesAmt < 3 ? GL_tmpVerticesAmt : 3;
+                for (int v = 0; v < numToLog; v++) {
+                    VR_Log("  [eye%d] VERT[%d]: pos=(%.2f, %.2f, %.2f) uv=(%.3f, %.3f) color=0x%08x\n",
+                        eye, v, vertexes[v].x, vertexes[v].y, vertexes[v].z,
+                        vertexes[v].tu, vertexes[v].tv, vertexes[v].color);
+                }
+            }
+        }
+    }
+#endif
+
     int do_batch = 0;
-    
+
+#ifdef PLATFORM_VR
+    // DEBUG: Inject test triangle at screen center for Eye 1 to verify draw pipeline
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int testTriCount = 0;
+        static int checkCount[2] = {0, 0};
+        if (stdVR_bEnabled && stdVR_currentEye >= 0 && stdVR_currentEye < 2) {
+            checkCount[stdVR_currentEye]++;
+            if (checkCount[stdVR_currentEye] <= 3) {
+                VR_Log("[DRAW CHECK eye%d #%d] GL_tmpVerticesAmt=%d GL_tmpTrisAmt=%d internalW=%.0f H=%.0f\n",
+                    stdVR_currentEye, checkCount[stdVR_currentEye], GL_tmpVerticesAmt, GL_tmpTrisAmt, internalWidth, internalHeight);
+            }
+            // Only inject for eye 1 with sufficient vertices
+            if (stdVR_currentEye == 1 && testTriCount < 10 && GL_tmpVerticesAmt >= 3 && GL_tmpTrisAmt >= 1) {
+                testTriCount++;
+                // Inject a bright test triangle at screen center using z=1.0 (should always pass depth)
+                float cx = internalWidth / 2.0f;
+                float cy = internalHeight / 2.0f;
+                float sz = 150.0f;  // Large triangle size
+                // Overwrite first 3 vertices with test triangle
+                vertexes[0].x = cx;       vertexes[0].y = cy - sz;  vertexes[0].z = 1.0f; vertexes[0].color = 0xFFFF00FF; // top (magenta)
+                vertexes[1].x = cx - sz;  vertexes[1].y = cy + sz;  vertexes[1].z = 1.0f; vertexes[1].color = 0xFF00FFFF; // bottom-left (cyan)
+                vertexes[2].x = cx + sz;  vertexes[2].y = cy + sz;  vertexes[2].z = 1.0f; vertexes[2].color = 0xFFFFFF00; // bottom-right (yellow)
+                // Set first triangle indices to point to test vertices
+                tris[0].v1 = 0; tris[0].v2 = 1; tris[0].v3 = 2;
+                // Re-upload vertex buffer with modified data
+                glBindBuffer(GL_ARRAY_BUFFER, world_vbo_all);
+                glBufferSubData(GL_ARRAY_BUFFER, 0, 3 * sizeof(D3DVERTEX), vertexes);
+                VR_Log("[TEST TRI eye1 #%d] Injected test triangle at (%.0f,%.0f) size=%.0f verts=%d\n",
+                    testTriCount, cx, cy, sz, GL_tmpVerticesAmt);
+            }
+        }
+    }
+#endif
+
     //glDepthFunc(GL_LESS);
     //glDepthMask(GL_TRUE);
     //glCullFace(GL_FRONT);
@@ -2967,10 +3385,222 @@ int std3D_ClearMainFbo()
     GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
     glDrawBuffers(4, bufs);
 
+    // CRITICAL: Enable depth writes before clearing! If depthMask is GL_FALSE
+    // (left over from previous rendering), the depth clear will have no effect
+    // and subsequent depth tests will fail against stale depth values.
+    glDepthMask(GL_TRUE);
+
+    // FIX: Comprehensive GL state reset for VR per-eye rendering
+    // std3D_StartScene() is only called once per frame, not per-eye.
+    // Eye 0's blit (std3D_DrawSceneFbo -> std3D_DrawSimpleTex) changes various
+    // GL states that must be reset for Eye 1's scene rendering.
+    // NOTE: These resets are safe to do unconditionally.
+    glDepthFunc(GL_LESS);
+    glEnable(GL_DEPTH_TEST);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBlendEquation(GL_FUNC_ADD);
+    glCullFace(GL_FRONT);
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+
+#ifdef PLATFORM_VR
+    // Re-enable vertex attributes (std3D_DrawSimpleTex disables them)
+    // Also restore the default shader program, VBO, and attribute pointers
+    // (std3D_DrawSimpleTex changes them to use menu_vbo_all and different attribute IDs)
+    {
+        extern int stdVR_bEnabled;
+        if (stdVR_bEnabled) {
+            glUseProgram(programDefault);  // Restore default shader
+            glBindBuffer(GL_ARRAY_BUFFER, world_vbo_all);  // Restore world VBO
+
+            // Reset vertex attribute pointers to point to world_vbo_all with correct offsets
+            // (std3D_DrawSimpleTex set them to menu_vbo_all with different offsets)
+            glVertexAttribPointer(
+                attribute_coord3d, 3, GL_FLOAT, GL_FALSE,
+                sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, x));
+            glVertexAttribPointer(
+                attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE,
+                sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, color));
+            glVertexAttribPointer(
+                attribute_v_light, 1, GL_FLOAT, GL_FALSE,
+                sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, lightLevel));
+            glVertexAttribPointer(
+                attribute_v_uv, 2, GL_FLOAT, GL_FALSE,
+                sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, tu));
+
+            glEnableVertexAttribArray(attribute_coord3d);
+            glEnableVertexAttribArray(attribute_v_color);
+            glEnableVertexAttribArray(attribute_v_light);
+            glEnableVertexAttribArray(attribute_v_uv);
+        }
+    }
+#endif
+
     glClearColor(0.0, 0.0, 0.0, 1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
     return 1;
 }
+
+#ifdef PLATFORM_VR
+static int std3D_ShouldLogVRFrame(int frame)
+{
+    return (frame <= 5 || frame % 300 == 0);
+}
+
+void std3D_DebugLogGLState(const char* tag, int eye, int frame)
+{
+    extern int stdVR_bEnabled;
+    extern void VR_Log(const char* fmt, ...);
+    if (!stdVR_bEnabled || !std3D_ShouldLogVRFrame(frame)) {
+        return;
+    }
+
+    GLint fbo = 0;
+    GLint drawBuf = 0;
+    GLint readBuf = 0;
+    GLint viewport[4] = {0};
+    GLint scissor[4] = {0};
+    GLboolean colorMask[4] = {0};
+    GLboolean depthMask = GL_FALSE;
+    GLboolean scissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+    GLboolean srgbEnabled = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
+    glGetIntegerv(GL_DRAW_BUFFER, &drawBuf);
+    glGetIntegerv(GL_READ_BUFFER, &readBuf);
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    glGetIntegerv(GL_SCISSOR_BOX, scissor);
+    glGetBooleanv(GL_COLOR_WRITEMASK, colorMask);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+
+    VR_Log("VR GL STATE [%s] frame=%d eye=%d: fbo=%d drawBuf=0x%x readBuf=0x%x viewport=(%d,%d,%d,%d) scissor=(%d,%d,%d,%d) scissorOn=%d colorMask=%d%d%d%d depthMask=%d blend=%d srgb=%d\n",
+        tag ? tag : "?", frame, eye, fbo, drawBuf, readBuf,
+        viewport[0], viewport[1], viewport[2], viewport[3],
+        scissor[0], scissor[1], scissor[2], scissor[3],
+        scissorEnabled ? 1 : 0,
+        colorMask[0] ? 1 : 0, colorMask[1] ? 1 : 0, colorMask[2] ? 1 : 0, colorMask[3] ? 1 : 0,
+        depthMask ? 1 : 0, blendEnabled ? 1 : 0, srgbEnabled ? 1 : 0);
+}
+
+void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame)
+{
+    extern int stdVR_bEnabled;
+    extern void VR_Log(const char* fmt, ...);
+    if (!stdVR_bEnabled || !std3D_pFb || !std3D_ShouldLogVRFrame(frame)) {
+        return;
+    }
+
+    GLint prevFbo = 0;
+    GLint prevReadBuf = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glGetIntegerv(GL_READ_BUFFER, &prevReadBuf);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+    // Ensure draws are complete before sampling
+    glFinish();
+
+    int w = std3D_pFb->w;
+    int h = std3D_pFb->h;
+    unsigned char c[4] = {0};
+    unsigned char tl[4] = {0};
+    unsigned char tr[4] = {0};
+    unsigned char bl[4] = {0};
+    unsigned char br[4] = {0};
+
+    glReadPixels(w / 2, h / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, c);
+    glReadPixels(w / 8, h / 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, bl);
+    glReadPixels(7 * w / 8, h / 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, br);
+    glReadPixels(w / 8, 7 * h / 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, tl);
+    glReadPixels(7 * w / 8, 7 * h / 8, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, tr);
+
+    int sum = c[0] + c[1] + c[2] + tl[0] + tl[1] + tl[2] + tr[0] + tr[1] + tr[2]
+              + bl[0] + bl[1] + bl[2] + br[0] + br[1] + br[2];
+
+    VR_Log("VR FBO PROBE [%s] frame=%d eye=%d: fbo=%d size=%dx%d sumRGB=%d center=(%d,%d,%d) TL=(%d,%d,%d) TR=(%d,%d,%d) BL=(%d,%d,%d) BR=(%d,%d,%d)\n",
+        tag ? tag : "?", frame, eye, std3D_pFb->fbo, w, h, sum,
+        c[0], c[1], c[2],
+        tl[0], tl[1], tl[2],
+        tr[0], tr[1], tr[2],
+        bl[0], bl[1], bl[2],
+        br[0], br[1], br[2]);
+
+    glReadBuffer(prevReadBuf);
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
+}
+
+// Clear internal FBO to a test color (for debugging stereo rendering)
+// Eye 0: dark red, Eye 1: dark green
+void std3D_DebugClearTestColor(int eye)
+{
+    if (!std3D_pFb) return;
+
+    GLint prevFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+    if (eye == 0) {
+        glClearColor(0.25f, 0.0f, 0.0f, 1.0f);  // Dark red for eye 0
+    } else {
+        glClearColor(0.0f, 0.25f, 0.0f, 1.0f);  // Dark green for eye 1
+    }
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);  // Reset to black
+
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
+}
+
+// Save internal FBO to PPM file (for debugging stereo rendering)
+void std3D_DebugSaveInternalFbo(const char* filename)
+{
+    extern void VR_Log(const char* fmt, ...);
+    if (!std3D_pFb || !filename) return;
+
+    // Ensure all pending GL operations are complete
+    glFinish();
+
+    GLint prevFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+
+    // Log which FBO we're reading from
+    GLint actualFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &actualFbo);
+    VR_Log("std3D_DebugSaveInternalFbo: saving %s from fbo=%d (std3D_pFb->fbo=%d)\n",
+           filename, actualFbo, std3D_pFb->fbo);
+
+    int w = std3D_pFb->w;
+    int h = std3D_pFb->h;
+    unsigned char* pixels = (unsigned char*)malloc(w * h * 3);
+    if (pixels) {
+        glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+
+        // Sample a few pixels for debugging
+        int cx = w / 2, cy = h / 2;
+        int idx = cy * w * 3 + cx * 3;
+        VR_Log("  Center pixel (%d,%d): R=%d G=%d B=%d\n", cx, cy,
+               pixels[idx], pixels[idx+1], pixels[idx+2]);
+
+        FILE* fp = fopen(filename, "wb");
+        if (fp) {
+            fprintf(fp, "P6\n%d %d\n255\n", w, h);
+            // PPM stores top-to-bottom, GL reads bottom-to-top, so flip
+            for (int y = h - 1; y >= 0; y--) {
+                fwrite(pixels + y * w * 3, 1, w * 3, fp);
+            }
+            fclose(fp);
+            VR_Log("  SCREENSHOT SAVED: %s (%dx%d)\n", filename, w, h);
+        }
+        free(pixels);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
+}
+#endif
 
 int std3D_AddToTextureCache(stdVBuffer *vbuf, rdDDrawSurface *texture, int is_alpha_tex, int no_alpha)
 {
@@ -3826,6 +4456,16 @@ void std3D_SetVRTargetSize(int width, int height)
 
 void std3D_SetVRTargetFBO(int fbo, int width, int height)
 {
+    extern void VR_Log(const char* fmt, ...);
+    extern int stdVR_currentEye;
+    static int setVRTargetCount = 0;
+    setVRTargetCount++;
+
+    if (setVRTargetCount <= 60 || setVRTargetCount % 600 == 0) {
+        VR_Log("std3D_SetVRTargetFBO #%d (eye=%d): fbo=%d, size=%dx%d, wasActive=%d, savedFbo=%d\n",
+            setVRTargetCount, stdVR_currentEye, fbo, width, height, std3D_vrTargetActive, std3D_savedWindowFbo);
+    }
+
     if (!std3D_vrTargetActive) {
         // Save the original window FBO the first time
         std3D_savedWindowFbo = std3D_windowFbo;
@@ -3840,10 +4480,25 @@ void std3D_SetVRTargetFBO(int fbo, int width, int height)
 
     // Update BOTH framebuffers' window info (important because std3D_swapFramebuffers can switch)
     std3D_ApplyVRWindowToAllFramebuffers();
+
+    if (setVRTargetCount <= 60 || setVRTargetCount % 600 == 0) {
+        VR_Log("  After apply: fb[0].window.fbo=%d, fb[1].window.fbo=%d, pFb->window.fbo=%d\n",
+            std3D_framebuffers[0].window.fbo, std3D_framebuffers[1].window.fbo,
+            std3D_pFb ? std3D_pFb->window.fbo : -1);
+    }
 }
 
 void std3D_ClearVRTargetFBO(void)
 {
+    extern void VR_Log(const char* fmt, ...);
+    static int clearVRTargetCount = 0;
+    clearVRTargetCount++;
+
+    if (clearVRTargetCount <= 60 || clearVRTargetCount % 600 == 0) {
+        VR_Log("std3D_ClearVRTargetFBO #%d: wasActive=%d, savedFbo=%d, windowFbo=%d\n",
+            clearVRTargetCount, std3D_vrTargetActive, std3D_savedWindowFbo, std3D_windowFbo);
+    }
+
     if (std3D_vrTargetActive) {
         // Restore the original window FBO
         std3D_windowFbo = std3D_savedWindowFbo;
@@ -3851,6 +4506,12 @@ void std3D_ClearVRTargetFBO(void)
 
         // Restore BOTH framebuffers' window info
         std3D_ApplyDesktopWindowToAllFramebuffers();
+
+        if (clearVRTargetCount <= 60 || clearVRTargetCount % 600 == 0) {
+            VR_Log("  After restore: fb[0].window.fbo=%d, fb[1].window.fbo=%d, pFb->window.fbo=%d\n",
+                std3D_framebuffers[0].window.fbo, std3D_framebuffers[1].window.fbo,
+                std3D_pFb ? std3D_pFb->window.fbo : -1);
+        }
     }
 }
 #endif // PLATFORM_VR

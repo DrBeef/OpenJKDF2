@@ -75,7 +75,9 @@ void stdVR_Input_GetMovementDirection(float* pMoveX, float* pMoveY)
     }
 
     // Get raw thumbstick input with deadzone
-    float moveX = ApplyDeadzone(stdVR_clientInfo.analogMove[0], STDVR_THUMBSTICK_DEADZONE);
+    // OpenXR left stick X is inverted relative to JK strafe (left reports negative),
+    // so flip it here to keep "left = strafe left".
+    float moveX = -ApplyDeadzone(stdVR_clientInfo.analogMove[0], STDVR_THUMBSTICK_DEADZONE);
     float moveY = ApplyDeadzone(stdVR_clientInfo.analogMove[1], STDVR_THUMBSTICK_DEADZONE);
 
     // Movement is already oriented based on controller/head direction

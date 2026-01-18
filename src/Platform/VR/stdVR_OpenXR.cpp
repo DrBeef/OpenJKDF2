@@ -23,6 +23,10 @@ extern "C" {
 #include <GL/wglew.h>
 #endif
 
+#ifndef GL_FRAMEBUFFER_SRGB
+#define GL_FRAMEBUFFER_SRGB 0x8DB9
+#endif
+
 #include "stdVR_OpenXR.h"
 #include "stdVR.h"
 #include "stdVR_Types.h"
@@ -47,15 +51,10 @@ static void VR_InitLog(void)
     if (vrLogInitialized) return;
     vrLogInitialized = true;
 
-    // Try multiple locations for the log file
-    const char* logPaths[] = {
-        "vr_debug.log",
-        "./vr_debug.log",
-        "E:/Github/OpenJKDF2/build_vr/Release/vr_debug.log"
-    };
-
-    for (int i = 0; i < 3 && !vrLogFile; i++) {
-        vrLogFile = fopen(logPaths[i], "w");
+    // Try to write to a known location
+    vrLogFile = fopen("E:/Github/OpenJKDF2/vr_debug.log", "w");
+    if (!vrLogFile) {
+        vrLogFile = fopen("vr_debug.log", "w");
     }
 
     if (vrLogFile) {
@@ -106,16 +105,107 @@ static bool xrSessionRunning = false;
 static XrSwapchain xrSwapchains[STDVR_EYE_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
 static std::vector<XrSwapchainImageOpenGLKHR> xrSwapchainImages[STDVR_EYE_COUNT];
 static uint32_t xrSwapchainImageIndex[STDVR_EYE_COUNT] = { 0, 0 };
+static XrSwapchain xrNullSwapchains[STDVR_EYE_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
+static std::vector<XrSwapchainImageOpenGLKHR> xrNullSwapchainImages[STDVR_EYE_COUNT];
+static uint32_t xrNullSwapchainImageIndex[STDVR_EYE_COUNT] = { 0, 0 };
+static GLuint vrNullFBO[STDVR_EYE_COUNT] = { 0, 0 };
 static XrViewConfigurationView xrConfigViews[STDVR_EYE_COUNT];
 static XrView xrViews[STDVR_EYE_COUNT];
 
-static void stdVR_OpenXR_ReleaseSwapchainImage(int eye)
+static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* label, int eye)
+{
+    XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
+    waitInfo.timeout = 1000000000; // 1 second
+
+    XrResult result = xrWaitSwapchainImage(swapchain, &waitInfo);
+    int retryCount = 0;
+    while (result == XR_TIMEOUT_EXPIRED) {
+        retryCount++;
+        result = xrWaitSwapchainImage(swapchain, &waitInfo);
+    }
+
+    if (XR_FAILED(result)) {
+        VR_Log("stdVR_OpenXR: xrWaitSwapchainImage failed for %s eye %d: error %d\n",
+            label ? label : "swapchain", eye, result);
+        return 0;
+    }
+
+    if (retryCount > 0) {
+        VR_Log("stdVR_OpenXR: xrWaitSwapchainImage retried %d times for %s eye %d\n",
+            retryCount, label ? label : "swapchain", eye);
+    }
+
+    return 1;
+}
+
+static void stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(XrSwapchain swapchain, const char* label, int eye)
 {
     XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-    XrResult result = xrReleaseSwapchainImage(xrSwapchains[eye], &releaseInfo);
+    XrResult result = xrReleaseSwapchainImage(swapchain, &releaseInfo);
     if (XR_FAILED(result)) {
-        VR_Log("stdVR_OpenXR: xrReleaseSwapchainImage failed for eye %d: error %d\n", eye, result);
+        VR_Log("stdVR_OpenXR: xrReleaseSwapchainImage failed for %s eye %d: error %d\n",
+            label ? label : "swapchain", eye, result);
     }
+}
+
+static void stdVR_OpenXR_ReleaseSwapchainImage(int eye)
+{
+    stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrSwapchains[eye], "main", eye);
+}
+
+static int stdVR_OpenXR_ClearNullSwapchain(int eye)
+{
+    if (eye < 0 || eye >= STDVR_EYE_COUNT) {
+        return 0;
+    }
+    if (xrNullSwapchains[eye] == XR_NULL_HANDLE || vrNullFBO[eye] == 0 || xrNullSwapchainImages[eye].empty()) {
+        return 0;
+    }
+
+    XrSwapchainImageAcquireInfo acquireInfo = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+    XrResult result = xrAcquireSwapchainImage(xrNullSwapchains[eye], &acquireInfo, &xrNullSwapchainImageIndex[eye]);
+    if (XR_FAILED(result)) {
+        VR_Log("stdVR_OpenXR: xrAcquireSwapchainImage failed for null eye %d: error %d\n", eye, result);
+        return 0;
+    }
+
+    if (!stdVR_OpenXR_WaitSwapchainImage(xrNullSwapchains[eye], "null", eye)) {
+        stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrNullSwapchains[eye], "null", eye);
+        return 0;
+    }
+
+    GLint savedFBO = 0;
+    GLint savedViewport[4] = { 0, 0, 0, 0 };
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &savedFBO);
+    glGetIntegerv(GL_VIEWPORT, savedViewport);
+
+    GLuint texture = xrNullSwapchainImages[eye][xrNullSwapchainImageIndex[eye]].image;
+    glBindFramebuffer(GL_FRAMEBUFFER, vrNullFBO[eye]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        VR_Log("stdVR_OpenXR: Null FBO incomplete for eye %d, status 0x%x\n", eye, status);
+        glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
+        stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrNullSwapchains[eye], "null", eye);
+        return 0;
+    }
+
+    int width = xrConfigViews[eye].recommendedImageRectWidth;
+    int height = xrConfigViews[eye].recommendedImageRectHeight;
+    glViewport(0, 0, width, height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+
+    // Detach the texture before releasing (mirrors main swapchain handling)
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, savedFBO);
+    glViewport(savedViewport[0], savedViewport[1], savedViewport[2], savedViewport[3]);
+
+    stdVR_OpenXR_ReleaseSwapchainImageForSwapchain(xrNullSwapchains[eye], "null", eye);
+    return 1;
 }
 
 // Frame state
@@ -123,11 +213,16 @@ static XrFrameState xrFrameState = {};
 static bool xrFrameInProgress = false;
 static int vrFrameCount = 0;  // Track frame count for debugging
 
-// VR FBO state for rendering
-static GLuint vrFBO[STDVR_EYE_COUNT] = { 0, 0 };
-static GLuint vrDepthRBO[STDVR_EYE_COUNT] = { 0, 0 };
+// VR FBO state for rendering (per-swapchain-image, like JKXR)
+static std::vector<GLuint> vrFBO[STDVR_EYE_COUNT];
+static std::vector<GLuint> vrDepthTex[STDVR_EYE_COUNT];
+static GLuint vrCurrentFBO[STDVR_EYE_COUNT] = { 0, 0 };
 static GLint previousFBO = 0;
 static GLint previousViewport[4] = { 0, 0, 0, 0 };
+
+// Track current eye being rendered (for debugging)
+// Using extern "C" so C code can reference this variable
+extern "C" int stdVR_currentEye = -1;  // -1 = not in eye rendering, 0 = left, 1 = right
 
 // Input state
 static XrActionSet xrActionSet = XR_NULL_HANDLE;
@@ -718,6 +813,18 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
             xrEnumerateSwapchainImages(xrSwapchains[eye], 0, &imageCount, nullptr);
             xrSwapchainImages[eye].resize(imageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
             xrEnumerateSwapchainImages(xrSwapchains[eye], imageCount, &imageCount, (XrSwapchainImageBaseHeader*)xrSwapchainImages[eye].data());
+
+            // Create a null swapchain per-eye for screen-layer projection
+            result = xrCreateSwapchain(xrSession, &swapchainInfo, &xrNullSwapchains[eye]);
+            if (XR_FAILED(result)) {
+                VR_Log("OpenXR error: xrCreateSwapchain(null %d) returned %d\n", eye, result);
+                goto cleanup_session;
+            }
+
+            uint32_t nullImageCount = 0;
+            xrEnumerateSwapchainImages(xrNullSwapchains[eye], 0, &nullImageCount, nullptr);
+            xrNullSwapchainImages[eye].resize(nullImageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+            xrEnumerateSwapchainImages(xrNullSwapchains[eye], nullImageCount, &nullImageCount, (XrSwapchainImageBaseHeader*)xrNullSwapchainImages[eye].data());
         }
     }
 
@@ -726,22 +833,55 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         xrViews[i] = { XR_TYPE_VIEW };
     }
 
-    // Create FBOs for rendering to swapchain textures
+    // Create per-swapchain-image FBOs and depth textures (mirrors JKXR approach)
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
-        glGenFramebuffers(1, &vrFBO[eye]);
-        glBindFramebuffer(GL_FRAMEBUFFER, vrFBO[eye]);
+        const uint32_t imageCount = (uint32_t)xrSwapchainImages[eye].size();
+        const int width = xrConfigViews[eye].recommendedImageRectWidth;
+        const int height = xrConfigViews[eye].recommendedImageRectHeight;
 
-        // Create depth/stencil renderbuffer
-        glGenRenderbuffers(1, &vrDepthRBO[eye]);
-        glBindRenderbuffer(GL_RENDERBUFFER, vrDepthRBO[eye]);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8,
-            xrConfigViews[eye].recommendedImageRectWidth,
-            xrConfigViews[eye].recommendedImageRectHeight);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, vrDepthRBO[eye]);
+        vrFBO[eye].resize(imageCount);
+        vrDepthTex[eye].resize(imageCount);
 
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (imageCount > 0) {
+            glGenFramebuffers(imageCount, vrFBO[eye].data());
+            glGenTextures(imageCount, vrDepthTex[eye].data());
+        }
+
+        for (uint32_t i = 0; i < imageCount; i++) {
+            // Create depth texture for this swapchain image
+            glBindTexture(GL_TEXTURE_2D, vrDepthTex[eye][i]);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32,
+                width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+            glBindTexture(GL_TEXTURE_2D, 0);
+
+            // Bind FBO and attach color + depth once to validate completeness
+            glBindFramebuffer(GL_FRAMEBUFFER, vrFBO[eye][i]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                xrSwapchainImages[eye][i].image, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                vrDepthTex[eye][i], 0);
+
+            GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (status != GL_FRAMEBUFFER_COMPLETE) {
+                VR_Log("stdVR_OpenXR: FBO incomplete on create for eye %d image %u, status 0x%x\n",
+                    eye, i, status);
+            }
+
+            // Detach color now; we reattach each frame to avoid runtime issues
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+
+        // Create a lightweight FBO for null swapchain clears
+        glGenFramebuffers(1, &vrNullFBO[eye]);
     }
-    VR_Log("stdVR_OpenXR: VR FBOs created\n");
+
+    VR_Log("stdVR_OpenXR: VR FBOs created - eye0 images=%zu, eye1 images=%zu, nullFBO[0]=%u, nullFBO[1]=%u\n",
+        vrFBO[0].size(), vrFBO[1].size(), vrNullFBO[0], vrNullFBO[1]);
 
     // Create action set
     if (!CreateActionSet()) {
@@ -792,14 +932,19 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
 
     // Destroy VR FBOs
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
-        if (vrFBO[eye] != 0) {
-            glDeleteFramebuffers(1, &vrFBO[eye]);
-            vrFBO[eye] = 0;
+        if (!vrFBO[eye].empty()) {
+            glDeleteFramebuffers((GLsizei)vrFBO[eye].size(), vrFBO[eye].data());
+            vrFBO[eye].clear();
         }
-        if (vrDepthRBO[eye] != 0) {
-            glDeleteRenderbuffers(1, &vrDepthRBO[eye]);
-            vrDepthRBO[eye] = 0;
+        if (!vrDepthTex[eye].empty()) {
+            glDeleteTextures((GLsizei)vrDepthTex[eye].size(), vrDepthTex[eye].data());
+            vrDepthTex[eye].clear();
         }
+        if (vrNullFBO[eye] != 0) {
+            glDeleteFramebuffers(1, &vrNullFBO[eye]);
+            vrNullFBO[eye] = 0;
+        }
+        vrCurrentFBO[eye] = 0;
     }
 
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
@@ -808,6 +953,12 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
             xrSwapchains[eye] = XR_NULL_HANDLE;
         }
         xrSwapchainImages[eye].clear();
+
+        if (xrNullSwapchains[eye] != XR_NULL_HANDLE) {
+            xrDestroySwapchain(xrNullSwapchains[eye]);
+            xrNullSwapchains[eye] = XR_NULL_HANDLE;
+        }
+        xrNullSwapchainImages[eye].clear();
     }
 
     if (xrStageSpace != XR_NULL_HANDLE && xrStageSpace != xrLocalSpace) {
@@ -959,19 +1110,9 @@ extern "C" int stdVR_OpenXR_WaitFrame(void)
         return 0;
     }
 
-    // Debug: log BEFORE blocking call to detect freezes
-    if (vrFrameCount <= 10 || vrFrameCount % 100 == 0 || vrFrameCount >= 295) {
-        VR_Log("stdVR_OpenXR: WaitFrame #%d - calling xrWaitFrame...\n", vrFrameCount + 1);
-    }
-
     xrFrameState = { XR_TYPE_FRAME_STATE };
     XrFrameWaitInfo waitInfo = { XR_TYPE_FRAME_WAIT_INFO };
     XrResult result = xrWaitFrame(xrSession, &waitInfo, &xrFrameState);
-
-    // Debug: log AFTER blocking call
-    if (vrFrameCount <= 10 || vrFrameCount % 100 == 0 || vrFrameCount >= 295) {
-        VR_Log("stdVR_OpenXR: WaitFrame #%d - xrWaitFrame returned %d\n", vrFrameCount + 1, result);
-    }
 
     if (XR_FAILED(result)) {
         VR_Log("stdVR_OpenXR: xrWaitFrame failed with error %d\n", result);
@@ -981,11 +1122,11 @@ extern "C" int stdVR_OpenXR_WaitFrame(void)
     stdVR_clientInfo.bShouldRender = xrFrameState.shouldRender;
     stdVR_clientInfo.predictedDisplayTime = xrFrameState.predictedDisplayTime;
 
-    // Log frame info more frequently to debug
     vrFrameCount++;
-    if (vrFrameCount <= 10 || vrFrameCount % 100 == 0) {
-        VR_Log("stdVR_OpenXR: WaitFrame #%d - shouldRender=%d, displayTime=%lld\n",
-            vrFrameCount, xrFrameState.shouldRender ? 1 : 0, (long long)xrFrameState.predictedDisplayTime);
+    // Only log first 3 frames
+    if (vrFrameCount <= 3) {
+        VR_Log("stdVR_OpenXR: WaitFrame #%d - shouldRender=%d\n",
+            vrFrameCount, xrFrameState.shouldRender ? 1 : 0);
     }
 
     return 1;
@@ -994,21 +1135,14 @@ extern "C" int stdVR_OpenXR_WaitFrame(void)
 extern "C" int stdVR_OpenXR_BeginFrame(void)
 {
     if (!xrSessionRunning) {
-        if (vrFrameCount <= 5 || vrFrameCount % 300 == 0) {
-            VR_Log("stdVR_OpenXR: BeginFrame skipped - session not running (frame %d)\n", vrFrameCount);
-        }
         return 0;
     }
 
     XrFrameBeginInfo beginInfo = { XR_TYPE_FRAME_BEGIN_INFO };
     XrResult result = xrBeginFrame(xrSession, &beginInfo);
     if (XR_FAILED(result)) {
-        VR_Log("stdVR_OpenXR: xrBeginFrame failed with error %d (frame %d)\n", result, vrFrameCount);
+        VR_Log("stdVR_OpenXR: xrBeginFrame failed with error %d\n", result);
         return 0;
-    }
-
-    if (vrFrameCount <= 5 || vrFrameCount % 300 == 0) {
-        VR_Log("stdVR_OpenXR: BeginFrame #%d successful\n", vrFrameCount);
     }
 
     xrFrameInProgress = true;
@@ -1030,10 +1164,6 @@ static XrQuaternionf QuaternionFromAxisAngle(const XrVector3f& axis, float angle
 extern "C" int stdVR_OpenXR_EndFrame(void)
 {
     if (!xrSessionRunning || !xrFrameInProgress) {
-        if (vrFrameCount <= 5 || vrFrameCount % 300 == 0) {
-            VR_Log("stdVR_OpenXR: EndFrame skipped - running=%d, inProgress=%d (frame %d)\n",
-                xrSessionRunning ? 1 : 0, xrFrameInProgress ? 1 : 0, vrFrameCount);
-        }
         return 0;
     }
 
@@ -1042,7 +1172,8 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
     std::vector<XrCompositionLayerBaseHeader*> layers;
     XrCompositionLayerProjection projectionLayer = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
     projectionLayer.next = nullptr;
-    projectionLayer.layerFlags = 0;  // Can add XR_COMPOSITION_LAYER_CORRECT_CHROMATIC_ABERRATION_BIT if needed
+    projectionLayer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+        XR_COMPOSITION_LAYER_CORRECT_CHROMATIC_ABERRATION_BIT;
     std::vector<XrCompositionLayerProjectionView> projectionViews(STDVR_EYE_COUNT, { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW });
     XrCompositionLayerQuad quadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
 
@@ -1050,6 +1181,33 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
         // Check if we should use screen layer mode (for menus)
         if (stdVR_clientInfo.bUseScreenLayer) {
             // Screen layer mode: render menu as a 2D quad floating in front of player
+
+            // Ensure null swapchains are valid and cleared for a black projection layer
+            for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
+                if (!stdVR_OpenXR_ClearNullSwapchain(eye)) {
+                    VR_Log("stdVR_OpenXR: Warning - failed to clear null swapchain for eye %d\n", eye);
+                }
+            }
+
+            // Build a black projection layer using the null swapchains
+            for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
+                projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+                projectionViews[eye].next = nullptr;
+                projectionViews[eye].pose = xrViews[eye].pose;
+                projectionViews[eye].fov = xrViews[eye].fov;
+                projectionViews[eye].subImage.swapchain = xrNullSwapchains[eye];
+                projectionViews[eye].subImage.imageRect.offset = { 0, 0 };
+                projectionViews[eye].subImage.imageRect.extent = {
+                    (int32_t)xrConfigViews[eye].recommendedImageRectWidth,
+                    (int32_t)xrConfigViews[eye].recommendedImageRectHeight
+                };
+                projectionViews[eye].subImage.imageArrayIndex = 0;
+            }
+
+            projectionLayer.space = xrLocalSpace;
+            projectionLayer.viewCount = STDVR_EYE_COUNT;
+            projectionLayer.views = projectionViews.data();
+            layers.push_back((XrCompositionLayerBaseHeader*)&projectionLayer);
 
             // Get swapchain dimensions
             int32_t width = (int32_t)xrConfigViews[0].recommendedImageRectWidth;
@@ -1092,10 +1250,6 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             quadLayer.size = { screenWidth, screenHeight };
 
             layers.push_back((XrCompositionLayerBaseHeader*)&quadLayer);
-
-            if (vrFrameCount <= 5 || vrFrameCount % 300 == 0) {
-                VR_Log("stdVR_OpenXR: EndFrame #%d - submitting QUAD layer (menu mode)\n", vrFrameCount);
-            }
         } else {
             // Normal stereo projection mode for 3D gameplay
             for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
@@ -1117,14 +1271,6 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             projectionLayer.viewCount = STDVR_EYE_COUNT;
             projectionLayer.views = projectionViews.data();
             layers.push_back((XrCompositionLayerBaseHeader*)&projectionLayer);
-
-            if (vrFrameCount <= 5) {
-                VR_Log("stdVR_OpenXR: EndFrame #%d - submitting %d projection layers\n", vrFrameCount, (int)layers.size());
-            }
-        }
-    } else {
-        if (vrFrameCount <= 5) {
-            VR_Log("stdVR_OpenXR: EndFrame #%d - shouldRender=false, no layers\n", vrFrameCount);
         }
     }
 
@@ -1136,13 +1282,8 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
 
     XrResult result = xrEndFrame(xrSession, &endInfo);
     if (XR_FAILED(result)) {
-        VR_Log("stdVR_OpenXR: xrEndFrame failed with error %d (frame %d)\n", result, vrFrameCount);
+        VR_Log("stdVR_OpenXR: xrEndFrame failed with error %d\n", result);
         return 0;
-    }
-
-    if (vrFrameCount <= 5 || vrFrameCount % 300 == 0) {
-        VR_Log("stdVR_OpenXR: EndFrame #%d successful (layers=%d, screenLayer=%d)\n",
-            vrFrameCount, (int)layers.size(), stdVR_clientInfo.bUseScreenLayer ? 1 : 0);
     }
 
     return 1;
@@ -1153,8 +1294,6 @@ static int vrEmptyFrameCount = 0;
 extern "C" int stdVR_OpenXR_EndFrameEmpty(void)
 {
     if (!xrSessionRunning || !xrFrameInProgress) {
-        VR_Log("stdVR_OpenXR: EndFrameEmpty skipped - running=%d, inProgress=%d\n",
-            xrSessionRunning ? 1 : 0, xrFrameInProgress ? 1 : 0);
         return 0;
     }
 
@@ -1173,36 +1312,35 @@ extern "C" int stdVR_OpenXR_EndFrameEmpty(void)
         return 0;
     }
 
-    if (vrEmptyFrameCount <= 20 || vrEmptyFrameCount % 50 == 0) {
-        VR_Log("stdVR_OpenXR: EndFrameEmpty #%d successful (total empty: %d)\n", vrFrameCount, vrEmptyFrameCount);
-    }
-
     return 1;
 }
 
 extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
 {
+    static int prepareCallCount = 0;
+    prepareCallCount++;
+
     if (!xrSessionRunning || eye < 0 || eye >= STDVR_EYE_COUNT) {
-        if (vrFrameCount <= 5) {
-            VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) skipped - running=%d\n", eye, xrSessionRunning ? 1 : 0);
+        if (eye >= 0 && eye < STDVR_EYE_COUNT) {
+            vrCurrentFBO[eye] = 0;
         }
         return 0;
     }
+
+    // Track which eye is being rendered (set early for debug logging)
+    stdVR_currentEye = eye;
 
     bool swapchainAcquired = false;
     XrSwapchainImageAcquireInfo acquireInfo = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
     XrResult result = xrAcquireSwapchainImage(xrSwapchains[eye], &acquireInfo, &xrSwapchainImageIndex[eye]);
     if (XR_FAILED(result)) {
         VR_Log("stdVR_OpenXR: xrAcquireSwapchainImage failed for eye %d: error %d\n", eye, result);
+        vrCurrentFBO[eye] = 0;
         return 0;
     }
     swapchainAcquired = true;
 
-    XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
-    waitInfo.timeout = XR_INFINITE_DURATION;
-    result = xrWaitSwapchainImage(xrSwapchains[eye], &waitInfo);
-    if (XR_FAILED(result)) {
-        VR_Log("stdVR_OpenXR: xrWaitSwapchainImage failed for eye %d: error %d\n", eye, result);
+    if (!stdVR_OpenXR_WaitSwapchainImage(xrSwapchains[eye], "main", eye)) {
         if (swapchainAcquired) {
             stdVR_OpenXR_ReleaseSwapchainImage(eye);
         }
@@ -1216,14 +1354,33 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     // Get the swapchain texture for this frame
     GLuint texture = xrSwapchainImages[eye][xrSwapchainImageIndex[eye]].image;
 
-    if (vrFrameCount <= 5) {
-        VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) - FBO=%u, texture=%u, imageIdx=%u\n",
-            eye, vrFBO[eye], texture, xrSwapchainImageIndex[eye]);
+    if (vrFBO[eye].empty() || vrDepthTex[eye].empty()) {
+        VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) no FBOs/depth textures allocated (images=%zu)\n",
+            eye, vrFBO[eye].size());
+        if (swapchainAcquired) {
+            stdVR_OpenXR_ReleaseSwapchainImage(eye);
+        }
+        vrCurrentFBO[eye] = 0;
+        return 0;
+    }
+    if (xrSwapchainImageIndex[eye] >= vrFBO[eye].size()) {
+        VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) image index out of range: %u (images=%zu)\n",
+            eye, xrSwapchainImageIndex[eye], vrFBO[eye].size());
+        if (swapchainAcquired) {
+            stdVR_OpenXR_ReleaseSwapchainImage(eye);
+        }
+        vrCurrentFBO[eye] = 0;
+        return 0;
     }
 
+    GLuint fbo = vrFBO[eye][xrSwapchainImageIndex[eye]];
+    vrCurrentFBO[eye] = fbo;
+
     // Bind our VR FBO and attach the swapchain texture
-    glBindFramebuffer(GL_FRAMEBUFFER, vrFBO[eye]);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+        vrDepthTex[eye][xrSwapchainImageIndex[eye]], 0);
 
     // Verify FBO is complete
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -1233,6 +1390,7 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
         if (swapchainAcquired) {
             stdVR_OpenXR_ReleaseSwapchainImage(eye);
         }
+        vrCurrentFBO[eye] = 0;
         return 0;
     }
 
@@ -1242,16 +1400,12 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     glViewport(0, 0, width, height);
 
     // Tell std3D to route all "window" FBO bindings to our VR FBO
-    std3D_SetVRTargetFBO(vrFBO[eye], width, height);
-
-    if (vrFrameCount <= 5) {
-        VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) - viewport %dx%d, FBO complete, std3D redirected\n",
-            eye, width, height);
-    }
+    std3D_SetVRTargetFBO(fbo, width, height);
 
     // Clear the buffer
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    glDisable(GL_FRAMEBUFFER_SRGB);
 
     return 1;
 }
@@ -1262,11 +1416,30 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
         return 0;
     }
 
+    GLuint fbo = vrCurrentFBO[eye];
+    if (fbo == 0 && !vrFBO[eye].empty()) {
+        fbo = vrFBO[eye][xrSwapchainImageIndex[eye]];
+    }
+
+    // Clear alpha channel to 1.0 before releasing swapchain (like JKXR does)
+    // Some OpenXR runtimes treat alpha=0 as "discard" which can cause missing content
+    if (fbo != 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);  // Only write alpha
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);  // Restore full color mask
+    }
+
     // Restore std3D's window FBO routing
     std3D_ClearVRTargetFBO();
 
     // Detach texture from FBO (required for some OpenXR runtimes)
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    // Must bind the correct eye's FBO first since std3D_ClearVRTargetFBO() may have changed the binding
+    if (fbo != 0) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    }
 
     // Restore previous FBO and viewport
     glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
@@ -1280,11 +1453,25 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
         return 0;
     }
 
-    if (vrFrameCount <= 5) {
-        VR_Log("stdVR_OpenXR: FinishEyeBuffer(%d) complete\n", eye);
-    }
+    // Note: Don't reset stdVR_currentEye here - it needs to persist until the next PrepareEyeBuffer
+    // The old code was: stdVR_currentEye = -1;
+    // This was causing std3D_DrawSceneFbo to fail for eye 1 if there were any timing issues
+    vrCurrentFBO[eye] = 0;
 
     return 1;
+}
+
+extern "C" int stdVR_OpenXR_GetCurrentEyeFBO(int eye)
+{
+    if (eye < 0 || eye >= STDVR_EYE_COUNT) {
+        return 0;
+    }
+    return (int)vrCurrentFBO[eye];
+}
+
+extern "C" int stdVR_OpenXR_GetCurrentEye(void)
+{
+    return stdVR_currentEye;
 }
 
 // Helper to build asymmetric projection matrix from FOV tangents
@@ -1449,8 +1636,12 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
         xrGetActionStateVector2f(xrSession, &getInfo, &vec2State);
         if (vec2State.isActive) {
             if (hand == STDVR_CONTROLLER_LEFT) {
-                stdVR_clientInfo.analogMove[0] = vec2State.currentState.x;
-                stdVR_clientInfo.analogMove[1] = vec2State.currentState.y;
+                // Map thumbstick axes to game movement
+                // Based on user testing: X and Y axes are swapped
+                // Stick left/right (X) -> forward/back
+                // Stick up/down (Y) -> strafe left/right
+                stdVR_clientInfo.analogMove[0] = vec2State.currentState.y;   // Y -> strafe
+                stdVR_clientInfo.analogMove[1] = vec2State.currentState.x;   // X -> forward/back
             } else {
                 stdVR_clientInfo.analogTurn[0] = vec2State.currentState.x;
                 stdVR_clientInfo.analogTurn[1] = vec2State.currentState.y;

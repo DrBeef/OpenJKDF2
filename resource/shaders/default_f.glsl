@@ -64,6 +64,7 @@ uniform vec4 albedoFactor;
 uniform float displacement_factor;
 uniform float light_mult;
 uniform vec2 iResolution;
+uniform int vr_debug_mode; // 0 = normal, 1 = solid color, 2 = UV debug, 3 = depth debug
 
 in vec4 f_color;
 in float f_light;
@@ -248,6 +249,45 @@ vec4 bilinear_paletted_light(float index)
 
 void main(void)
 {
+    // VR Debug modes for minimal testing
+    if (vr_debug_mode == 1) {
+        // Solid magenta - verify any pixels rendered
+        fragColor = vec4(1.0, 0.0, 1.0, 1.0);
+        fragColorEmiss = vec4(0.0, 0.0, 0.0, 0.0);
+        fragColorPos = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColorNormal = vec4(0.0, 0.0, 1.0, 1.0);
+        gl_FragDepth = gl_FragCoord.z;
+        return;
+    }
+    else if (vr_debug_mode == 2) {
+        // UV coordinates as color - verify texture mapping
+        fragColor = vec4(f_uv.x, f_uv.y, 0.0, 1.0);
+        fragColorEmiss = vec4(0.0, 0.0, 0.0, 0.0);
+        fragColorPos = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColorNormal = vec4(0.0, 0.0, 1.0, 1.0);
+        gl_FragDepth = gl_FragCoord.z;
+        return;
+    }
+    else if (vr_debug_mode == 3) {
+        // Depth as color - verify depth buffer
+        float depth = gl_FragCoord.z;
+        fragColor = vec4(depth, depth, depth, 1.0);
+        fragColorEmiss = vec4(0.0, 0.0, 0.0, 0.0);
+        fragColorPos = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColorNormal = vec4(0.0, 0.0, 1.0, 1.0);
+        gl_FragDepth = gl_FragCoord.z;
+        return;
+    }
+    else if (vr_debug_mode == 4) {
+        // Vertex color only - verify vertex data
+        fragColor = f_color;
+        fragColorEmiss = vec4(0.0, 0.0, 0.0, 0.0);
+        fragColorPos = vec4(0.0, 0.0, 0.0, 1.0);
+        fragColorNormal = vec4(0.0, 0.0, 1.0, 1.0);
+        gl_FragDepth = gl_FragCoord.z;
+        return;
+    }
+
     float originalZ = gl_FragCoord.z / gl_FragCoord.w;
     vec3 adjusted_coords = vec3(f_coord.x/iResolution.x, f_coord.y/iResolution.y, originalZ);
     vec3 adjusted_coords_norms = vec3(gl_FragCoord.x/iResolution.x, gl_FragCoord.y/iResolution.y, 1.0/gl_FragCoord.z);

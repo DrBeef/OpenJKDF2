@@ -342,8 +342,16 @@ void sithRender_Draw()
 #endif
 
     sithRenderSky_Update();
-    if (!sithRender_geoMode)
+    if (!sithRender_geoMode) {
+#ifdef PLATFORM_VR
+        extern int stdVR_bEnabled;
+        extern void VR_Log(const char* fmt, ...);
+        if (stdVR_bEnabled) {
+            VR_Log("sithRender_Draw: EARLY RETURN - sithRender_geoMode=0\n");
+        }
+#endif
         return;
+    }
 
     rdSetGeometryMode(sithRender_geoMode);
     if ( sithRender_lightingIRMode )
@@ -358,8 +366,18 @@ void sithRender_Draw()
     rdSetRenderOptions(rdGetRenderOptions() | 1);
 #endif
 
-    if (!sithCamera_currentCamera || !sithCamera_currentCamera->sector)
+    if (!sithCamera_currentCamera || !sithCamera_currentCamera->sector) {
+#ifdef PLATFORM_VR
+        extern int stdVR_bEnabled;
+        extern void VR_Log(const char* fmt, ...);
+        if (stdVR_bEnabled) {
+            VR_Log("sithRender_Draw: EARLY RETURN - camera=%p, sector=%p\n",
+                (void*)sithCamera_currentCamera,
+                sithCamera_currentCamera ? (void*)sithCamera_currentCamera->sector : NULL);
+        }
+#endif
         return;
+    }
 
     sithPlayer_SetScreenTint(sithCamera_currentCamera->sector->tint.x, sithCamera_currentCamera->sector->tint.y, sithCamera_currentCamera->sector->tint.z);
 
@@ -472,7 +490,35 @@ void sithRender_Draw()
         sithRender_KindaClipAssignFrustum(sithCamera_currentCamera->sector, rdCamera_pCurCamera->pClipFrustum, 0, 0);
         sithRender_KindaClip(sithCamera_currentCamera->sector, rdCamera_pCurCamera->pClipFrustum, 0.0, 0);
 #else
+#ifdef PLATFORM_VR
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int vrClipCallCount = 0;
+        vrClipCallCount++;
+        if (stdVR_bEnabled && (vrClipCallCount <= 60 || vrClipCallCount % 600 == 0)) {
+            VR_Log("sithRender_Clip START (call %d, eye=%d): sector=%p (id=%d), tick=%d\n",
+                vrClipCallCount, stdVR_currentEye,
+                (void*)sithCamera_currentCamera->sector,
+                sithCamera_currentCamera->sector ? sithCamera_currentCamera->sector->id : -1,
+                sithRender_lastRenderTick);
+            if (rdCamera_pCurCamera && rdCamera_pCurCamera->pClipFrustum) {
+                rdClipFrustum* f = rdCamera_pCurCamera->pClipFrustum;
+                VR_Log("  frustum: L=%.2f R=%.2f T=%.2f B=%.2f zN=%.2f zF=%.2f\n",
+                    f->farLeft, f->right, f->farTop, f->bottom, f->zNear, f->zFar);
+            }
+            VR_Log("  sector renderTick=%d, clipVisited=%d\n",
+                sithCamera_currentCamera->sector->renderTick,
+                sithCamera_currentCamera->sector->clipVisited);
+        }
+#endif
         sithRender_Clip(sithCamera_currentCamera->sector, rdCamera_pCurCamera->pClipFrustum, 0.0, 0);
+#ifdef PLATFORM_VR
+        if (stdVR_bEnabled && (vrClipCallCount <= 60 || vrClipCallCount % 600 == 0)) {
+            VR_Log("sithRender_Clip END: numSectors=%d, numSurfaces=%d, sectorsDrawn=%d\n",
+                sithRender_numSectors, sithRender_numSurfaces, sithRender_sectorsDrawn);
+        }
+#endif
 #endif
     }
     else {
@@ -635,10 +681,29 @@ void sithRender_Clip(sithSector *sector, rdClipFrustum *frustumArg, flex_t prevA
     int v45; // [esp+4Ch] [ebp-34h]
     rdTexinfo *v51; // [esp+64h] [ebp-1Ch]
 
+#ifdef PLATFORM_VR
+    extern int stdVR_bEnabled;
+    extern int stdVR_currentEye;
+    extern void VR_Log(const char* fmt, ...);
+    static int vrClipEntryCount = 0;
+    vrClipEntryCount++;
+    int doLog = stdVR_bEnabled && depth == 0 && (vrClipEntryCount <= 60 || vrClipEntryCount % 600 == 0);
+    if (doLog) {
+        VR_Log("sithRender_Clip ENTRY (call %d, eye=%d, depth=%d): sector %d, renderTick=%d, clipVisited=%d, lastTick=%d\n",
+            vrClipEntryCount, stdVR_currentEye, depth, sector->id,
+            sector->renderTick, sector->clipVisited, sithRender_lastRenderTick);
+    }
+#endif
+
     // Clip visited hardening
     // Does not help much, but no visual harm either
 #ifdef QOL_IMPROVEMENTS
     if (sector->clipVisited == sithRender_lastRenderTick) {
+#ifdef PLATFORM_VR
+        if (doLog) {
+            VR_Log("  -> EARLY RETURN: clipVisited matches lastRenderTick\n");
+        }
+#endif
         sector->clipFrustum = rdCamera_pCurCamera->pClipFrustum;
         return;
     }
@@ -646,6 +711,11 @@ void sithRender_Clip(sithSector *sector, rdClipFrustum *frustumArg, flex_t prevA
 
     if ( sector->renderTick == sithRender_lastRenderTick )
     {
+#ifdef PLATFORM_VR
+        if (doLog) {
+            VR_Log("  -> renderTick matches, just updating frustum\n");
+        }
+#endif
         sector->clipFrustum = rdCamera_pCurCamera->pClipFrustum;
     }
     else
@@ -1746,6 +1816,33 @@ void sithRender_RenderLevelGeometry()
     //printf("%x %x %x %x\n", rdroid_curVertexColorMode, sithRender_flag, rdroid_curAcceleration, sithRender_lightMode);
 #endif
 
+#ifdef PLATFORM_VR
+    // DEBUG: Per-eye view matrix and frustum logging
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int geoRenderCallCount = 0;
+        geoRenderCallCount++;
+        if (stdVR_bEnabled && (geoRenderCallCount <= 20 || geoRenderCallCount % 600 == 0)) {
+            int eye = stdVR_currentEye;
+            VR_Log("RenderLevelGeo[eye%d] #%d: numSectors=%d, tick=%d\n",
+                eye, geoRenderCallCount, sithRender_numSectors, sithRender_lastRenderTick);
+            if (rdCamera_pCurCamera) {
+                VR_Log("  viewMatrix pos: (%f, %f, %f)\n",
+                    rdCamera_pCurCamera->view_matrix.scale.x,
+                    rdCamera_pCurCamera->view_matrix.scale.y,
+                    rdCamera_pCurCamera->view_matrix.scale.z);
+                if (rdCamera_pCurCamera->pClipFrustum) {
+                    rdClipFrustum* f = rdCamera_pCurCamera->pClipFrustum;
+                    VR_Log("  frustum: L=%.3f R=%.3f T=%.3f B=%.3f\n",
+                        f->farLeft, f->right, f->farTop, f->bottom);
+                }
+            }
+        }
+    }
+#endif
+
     vertices_uvs = sithWorld_pCurrentWorld->vertexUVs;
     sithRender_idxInfo.vertices = sithWorld_pCurrentWorld->verticesTransformed;
     sithRender_idxInfo.paDynamicLight = sithWorld_pCurrentWorld->verticesDynamicLight;
@@ -1858,6 +1955,17 @@ void sithRender_RenderLevelGeometry()
                 }
 
                 if (LIKELY(clipResult == SPHERE_FULLY_OUTSIDE)) {
+#ifdef PLATFORM_VR
+                    // DEBUG: Log sphere culling
+                    extern int stdVR_bEnabled;
+                    extern void VR_Log(const char* fmt, ...);
+                    static int sphereCullCount = 0;
+                    if (stdVR_bEnabled && sphereCullCount < 20) {
+                        sphereCullCount++;
+                        VR_Log("SPHERE_CULL: centerTrans=(%f,%f,%f) rad=%f OUTSIDE\n",
+                            centerTrans.x, centerTrans.y, centerTrans.z, v65->radius);
+                    }
+#endif
                     continue;
                 }
 
@@ -1883,6 +1991,29 @@ void sithRender_RenderLevelGeometry()
                 }
                 v65->field_4 = sithRender_lastRenderTick;
             }
+
+#ifdef PLATFORM_VR
+            // DEBUG: Log some transformed vertex positions (per-eye)
+            {
+                extern int stdVR_bEnabled;
+                extern int stdVR_currentEye;
+                extern void VR_Log(const char* fmt, ...);
+                static int vrVertexLogCountPerEye[2] = {0, 0};
+                int eye = stdVR_currentEye;
+                if (stdVR_bEnabled && eye >= 0 && eye < 2 && vrVertexLogCountPerEye[eye] < 5) {
+                    vrVertexLogCountPerEye[eye]++;
+                    rdVector3* vWorld = sithWorld_pCurrentWorld->vertices;
+                    rdVector3* vTrans = sithWorld_pCurrentWorld->verticesTransformed;
+                    int idx0 = v65->surfaceInfo.face.vertexPosIdx[0];
+                    rdClipFrustum* f = pSurfaceFrustum ? pSurfaceFrustum : rdCamera_pCurCamera->pClipFrustum;
+                    VR_Log("VERT[eye%d][%d]: worldV=(%.2f, %.2f, %.2f) transV=(%.2f, %.2f, %.2f)\n",
+                        eye, idx0, vWorld[idx0].x, vWorld[idx0].y, vWorld[idx0].z,
+                        vTrans[idx0].x, vTrans[idx0].y, vTrans[idx0].z);
+                    VR_Log("  sectorFrustum: L=%.3f R=%.3f T=%.3f B=%.3f (sector=%d)\n",
+                        f->farLeft, f->right, f->farTop, f->bottom, level_idk->id);
+                }
+            }
+#endif
 
             // Render with N-Gons instead of triangle strips if flag 0x8 is unset, or if it's sky vertices
             if (LIKELY((sithRender_flag & 8) == 0 || v65->surfaceInfo.face.numVertices <= 3 || bIsSkySurface || !v65->surfaceInfo.face.lightingMode))
@@ -2029,6 +2160,24 @@ void sithRender_RenderLevelGeometry()
                 }
                 
                 num_vertices = meshinfo_out.numVertices;
+#ifdef PLATFORM_VR
+                // DEBUG: Track clipped faces (per-eye with more detail)
+                {
+                    extern int stdVR_bEnabled;
+                    extern int stdVR_currentEye;
+                    extern void VR_Log(const char* fmt, ...);
+                    static int vrClipLogCountPerEye[2] = {0, 0};
+                    int eye = stdVR_currentEye;
+                    if (stdVR_bEnabled && eye >= 0 && eye < 2 && vrClipLogCountPerEye[eye] < 10) {
+                        vrClipLogCountPerEye[eye]++;
+                        rdClipFrustum* f = pSurfaceFrustum;
+                        VR_Log("CLIP[eye%d]: in=%d, out=%d %s | frustL=%.2f R=%.2f\n",
+                            eye, sithRender_idxInfo.numVertices, meshinfo_out.numVertices,
+                            meshinfo_out.numVertices < 3 ? "(REJECTED)" : "(OK)",
+                            f ? f->farLeft : -999, f ? f->right : -999);
+                    }
+                }
+#endif
                 if (UNLIKELY(meshinfo_out.numVertices < 3u))
                 {
                     continue;

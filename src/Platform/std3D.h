@@ -129,6 +129,11 @@ void std3D_Screenshot(const char* pFpath);
 void std3D_SetVRTargetSize(int width, int height);
 void std3D_SetVRTargetFBO(int fbo, int width, int height);
 void std3D_ClearVRTargetFBO(void);
+// VR debug helpers
+void std3D_DebugLogGLState(const char* tag, int eye, int frame);
+void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame);
+void std3D_DebugClearTestColor(int eye);
+void std3D_DebugSaveInternalFbo(const char* filename);
 #endif
 
 void std3D_ResetUIRenderList();

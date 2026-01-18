@@ -51,6 +51,10 @@
 #include "Dss/jkDSS.h"
 #include "stdPlatform.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 #if defined(TARGET_TWL)
 #define TICKRATE_MS (0) // no cap
 #elif defined(QOL_IMPROVEMENTS)
@@ -217,6 +221,17 @@ void jkMain_GuiAdvance()
     void (__cdecl *v7)(int, int); // ecx
     void (__cdecl *v8)(int); // ecx
 
+    // DEBUG: Log state machine status for VR debugging
+#ifdef PLATFORM_VR
+    static int guiAdvanceCount = 0;
+    guiAdvanceCount++;
+    if (guiAdvanceCount <= 50 || guiAdvanceCount % 500 == 0) {
+        extern void VR_Log(const char* fmt, ...);
+        VR_Log("jkMain_GuiAdvance #%d: currentState=%d, nextState=%d, stopTick=%d, thing_eight=%d, thing_nine=%d, suspended=%d, guiRend5=%d\n",
+            guiAdvanceCount, jkSmack_currentGuiState, jkSmack_nextGuiState, jkSmack_stopTick, thing_eight, thing_nine, g_app_suspended, jkGuiRend_thing_five);
+    }
+#endif
+
     if ( !g_app_suspended )
     {
         if ( thing_nine )
@@ -294,6 +309,10 @@ void jkMain_GuiAdvance()
     }
     if ( jkSmack_stopTick && !jkGuiRend_thing_five )
     {
+#ifdef PLATFORM_VR
+        extern void VR_Log(const char* fmt, ...);
+        VR_Log("jkMain_GuiAdvance: STATE TRANSITION from %d to %d\n", jkSmack_currentGuiState, jkSmack_nextGuiState);
+#endif
         jkGuiRend_thing_four = 0;
         v4 = jkSmack_currentGuiState;
         v5 = jkMain_aGuiStateFuncs[jkSmack_currentGuiState].leaveFunc;
@@ -304,10 +323,19 @@ void jkMain_GuiAdvance()
         jkSmack_stopTick = 0;
         jkSmack_currentGuiState = jkSmack_nextGuiState;
         v7 = jkMain_aGuiStateFuncs[jkSmack_nextGuiState].showFunc;
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_GuiAdvance: showFunc for state %d is %p\n", jkSmack_nextGuiState, (void*)v7);
+#endif
         if ( !v7 )
             goto LABEL_35;
         //jk_printf("show %u\n", jkSmack_currentGuiState);
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_GuiAdvance: Calling showFunc for state %d...\n", jkSmack_currentGuiState);
+#endif
         v7(jkSmack_nextGuiState, v4);
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_GuiAdvance: showFunc returned, jkGame_isDDraw=%d\n", jkGame_isDDraw);
+#endif
         //jk_printf("showed %u\n", jkSmack_currentGuiState);
     }
 LABEL_35:
@@ -511,6 +539,11 @@ void jkMain_GameplayShow(int a1, int a2)
     DWORD v5; // eax
     wchar_t *v6; // [esp-4h] [ebp-Ch]
 
+#ifdef PLATFORM_VR
+    extern void VR_Log(const char* fmt, ...);
+    VR_Log("jkMain_GameplayShow: ENTRY a1=%d, a2=%d, jkSmack_gameMode=%d, jkGame_isDDraw=%d\n", a1, a2, jkSmack_gameMode, jkGame_isDDraw);
+#endif
+
     level_loaded = 0;
 
     // MOTS added something here TODO
@@ -535,19 +568,31 @@ void jkMain_GameplayShow(int a1, int a2)
         sithMain_AutoSave();
     }
     else {
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_GameplayShow: Entering else branch (level loading path)\n");
+#endif
         // MOTS added
         jkMain_motsIdk[0] = 0;
 
         if ( jkSmack_gameMode == 1 )
         {
             jkGui_copies_string(gamemode_1_str);
+#ifdef PLATFORM_VR
+            VR_Log("jkMain_GameplayShow: Calling jkGuiTitle_ShowLoading for gameMode 1...\n");
+#endif
             jkGuiTitle_ShowLoading(gamemode_1_str, 0);
         }
         else
         {
             jkGui_copies_string(jkMain_aLevelJklFname);
+#ifdef PLATFORM_VR
+            VR_Log("jkMain_GameplayShow: Calling jkGuiTitle_ShowLoading for '%s'...\n", jkMain_aLevelJklFname);
+#endif
             jkGuiTitle_ShowLoading(jkMain_aLevelJklFname, 0);
         }
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_GameplayShow: jkGuiTitle_ShowLoading returned\n");
+#endif
 
         // MOTS added:
         // jkEpisode_Shutdown
@@ -557,7 +602,13 @@ void jkMain_GameplayShow(int a1, int a2)
 #ifdef JKM_DSS
             jkPlayer_SetAmmoMaximums(0);
 #endif
+#ifdef PLATFORM_VR
+            VR_Log("jkMain_GameplayShow: Calling sithMain_Mode1Init('%s')...\n", jkMain_aLevelJklFname);
+#endif
             v3 = sithMain_Mode1Init(jkMain_aLevelJklFname);
+#ifdef PLATFORM_VR
+            VR_Log("jkMain_GameplayShow: sithMain_Mode1Init returned %d\n", v3);
+#endif
         }
         else if ( jkSmack_gameMode == 1 )
         {
@@ -676,15 +727,33 @@ LABEL_28:
         }
     }
 
+#ifdef PLATFORM_VR
+    extern void VR_Log(const char* fmt, ...);
+    VR_Log("jkMain_GameplayShow: About to call jkMain_SetVideoMode(), jkGame_isDDraw=%d\n", jkGame_isDDraw);
+#endif
+
     if ( jkMain_SetVideoMode() )
     {
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_GameplayShow: jkMain_SetVideoMode() SUCCEEDED, jkGame_isDDraw=%d, thing_eight=1\n", jkGame_isDDraw);
+#endif
         stdControl_ToggleCursor(1);
         stdControl_Flush();
         jkGame_Update();
         thing_eight = 1;
+
+#ifdef PLATFORM_VR
+        // Recenter VR view when entering gameplay so player starts aligned with character
+        if (stdVR_bEnabled) {
+            stdVR_RecenterView();
+        }
+#endif
     }
     else
     {
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_GameplayShow: jkMain_SetVideoMode() FAILED, setting nextState=MAIN\n");
+#endif
         if ( jkGuiRend_thing_five )
             jkGuiRend_thing_four = 1;
         jkSmack_stopTick = 1;
@@ -818,6 +887,51 @@ void jkMain_TitleTick(int a1)
     if ( jkGuiRend_thing_five )
         jkGuiRend_thing_four = 1;
     jkSmack_stopTick = 1;
+
+#ifdef PLATFORM_VR
+    // VR test mode: skip main menu and go directly to gameplay
+    {
+        extern int32_t Main_bVRTest;
+        extern char Main_strEpisode[129];
+        extern char Main_strMap[128+4];
+
+        if (Main_bVRTest && Main_strEpisode[0] && Main_strMap[0]) {
+            extern void VR_Log(const char* fmt, ...);
+            VR_Log("=== VR AUTO-TEST: Skipping menu, loading %s/%s ===\n", Main_strEpisode, Main_strMap);
+
+            // Set up for singleplayer level load
+            jkSmack_gameMode = 0;  // New game mode
+
+            // Build full level filename
+            char levelFile[256];
+            snprintf(levelFile, sizeof(levelFile), "%s", Main_strMap);
+            // Add .jkl if not present
+            if (!strstr(levelFile, ".jkl")) {
+                strcat(levelFile, ".jkl");
+            }
+            _strncpy(jkMain_aLevelJklFname, levelFile, 127);
+            jkMain_aLevelJklFname[127] = 0;
+
+            // Load the episode GOB
+            char gobPath[256];
+            snprintf(gobPath, sizeof(gobPath), "%s.gob", Main_strEpisode);
+            jkRes_LoadGob(gobPath);
+
+            // Load episode info
+            if (!jkEpisode_Load(Main_strEpisode)) {
+                VR_Log("=== VR AUTO-TEST: Failed to load episode %s ===\n", Main_strEpisode);
+                jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
+                return;
+            }
+
+            VR_Log("=== VR AUTO-TEST: Episode loaded, going to gameplay ===\n");
+            jkPlayer_bLoadingSomething = 1;
+            jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY;
+            return;
+        }
+    }
+#endif
+
     jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
 }
 
@@ -988,6 +1102,11 @@ int jkMain_LoadLevelSingleplayer(char *pGobPath, char *pEpisodeName)
     BOOL v2; // esi
     int result; // eax
 
+#ifdef PLATFORM_VR
+    extern void VR_Log(const char* fmt, ...);
+    VR_Log("jkMain_LoadLevelSingleplayer: gob='%s', level='%s'\n", pGobPath, pEpisodeName);
+#endif
+
     _strncpy(jkMain_aLevelJklFname, pEpisodeName, 0x7Fu);
     jkMain_aLevelJklFname[127] = 0;
     jkSmack_gameMode = 0;
@@ -1002,9 +1121,15 @@ int jkMain_LoadLevelSingleplayer(char *pGobPath, char *pEpisodeName)
         jkMain_pEpisodeEnt2 = NULL;
     }
     v2 = jkEpisode_Load(&jkEpisode_mLoad);
+#ifdef PLATFORM_VR
+    VR_Log("jkMain_LoadLevelSingleplayer: jkEpisode_Load returned %d\n", v2);
+#endif
     jkEpisode_idk4(&jkEpisode_mLoad, pEpisodeName);
     if ( v2 )
     {
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_LoadLevelSingleplayer: SUCCESS - setting next state to GAMEPLAY(5)\n");
+#endif
         result = 1;
         jkPlayer_bLoadingSomething = 1;
         if ( jkGuiRend_thing_five )
@@ -1014,6 +1139,9 @@ int jkMain_LoadLevelSingleplayer(char *pGobPath, char *pEpisodeName)
     }
     else
     {
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_LoadLevelSingleplayer: FAILED to load episode\n");
+#endif
         Windows_ErrorMsgboxWide("ERR_CANNOT_LOAD_FILE %s", pGobPath);
         result = 0;
     }
@@ -1617,9 +1745,19 @@ int jkMain_SetVideoMode()
     wchar_t *v3; // [esp-4h] [ebp-10h]
     wchar_t *v4; // [esp-4h] [ebp-10h]
 
+#ifdef PLATFORM_VR
+    extern void VR_Log(const char* fmt, ...);
+    VR_Log("jkMain_SetVideoMode: ENTRY, jkGame_isDDraw=%d\n", jkGame_isDDraw);
+#endif
+
     if ( jkGame_isDDraw )
+    {
+#ifdef PLATFORM_VR
+        VR_Log("jkMain_SetVideoMode: Already in DDraw mode, returning 0\n");
+#endif
         return 0;
-    
+    }
+
     /*if ( !sithNet_isMulti )
     {
         thing_six = 1;
@@ -1724,6 +1862,9 @@ int jkMain_SetVideoMode()
 
     Video_bOpened = 1;
     jkGame_isDDraw = 1;
+#ifdef PLATFORM_VR
+    VR_Log("jkMain_SetVideoMode: SUCCESS, set jkGame_isDDraw=1, returning 1\n");
+#endif
     return 1;
 }
 #endif

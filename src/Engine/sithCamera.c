@@ -895,6 +895,9 @@ void sithCamera_SetVRView(int eye)
     rdMatrix34 vrViewMatrix;
     stdVR_CombineCameraWithEye(&sithCamera_currentCamera->viewMat, eye, &vrViewMatrix);
 
+    // Added: Store the combined matrix for weapon rendering (jkPlayer_DrawPov)
+    stdVR_SetCurrentEyeViewMatrix(&vrViewMatrix);
+
     // Update the rdCamera with the VR view matrix
     rdCamera_SetCurrent(&sithCamera_currentCamera->rdCam);
     rdMatrix34 invertedView;
@@ -909,11 +912,14 @@ void sithCamera_SetVRView(int eye)
     float proj[16];
     stdVR_EyeView* pEye = &stdVR_clientInfo.eyes[eye];
 
-    if (vrViewCallCount <= 20 || vrViewCallCount % 600 == 0) {
-        VR_Log("sithCamera_SetVRView: eye %d - fovL=%.3f fovR=%.3f fovU=%.3f fovD=%.3f\n",
-            eye, pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
+    // Reduced logging - only log first 4 calls (2 frames x 2 eyes)
+    if (vrViewCallCount <= 4) {
+        VR_Log("sithCamera_SetVRView: eye %d - fov(L/R/U/D)=(%.2f/%.2f/%.2f/%.2f) pos=(%.2f,%.2f,%.2f)\n",
+            eye, pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown,
+            vrViewMatrix.scale.x, vrViewMatrix.scale.y, vrViewMatrix.scale.z);
     }
 
+    // Set per-eye frustum tangents for CPU clipping
     rdCamera_SetVRTangents(pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
 
     // Set VR render dimensions for CPU projection (must match actual render target size)
@@ -922,6 +928,13 @@ void sithCamera_SetVRView(int eye)
     stdVR_GetEyeProjectionMatrix44(eye, proj,
         sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zNear : 0.01f,
         sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zFar : 1000.0f);
+
+    // Debug: Log projection matrix for each eye
+    if (vrViewCallCount <= 4) {
+        VR_Log("  Projection eye %d: [0]=%.4f [5]=%.4f [8]=%.4f [9]=%.4f\n",
+            eye, proj[0], proj[5], proj[8], proj[9]);
+    }
+
     rdCamera_SetVRProjection(proj);
 }
 #endif // PLATFORM_VR

@@ -359,7 +359,12 @@ void jkGuiTitle_ShowLoading(char *a1, wchar_t *a2)
 void jkGuiTitle_LoadingFinalize()
 {
 #ifdef QOL_IMPROVEMENTS
+#ifdef PLATFORM_VR
+    extern int32_t Main_bVRTest;
+    int shouldSkip = jkPlayer_bFastMissionText || sithNet_isMulti || !sithWorld_pCurrentWorld || Main_bVRTest;
+#else
     int shouldSkip = jkPlayer_bFastMissionText || sithNet_isMulti || !sithWorld_pCurrentWorld;
+#endif
     if ( jkGuiTitle_whichLoading != 1)
     {
         int selected = -1;

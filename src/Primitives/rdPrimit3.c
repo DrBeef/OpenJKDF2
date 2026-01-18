@@ -14,6 +14,18 @@ void rdPrimit3_ClearFrameCounters()
 
 void rdPrimit3_ClipFace(const rdClipFrustum* NO_ALIAS clipFrustum, rdGeoMode_t geoMode, signed int lightMode, int texMode, rdMeshinfo *idxInfo, rdMeshinfo *mesh_out, rdVector2 *idkIn)
 {
+#ifdef PLATFORM_VR
+    // DEBUG: Count how many times ClipFace is called
+    static int clipFaceCallCount = 0;
+    static int clipFaceFrameCount = 0;
+    clipFaceCallCount++;
+    extern void VR_Log(const char* fmt, ...);
+    extern int stdVR_bEnabled;
+    if (stdVR_bEnabled && (clipFaceCallCount <= 50 || clipFaceCallCount % 1000 == 0)) {
+        VR_Log("rdPrimit3_ClipFace #%d: geoMode=%d, inputVerts=%d\n",
+            clipFaceCallCount, geoMode, idxInfo ? idxInfo->numVertices : -1);
+    }
+#endif
 #ifdef TARGET_TWL
     //rdPrimit3_NoClipFace(geoMode, lightMode, texMode, (rdMeshinfo*)idxInfo, mesh_out, idkIn);
     //return;

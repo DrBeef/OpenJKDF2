@@ -8,6 +8,7 @@
 #include "Platform/VR/stdVR_Input.h"
 #include "Primitives/rdVector.h"
 #include "Primitives/rdMatrix.h"
+#include "Main/jkMain.h"
 #include "stdPlatform.h"
 
 #include <string.h>
@@ -19,9 +20,16 @@ int stdVR_bInitted = 0;
 stdVR_ClientInfo stdVR_clientInfo;
 stdVR_Config stdVR_config;
 
+// Debug mode for shader testing (0=normal, 1=solid, 2=UV, 3=depth, 4=vertex color)
+int std3D_vrDebugMode = 0;
+
 // Frame state tracking
 static int stdVR_bFramePending = 0;  // WaitFrame called but EndFrame not yet
 static int stdVR_bFrameInProgress = 0;  // BeginFrame called but EndFrame not yet
+
+// Added: Current combined camera+eye view matrix (for weapon rendering)
+static rdMatrix34 stdVR_currentEyeViewMat;
+static int stdVR_currentEyeViewMatValid = 0;
 
 // Default configuration
 static void stdVR_InitDefaultConfig(void)
@@ -96,7 +104,15 @@ int stdVR_CreateSession(void* pGLContext)
         return 0;
     }
 
-    return stdVR_OpenXR_CreateSession(pGLContext);
+    int result = stdVR_OpenXR_CreateSession(pGLContext);
+
+    // Auto-recenter view when session starts so player isn't offset from character
+    if (result) {
+        stdPlatform_Printf("stdVR: Session created, recentering view...\n");
+        stdVR_RecenterView();
+    }
+
+    return result;
 }
 
 void stdVR_DestroySession(void)
@@ -147,12 +163,12 @@ int stdVR_WaitFrame(void)
     // If we already have a pending frame that wasn't completed, submit an empty frame
     // This can happen during loading screens or state transitions
     if (stdVR_bFramePending) {
-        if (vrWaitFrameCallCount <= 20 || vrWaitFrameCallCount % 100 == 0) {
+        if (vrWaitFrameCallCount <= 5) {
             VR_Log("stdVR: WaitFrame #%d - previous frame pending, submitting empty\n", vrWaitFrameCallCount);
         }
         stdVR_SubmitEmptyFrame();
         if (stdVR_bFramePending || stdVR_bFrameInProgress) {
-            if (vrWaitFrameCallCount <= 20 || vrWaitFrameCallCount % 100 == 0) {
+            if (vrWaitFrameCallCount <= 5) {
                 VR_Log("stdVR: WaitFrame #%d aborted - frame still pending/in-progress\n", vrWaitFrameCallCount);
             }
             return 0;
@@ -164,7 +180,7 @@ int stdVR_WaitFrame(void)
         stdVR_bFramePending = 1;  // Mark that we need to complete this frame
     }
 
-    if (vrWaitFrameCallCount <= 20 || vrWaitFrameCallCount % 100 == 0) {
+    if (vrWaitFrameCallCount <= 5) {
         VR_Log("stdVR: WaitFrame #%d done, pending=%d\n", vrWaitFrameCallCount, stdVR_bFramePending);
     }
 
@@ -205,15 +221,17 @@ void stdVR_SubmitEmptyFrame(void)
 
     if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning || !stdVR_bFramePending) {
         emptyFrameSkipCount++;
-        if (emptyFrameSkipCount <= 10 || emptyFrameSkipCount % 100 == 0) {
-            VR_Log("stdVR: SubmitEmptyFrame skipped #%d (enabled=%d, running=%d, pending=%d)\n",
-                emptyFrameSkipCount, stdVR_bEnabled, stdVR_clientInfo.bSessionRunning, stdVR_bFramePending);
+        // Only log first skip
+        if (emptyFrameSkipCount == 1) {
+            VR_Log("stdVR: SubmitEmptyFrame skipped (enabled=%d, running=%d, pending=%d)\n",
+                stdVR_bEnabled, stdVR_clientInfo.bSessionRunning, stdVR_bFramePending);
         }
         return;
     }
 
     emptyFrameCount++;
-    if (emptyFrameCount <= 20 || emptyFrameCount % 100 == 0) {
+    // Only log first few empty frames
+    if (emptyFrameCount <= 3) {
         VR_Log("stdVR: Submitting empty frame #%d\n", emptyFrameCount);
     }
 
@@ -290,18 +308,57 @@ void stdVR_KeepAlive(void)
 
 int stdVR_PrepareEyeBuffer(int eye)
 {
+    static int prepareWrapperCount[2] = {0, 0};
+    if (eye >= 0 && eye < 2) prepareWrapperCount[eye]++;
+
     if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        // Only log first block per eye
+        if (prepareWrapperCount[eye >= 0 && eye < 2 ? eye : 0] == 1) {
+            VR_Log("stdVR_PrepareEyeBuffer(%d) BLOCKED: enabled=%d, running=%d\n",
+                eye, stdVR_bEnabled, stdVR_clientInfo.bSessionRunning);
+        }
         return 0;
     }
 
     if (eye < 0 || eye >= STDVR_EYE_COUNT) {
+        VR_Log("stdVR_PrepareEyeBuffer(%d) BLOCKED: eye out of range\n", eye);
         return 0;
     }
 
+    // Only log first 2 calls per eye (one frame)
+    if (prepareWrapperCount[eye] <= 2) {
+        VR_Log("stdVR_PrepareEyeBuffer(%d) #%d\n", eye, prepareWrapperCount[eye]);
+    }
     return stdVR_OpenXR_PrepareEyeBuffer(eye);
 }
 
 int stdVR_FinishEyeBuffer(int eye)
+{
+    static int finishWrapperCount[2] = {0, 0};
+    if (eye >= 0 && eye < 2) finishWrapperCount[eye]++;
+
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        // Only log first block per eye
+        if (finishWrapperCount[eye >= 0 && eye < 2 ? eye : 0] == 1) {
+            VR_Log("stdVR_FinishEyeBuffer(%d) BLOCKED: enabled=%d, running=%d\n",
+                eye, stdVR_bEnabled, stdVR_clientInfo.bSessionRunning);
+        }
+        return 0;
+    }
+
+    if (eye < 0 || eye >= STDVR_EYE_COUNT) {
+        VR_Log("stdVR_FinishEyeBuffer(%d) BLOCKED: eye out of range\n", eye);
+        return 0;
+    }
+
+    // Only log first 2 calls per eye (one frame)
+    if (finishWrapperCount[eye] <= 2) {
+        VR_Log("stdVR_FinishEyeBuffer(%d) #%d\n", eye, finishWrapperCount[eye]);
+    }
+    return stdVR_OpenXR_FinishEyeBuffer(eye);
+}
+
+int stdVR_GetCurrentEyeFBO(int eye)
 {
     if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
         return 0;
@@ -311,7 +368,14 @@ int stdVR_FinishEyeBuffer(int eye)
         return 0;
     }
 
-    return stdVR_OpenXR_FinishEyeBuffer(eye);
+    return stdVR_OpenXR_GetCurrentEyeFBO(eye);
+}
+
+int stdVR_GetCurrentEye(void)
+{
+    // Don't check bEnabled - the OpenXR layer manages the actual state
+    // The extern variable may be set even when the wrapper thinks VR is disabled
+    return stdVR_OpenXR_GetCurrentEye();
 }
 
 void stdVR_UpdateTracking(void)
@@ -485,33 +549,102 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
         worldScale = 1.0f;
     }
 
-    // Get the per-eye view matrix (complete eye pose in VR space)
+    // Reference position: neutral standing position in VR tracking space (converted to JKDF2 coords)
+    // OpenXR: Y-up, -Z forward. JKDF2: Z-up, Y-forward
+    // Conversion: JKDF2.x = XR.x, JKDF2.y = -XR.z, JKDF2.z = XR.y
+    // OpenXR standing height (0, 1.7, 0) becomes JKDF2 (0, 0, 1.7)
+    static const rdVector3 referencePos = { 0.0f, 0.0f, 1.7f };
+
+    // Get the HMD center pose (already converted to JKDF2 coordinates)
+    rdMatrix34 hmdPose;
+    rdMatrix_Copy34(&hmdPose, &stdVR_clientInfo.hmdPoseMatrix);
+
+    // Get the per-eye pose for IPD calculation
     rdMatrix34 eyePose;
     rdMatrix_Copy34(&eyePose, &stdVR_clientInfo.eyes[eye].viewMatrix);
 
-    // Log eye pose before scaling (first few frames only)
-    if (combineCallCount <= 20) {
+    // Calculate HMD position offset from reference (6DOF tracking offset)
+    rdVector3 hmdOffset;
+    hmdOffset.x = (hmdPose.scale.x - referencePos.x) * worldScale;
+    hmdOffset.y = (hmdPose.scale.y - referencePos.y) * worldScale;
+    hmdOffset.z = (hmdPose.scale.z - referencePos.z) * worldScale;
+
+    // Calculate per-eye IPD offset (difference from HMD center)
+    rdVector3 ipdOffset;
+    ipdOffset.x = (eyePose.scale.x - hmdPose.scale.x) * worldScale;
+    ipdOffset.y = (eyePose.scale.y - hmdPose.scale.y) * worldScale;
+    ipdOffset.z = (eyePose.scale.z - hmdPose.scale.z) * worldScale;
+
+    // Log first few calls for debugging
+    if (combineCallCount <= 4) {
         extern void VR_Log(const char* fmt, ...);
-        VR_Log("stdVR_CombineCameraWithEye: eye %d - eyePose.scale=(%f, %f, %f), worldScale=%f\n",
-            eye, eyePose.scale.x, eyePose.scale.y, eyePose.scale.z, worldScale);
+        VR_Log("stdVR_CombineCameraWithEye: eye %d\n", eye);
+        VR_Log("  HMD pos=(%.4f,%.4f,%.4f)\n", hmdPose.scale.x, hmdPose.scale.y, hmdPose.scale.z);
+        VR_Log("  Eye pos=(%.4f,%.4f,%.4f)\n", eyePose.scale.x, eyePose.scale.y, eyePose.scale.z);
+        VR_Log("  IPD offset raw=(%.5f,%.5f,%.5f)\n", ipdOffset.x, ipdOffset.y, ipdOffset.z);
     }
 
-    // Scale VR position by world scale
-    eyePose.scale.x *= worldScale;
-    eyePose.scale.y *= worldScale;
-    eyePose.scale.z *= worldScale;
+    // Build the combined view matrix:
+    // 1. Start with game camera (player's view in game world)
+    // 2. Apply 6DOF head position offset (physical head movement in VR space)
+    // 3. Apply per-eye IPD offset
+    //
+    // Note: For now, we keep the game camera's orientation and only apply position offsets.
+    // This gives 6DOF position tracking while the player's look direction is controlled
+    // by the game's input system. Full orientation integration would require combining
+    // the HMD rotation with the game camera rotation.
 
-    // Apply height offset
-    eyePose.scale.y += stdVR_config.heightOffset;
-
-    // Start with game camera and apply VR eye pose
-    // The game camera gives us the base position/orientation in the game world
-    // The VR eye pose overlays VR tracking on top of that
     rdMatrix34 combined;
-    rdMatrix_Copy34(&combined, pGameCamera);
-    rdMatrix_PreMultiply34(&combined, &eyePose);
+    rdMatrix_Copy34(&combined, pGameCamera);  // Start with game camera orientation + position
+
+    // Transform the offsets from VR tracking space to game world space
+    // The HMD offset is in VR tracking coordinates, we need to rotate it by the body orientation
+    rdVector3 hmdOffsetWorld, ipdOffsetWorld;
+    rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
+    rdMatrix_TransformVector34(&ipdOffsetWorld, &ipdOffset, pGameCamera);
+
+    // Apply position offsets
+    combined.scale.x += hmdOffsetWorld.x + ipdOffsetWorld.x;
+    combined.scale.y += hmdOffsetWorld.y + ipdOffsetWorld.y;
+    combined.scale.z += hmdOffsetWorld.z + ipdOffsetWorld.z;
+
+    // Log transformed offsets and final position
+    if (combineCallCount <= 4) {
+        extern void VR_Log(const char* fmt, ...);
+        VR_Log("  IPD offset transformed=(%.5f,%.5f,%.5f)\n", ipdOffsetWorld.x, ipdOffsetWorld.y, ipdOffsetWorld.z);
+        VR_Log("  Game camera pos=(%.4f,%.4f,%.4f)\n", pGameCamera->scale.x, pGameCamera->scale.y, pGameCamera->scale.z);
+        VR_Log("  Final combined pos=(%.4f,%.4f,%.4f)\n", combined.scale.x, combined.scale.y, combined.scale.z);
+    }
 
     rdMatrix_Copy34(pOut, &combined);
+}
+
+// Added: Set the current eye view matrix (called from sithCamera_SetVRView)
+void stdVR_SetCurrentEyeViewMatrix(const rdMatrix34* pMat)
+{
+    if (pMat) {
+        rdMatrix_Copy34(&stdVR_currentEyeViewMat, pMat);
+        stdVR_currentEyeViewMatValid = 1;
+    } else {
+        stdVR_currentEyeViewMatValid = 0;
+    }
+}
+
+// Added: Get the current combined camera+eye view matrix for this eye
+// Returns 1 if valid, 0 if not (should fall back to base camera)
+int stdVR_GetCurrentEyeViewMatrix(rdMatrix34* pOut)
+{
+    if (!pOut) return 0;
+    if (!stdVR_currentEyeViewMatValid) return 0;
+
+    rdMatrix_Copy34(pOut, &stdVR_currentEyeViewMat);
+    return 1;
+}
+
+// Added: Clear the current eye view matrix (called when not rendering an eye)
+void stdVR_ClearCurrentEyeViewMatrix(void)
+{
+    stdVR_currentEyeViewMatValid = 0;
 }
 
 // Sync jkPlayer VR settings to stdVR_config
@@ -598,20 +731,34 @@ int stdVR_UseScreenLayer(void)
     // Import jkGame_isDDraw from jkGame.c
     // jkGame_isDDraw is 0 for menus/2D mode, 1 for 3D gameplay
     extern int jkGame_isDDraw;
+    extern int jkGuiBuildMulti_bRendering;
+    extern int jkSmack_GetCurrentGuiState(void);
+#ifdef QUAKE_CONSOLE
+    extern int jkQuakeConsole_bOpen;
+#endif
 
-    // Use screen layer when NOT in 3D gameplay mode
-    int shouldUseScreenLayer = (jkGame_isDDraw == 0);
+    // Mirror JKXR-style logic: use screen layer when UI/cinematics/menus are active
+    int guiState = jkSmack_GetCurrentGuiState();
+    int inGameplay = (guiState == JK_GAMEMODE_GAMEPLAY);
+
+    int shouldUseScreenLayer = (jkGame_isDDraw == 0) || !inGameplay || jkGuiBuildMulti_bRendering;
+#ifdef QUAKE_CONSOLE
+    if (jkQuakeConsole_bOpen) {
+        shouldUseScreenLayer = 1;
+    }
+#endif
 
     // Update the client info
     stdVR_clientInfo.bUseScreenLayer = shouldUseScreenLayer;
 
     // Detect transition INTO screen layer mode - snap position/orientation
+    // Only log transitions, not every frame
     if (shouldUseScreenLayer && !stdVR_prevScreenLayerState) {
         stdVR_UpdateScreenLayerSnap();
-        VR_Log("stdVR: Entering screen layer mode (menu)\n");
+        VR_Log("stdVR: Entering screen layer mode\n");
     }
     else if (!shouldUseScreenLayer && stdVR_prevScreenLayerState) {
-        VR_Log("stdVR: Exiting screen layer mode (entering 3D gameplay)\n");
+        VR_Log("stdVR: Exiting screen layer mode (3D gameplay)\n");
     }
 
     stdVR_prevScreenLayerState = shouldUseScreenLayer;
@@ -662,6 +809,115 @@ float stdVR_GetScreenLayerDistance(void)
         return 4.0f;  // Default distance
     }
     return stdVR_clientInfo.screenLayerDistance;
+}
+
+// ============================================================================
+// VR Menu Cursor - Controller-based pointing for menu interaction
+// ============================================================================
+
+// Previous trigger state for edge detection
+static int stdVR_prevMenuTriggerDown = 0;
+
+// Update cursor position from controller angles
+// Uses the right controller (or dominant hand) to aim at the screen
+void stdVR_UpdateMenuCursor(void)
+{
+    // Only active in screen layer mode
+    if (!stdVR_clientInfo.bUseScreenLayer) {
+        stdVR_clientInfo.bMenuCursorActive = 0;
+        stdVR_clientInfo.bMenuTriggerPressed = 0;
+        stdVR_clientInfo.bMenuTriggerReleased = 0;
+        return;
+    }
+
+    stdVR_clientInfo.bMenuCursorActive = 1;
+
+    // Use dominant hand controller for menu pointing
+    int controllerIndex = stdVR_config.dominantHand;
+    stdVR_ControllerState* pController = &stdVR_clientInfo.controllers[controllerIndex];
+
+    // Get controller orientation for pointing
+    // For controller pointing at a virtual screen:
+    // - Roll (Z rotation) controls horizontal cursor position (wrist tilt left/right)
+    // - Pitch (X rotation) controls vertical cursor position (wrist tilt up/down)
+    float controllerRoll, controllerPitch;
+    if (pController->bTracking) {
+        controllerRoll = pController->orientation.z;   // Roll for X
+        controllerPitch = pController->orientation.x;  // Pitch for Y
+    } else {
+        // Fallback to HMD orientation if controller not tracked
+        controllerRoll = stdVR_clientInfo.hmdOrientation.z;
+        controllerPitch = stdVR_clientInfo.hmdOrientation.x;
+    }
+
+    // Convert to normalized cursor coordinates (0.0 - 1.0)
+    // Based on user testing: pitch controls X, roll controls Y
+    float pitchRange = 45.0f;  // Degrees of pitch that spans the screen width
+    float rollRange = 30.0f;   // Degrees of roll that spans the screen height (more sensitive)
+
+    // X: Pitch controls horizontal (negate so tilting left moves cursor left)
+    float cursorX = 0.5f - (controllerPitch / pitchRange) * 0.5f;
+
+    // Y: Roll controls vertical, with offset to account for natural controller hold angle
+    // Adding offset so neutral hold position is closer to screen center
+    // Negate so tilting up moves cursor up
+    float rollOffset = 15.0f;  // Assume controller is naturally tilted ~15 degrees
+    float cursorY = 0.5f - ((controllerRoll - rollOffset) / rollRange) * 0.5f;
+
+    // Clamp to valid range
+    if (cursorX < 0.0f) cursorX = 0.0f;
+    if (cursorX > 1.0f) cursorX = 1.0f;
+    if (cursorY < 0.0f) cursorY = 0.0f;
+    if (cursorY > 1.0f) cursorY = 1.0f;
+
+    stdVR_clientInfo.menuCursorX = cursorX;
+    stdVR_clientInfo.menuCursorY = cursorY;
+
+    // Convert to screen pixel coordinates (assuming 640x480 menu resolution)
+    stdVR_clientInfo.menuCursorScreenX = (int)(cursorX * 640.0f);
+    stdVR_clientInfo.menuCursorScreenY = (int)(cursorY * 480.0f);
+
+    // Handle trigger input for "clicks"
+    // Use the trigger from the same controller
+    int triggerDown = 0;
+    if (controllerIndex == STDVR_CONTROLLER_RIGHT) {
+        triggerDown = (stdVR_clientInfo.triggerRight > 0.5f) ? 1 : 0;
+    } else {
+        triggerDown = (stdVR_clientInfo.triggerLeft > 0.5f) ? 1 : 0;
+    }
+
+    // Edge detection for press/release events
+    stdVR_clientInfo.bMenuTriggerPressed = (triggerDown && !stdVR_prevMenuTriggerDown);
+    stdVR_clientInfo.bMenuTriggerReleased = (!triggerDown && stdVR_prevMenuTriggerDown);
+    stdVR_clientInfo.bMenuTriggerDown = triggerDown;
+
+    stdVR_prevMenuTriggerDown = triggerDown;
+    // Menu cursor logging removed - too verbose for normal operation
+}
+
+// Get cursor screen position
+void stdVR_GetMenuCursorPos(int* pX, int* pY)
+{
+    if (pX) *pX = stdVR_clientInfo.menuCursorScreenX;
+    if (pY) *pY = stdVR_clientInfo.menuCursorScreenY;
+}
+
+// Is cursor active (only in screen layer mode)
+int stdVR_IsMenuCursorActive(void)
+{
+    return stdVR_clientInfo.bMenuCursorActive;
+}
+
+// Was trigger pressed this frame (for mouse down)
+int stdVR_GetMenuTriggerPressed(void)
+{
+    return stdVR_clientInfo.bMenuTriggerPressed;
+}
+
+// Was trigger released this frame (for mouse up/click)
+int stdVR_GetMenuTriggerReleased(void)
+{
+    return stdVR_clientInfo.bMenuTriggerReleased;
 }
 
 #endif // PLATFORM_VR

@@ -9,6 +9,10 @@
 
 #include <math.h>
 
+#ifdef PLATFORM_VR
+#include "SDL2_helper.h"  // For GL headers
+#endif
+
 #ifdef RDCACHE_RENDER_LINES
 static int rdCache_totalLines = 0;
 static rdLine rdCache_aHWLines[1024];
@@ -123,6 +127,26 @@ void rdCache_Flush()
 
     if (!rdCache_numProcFaces)
         return;
+
+#ifdef PLATFORM_VR
+    // DEBUG: Log FBO state when flush happens (this is where actual GL drawing occurs)
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int flushCallCountPerEye[2] = {0, 0};
+        int eye = stdVR_currentEye;
+        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
+            flushCallCountPerEye[eye]++;
+            if (flushCallCountPerEye[eye] <= 10 || flushCallCountPerEye[eye] % 300 == 0) {
+                GLint boundFBO = 0;
+                glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFBO);
+                VR_Log("rdCache_Flush[eye%d] #%d: numProcFaces=%d, boundFBO=%d\n",
+                    eye, flushCallCountPerEye[eye], rdCache_numProcFaces, boundFBO);
+            }
+        }
+    }
+#endif
 
     if ( rdroid_curSortingMethod == 2 )
     {
@@ -1431,6 +1455,18 @@ int rdCache_ProcFaceCompare(rdProcEntry *a, rdProcEntry *b)
 // MOTS altered
 int rdCache_AddProcFace(int a1, unsigned int num_vertices, char flags)
 {
+#ifdef PLATFORM_VR
+    // DEBUG: Track AddProcFace calls (per-eye)
+    extern int stdVR_bEnabled;
+    extern int stdVR_currentEye;
+    extern void VR_Log(const char* fmt, ...);
+    static int addProcFaceCallCountPerEye[2] = {0, 0};
+    int eye = stdVR_currentEye;
+    if (stdVR_bEnabled && eye >= 0 && eye < 2 && addProcFaceCallCountPerEye[eye] < 10) {
+        addProcFaceCallCountPerEye[eye]++;
+        VR_Log("AddProcFace[eye%d]: numVerts=%d, numProcFaces=%d\n", eye, num_vertices, rdCache_numProcFaces);
+    }
+#endif
     int v6; // edx
     size_t current_rend_6c_idx; // eax
     rdProcEntry *procFace; // esi

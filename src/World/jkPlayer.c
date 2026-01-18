@@ -949,7 +949,25 @@ void jkPlayer_DrawPov()
         rdCamera_SetAmbientLight(&sithCamera_currentCamera->rdCam, ambLight);
         rdColormap_SetCurrent(sithCamera_currentCamera->sector->colormap);
 
+        // In VR mode, use the PER-EYE camera matrix for weapon positioning.
+        // This must match the view_matrix used in rdModel3_DrawMesh (which is the inverse of the per-eye matrix).
+        // The weapon's hierarchyNodeMatrices are built with viewMat, then multiplied by view_matrix:
+        //   final = view_matrix * hierarchyNodeMatrices = inverse(per_eye) * per_eye * bone = bone
+        // This correctly positions the weapon in camera space without double-transformation.
+        // We also force matrix rebuild per eye since the per-eye viewMat differs between eyes.
+#ifdef PLATFORM_VR
+        extern int stdVR_bEnabled;
+        if (stdVR_bEnabled && stdVR_GetCurrentEyeViewMatrix(&viewMat)) {
+            // Force weapon model to rebuild hierarchyNodeMatrices for this eye
+            // by invalidating the frame cache. Each eye needs its own matrices
+            // since the per-eye camera position differs.
+            playerThings[playerThingIdx].povModel.frameTrue = 0;
+        } else {
+            rdMatrix_Copy34(&viewMat, &sithCamera_currentCamera->viewMat);
+        }
+#else
         rdMatrix_Copy34(&viewMat, &sithCamera_currentCamera->viewMat);
+#endif
         rdVector_Copy3(&trans, &playerThings[playerThingIdx].actorThing->actorParams.eyeOffset);
         //printf("%f %f %f\n", (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.x, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.y, (flex32_t)playerThings[playerThingIdx].actorThing->actorParams.eyeOffset.z);
 #ifdef QOL_IMPROVEMENTS

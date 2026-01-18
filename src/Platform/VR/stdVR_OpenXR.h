@@ -29,6 +29,8 @@ int stdVR_OpenXR_EndFrameEmpty(void);
 // Per-eye rendering
 int stdVR_OpenXR_PrepareEyeBuffer(int eye);
 int stdVR_OpenXR_FinishEyeBuffer(int eye);
+int stdVR_OpenXR_GetCurrentEyeFBO(int eye);
+int stdVR_OpenXR_GetCurrentEye(void);
 
 // Tracking
 void stdVR_OpenXR_UpdateTracking(void);

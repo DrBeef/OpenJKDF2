@@ -107,6 +107,16 @@ typedef struct stdVR_ClientInfo {
     float screenLayerDistance;      // Distance of screen from player (meters)
     float screenLayerWidth;         // Screen width in meters
     float screenLayerHeight;        // Screen height in meters
+
+    // VR Menu cursor state
+    float menuCursorX;              // Normalized cursor X (0.0 - 1.0)
+    float menuCursorY;              // Normalized cursor Y (0.0 - 1.0)
+    int menuCursorScreenX;          // Screen-space cursor X
+    int menuCursorScreenY;          // Screen-space cursor Y
+    int bMenuCursorActive;          // Is the VR menu cursor active
+    int bMenuTriggerDown;           // Is trigger currently held
+    int bMenuTriggerPressed;        // Was trigger pressed this frame
+    int bMenuTriggerReleased;       // Was trigger released this frame
 } stdVR_ClientInfo;
 
 // VR configuration settings
