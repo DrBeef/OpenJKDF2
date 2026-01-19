@@ -20,9 +20,12 @@ macro(plat_initialize)
     set(TARGET_ANDROID TRUE)
     set(TARGET_ANDROID_ARM64 TRUE)
 
-    list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/lib/glew")
+    # gl4es provides OpenGL to OpenGL ES translation
+    # Include paths will be set up by build_gl4es.cmake
     include_directories(${PROJECT_SOURCE_DIR}/lib/freeglut/include)
-    include_directories(${PROJECT_SOURCE_DIR}/lib/glew/include)
+
+    # Define GL4ES to enable gl4es-specific code paths if needed
+    add_definitions(-DGL4ES)
 
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -std=c11 -fshort-wchar -Werror=implicit-function-declaration -Wno-unused-variable -Wno-parentheses")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fshort-wchar")
@@ -31,6 +34,9 @@ endmacro()
 
 macro(plat_specific_deps)
     #set(SDL2_COMMON_LIBS SDL2main SDL::SDL)
-    set(SDL2_COMMON_LIBS SDL2main SDL::SDL ${SDL_MIXER_DEPS} SDL::Mixer OpenAL::OpenAL)
+    set(SDL2_COMMON_LIBS SDL2main SDL::SDL ${SDL_MIXER_DEPS} SDL::Mixer OpenAL::OpenAL gl4es::gl4es)
+
+    # Add gl4es include directory for GL headers
+    include_directories(${GL4ES_INCLUDE_DIRS})
 endmacro()
 

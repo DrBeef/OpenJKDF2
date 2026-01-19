@@ -30,6 +30,16 @@ message(SDL_VERSION_MAJOR\ ==\ ${SDL_VERSION_MAJOR})
 message(SDL_VERSION_MINOR\ ==\ ${SDL_VERSION_MINOR})
 message(SDL_VERSION_PATCH\ ==\ ${SDL_VERSION_PATCH})
 
+set(SDL_CMAKE_MAKE_PROGRAM_ARG "")
+if(CMAKE_MAKE_PROGRAM)
+    set(SDL_CMAKE_MAKE_PROGRAM_ARG "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}")
+endif()
+
+set(SDL_ANDROID_ABI_ARG "")
+if(ANDROID_ABI)
+    set(SDL_ANDROID_ABI_ARG "-DANDROID_ABI=${ANDROID_ABI}")
+endif()
+
 ExternalProject_Add(
     SDL
     SOURCE_DIR          ${CMAKE_SOURCE_DIR}/lib/SDL
@@ -45,6 +55,8 @@ ExternalProject_Add(
                         -DSDL_TEST:BOOL=FALSE
                         -DSDL_HIDAPI:BOOL=${SDL_HIDAPI}
                         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+                        ${SDL_ANDROID_ABI_ARG}
+                        ${SDL_CMAKE_MAKE_PROGRAM_ARG}
     BUILD_BYPRODUCTS    ${SDL_LIBRARIES}
 )
 

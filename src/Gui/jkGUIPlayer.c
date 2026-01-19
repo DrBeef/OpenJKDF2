@@ -278,6 +278,18 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
                 jkGuiPlayer_menuNewElements[9].bIsVisible = v15 == 0;
                 jkGuiPlayer_menuNewElements[3].wstr = jkGuiPlayer_awTmp_555D28;
                 _memset(jkGuiPlayer_awTmp_555D28, 0, 16 * sizeof(wchar_t));
+#ifdef PLATFORM_VR
+                // VR: Pre-populate with default name since keyboard input is limited
+                jkGuiPlayer_awTmp_555D28[0] = 'V';
+                jkGuiPlayer_awTmp_555D28[1] = 'R';
+                jkGuiPlayer_awTmp_555D28[2] = 'P';
+                jkGuiPlayer_awTmp_555D28[3] = 'l';
+                jkGuiPlayer_awTmp_555D28[4] = 'a';
+                jkGuiPlayer_awTmp_555D28[5] = 'y';
+                jkGuiPlayer_awTmp_555D28[6] = 'e';
+                jkGuiPlayer_awTmp_555D28[7] = 'r';
+                jkGuiPlayer_awTmp_555D28[8] = 0;
+#endif
                 jkGuiPlayer_menuNewElements[3].selectedTextEntry = 16;
                 jkGuiPlayer_menuNewElements[8].unistr = 0;
                 jkGuiPlayer_menuNewElements[5].selectedTextEntry = 0;

@@ -108,6 +108,9 @@ int stdDisplay_GammaCorrect3(int a1);
 int stdDisplay_SetCooperativeLevel(uint32_t a);
 int stdDisplay_DrawAndFlipGdi(uint32_t a);
 void stdDisplay_422A50();
+
+// Scaled copy for VR cutscene rendering - scales src to fill dst maintaining aspect ratio
+int stdDisplay_VBufferCopyScaled(stdVBuffer *dst, stdVBuffer *src, int dstY, int dstH);
 #endif
 
 #endif // _STDDISPLAY_H

@@ -30,6 +30,7 @@ else()
 endif()
 # TODO: Not sure why SDL_mixer doesn't do link these into SDL_mixer.a?
 
+# SDL_MIXER_DEPS is used in BUILD_BYPRODUCTS which requires file paths, not target names
 if(PLAT_MSVC)
     set(SDL_MIXER_DEPS  "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}vorbisfile${CMAKE_STATIC_LIBRARY_SUFFIX}"
                         "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}vorbis${CMAKE_STATIC_LIBRARY_SUFFIX}"
@@ -38,10 +39,10 @@ if(PLAT_MSVC)
                         "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}opus${CMAKE_STATIC_LIBRARY_SUFFIX}"
     )
 elseif(TARGET_ANDROID)
-    set(SDL_MIXER_DEPS  SDL::SDL) # ????
+    # Android uses shared libs, no extra byproducts needed
+    set(SDL_MIXER_DEPS "")
 else()
-    set(SDL_MIXER_DEPS  SDL::SDL
-                        "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}vorbisfile${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    set(SDL_MIXER_DEPS  "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}vorbisfile${CMAKE_STATIC_LIBRARY_SUFFIX}"
                         "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}vorbis${CMAKE_STATIC_LIBRARY_SUFFIX}"
                         "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}ogg${CMAKE_STATIC_LIBRARY_SUFFIX}"
                         "${SDL_MIXER_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}opusfile${CMAKE_STATIC_LIBRARY_SUFFIX}"
@@ -49,10 +50,22 @@ else()
     )
 endif()
 
-if(PLAT_MSVC)
+# On Windows host (including Android builds from Windows), use simpler patch command
+if(CMAKE_HOST_WIN32)
+    # Use git submodule update which works on Windows without Unix tools
     set(SDL_MIXER_PATCH_COMMAND git submodule update --init)
 else()
     set(SDL_MIXER_PATCH_COMMAND cd ${CMAKE_SOURCE_DIR}/lib/SDL_mixer/external/ogg && git apply ${PROJECT_SOURCE_DIR}/lib/ogg_fix.patch && cd ${CMAKE_SOURCE_DIR}/lib/SDL_mixer && chmod +x ${CMAKE_SOURCE_DIR}/lib/SDL_mixer/external/download.sh && ${CMAKE_SOURCE_DIR}/lib/SDL_mixer/external/download.sh || true)
+endif()
+
+set(SDL_MIXER_CMAKE_MAKE_PROGRAM_ARG "")
+if(CMAKE_MAKE_PROGRAM)
+    set(SDL_MIXER_CMAKE_MAKE_PROGRAM_ARG "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}")
+endif()
+
+set(SDL_MIXER_ANDROID_ABI_ARG "")
+if(ANDROID_ABI)
+    set(SDL_MIXER_ANDROID_ABI_ARG "-DANDROID_ABI=${ANDROID_ABI}")
 endif()
 
 ExternalProject_Add(
@@ -83,7 +96,9 @@ ExternalProject_Add(
                         -DSDL2MIXER_OPUS_SHARED:BOOL=FALSE
                         -DSDL2MIXER_WAVPACK:BOOL=FALSE
                         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-                        
+                        ${SDL_MIXER_ANDROID_ABI_ARG}
+                        ${SDL_MIXER_CMAKE_MAKE_PROGRAM_ARG}
+
     CMAKE_CACHE_ARGS
                         -DSDL2_DIR:STRING=${SDL_ROOT}/../
                         -DSDL_DIR:STRING=${SDL_ROOT}/../

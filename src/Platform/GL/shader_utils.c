@@ -52,21 +52,28 @@ void print_log(GLuint object) {
 
 GLuint load_shader_file(const char* filepath, GLenum type)
 {
+    stdPlatform_Printf("std3D: Loading shader file: %s\n", filepath);
     char* shader_contents = stdEmbeddedRes_Load(filepath, NULL);
+    stdPlatform_Printf("std3D: stdEmbeddedRes_Load returned %p\n", (void*)shader_contents);
 
     if (!shader_contents)
     {
     	char errtmp[256];
         snprintf(errtmp, 256, "std3D: Failed to load shader file `%s`!\n", filepath);
+        stdPlatform_Printf("std3D: %s\n", errtmp);
+        // Don't show message box on Android VR - it blocks
+#ifndef TARGET_ANDROID
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Error", errtmp, NULL);
+#endif
         return -1;
     }
-    
+
     stdPlatform_Printf("std3D: Parse shader `%s`\n", filepath);
-    
+
     GLuint ret = create_shader(shader_contents, type);
+    stdPlatform_Printf("std3D: Shader compiled, result=%u\n", ret);
     free(shader_contents);
-    
+
     return ret;
 }
 

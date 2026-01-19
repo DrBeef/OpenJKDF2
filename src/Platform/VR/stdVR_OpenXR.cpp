@@ -15,12 +15,85 @@ extern "C" {
 #ifdef _WIN32
 #define XR_USE_PLATFORM_WIN32
 #define XR_USE_GRAPHICS_API_OPENGL
+#elif defined(__ANDROID__)
+#define XR_USE_PLATFORM_ANDROID
+#define XR_USE_GRAPHICS_API_OPENGL_ES
 #endif
 
-// Include OpenGL headers (glew includes windows.h properly)
+// Include OpenGL headers
+#ifdef __ANDROID__
+#include <EGL/egl.h>
+// Use gl4es which provides standard GL headers translating to GLES
+#include <GL/gl.h>
+#include <GL/glext.h>
+// Ensure GL defines are available
+#ifndef GL_RGBA8
+#define GL_RGBA8 0x8058
+#endif
+#ifndef GL_SRGB8_ALPHA8
+#define GL_SRGB8_ALPHA8 0x8C43
+#endif
+#ifndef GL_DEPTH_COMPONENT24
+#define GL_DEPTH_COMPONENT24 0x81A6
+#endif
+// gl4es exports these functions but doesn't declare them in headers
+extern "C" {
+extern void glGenFramebuffers(GLsizei n, GLuint *framebuffers);
+extern void glDeleteFramebuffers(GLsizei n, const GLuint *framebuffers);
+extern void glBindFramebuffer(GLenum target, GLuint framebuffer);
+extern void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+extern GLenum glCheckFramebufferStatus(GLenum target);
+extern void glGenRenderbuffers(GLsizei n, GLuint *renderbuffers);
+extern void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers);
+extern void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
+extern void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
+extern void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
+extern GLuint glCreateShader(GLenum type);
+extern void glDeleteShader(GLuint shader);
+extern GLboolean glIsShader(GLuint shader);
+extern GLboolean glIsProgram(GLuint program);
+extern void glShaderSource(GLuint shader, GLsizei count, const GLchar *const*string, const GLint *length);
+extern void glCompileShader(GLuint shader);
+extern void glGetShaderiv(GLuint shader, GLenum pname, GLint *params);
+extern void glGetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *infoLog);
+extern GLuint glCreateProgram(void);
+extern void glDeleteProgram(GLuint program);
+extern void glAttachShader(GLuint program, GLuint shader);
+extern void glLinkProgram(GLuint program);
+extern void glGetProgramiv(GLuint program, GLenum pname, GLint *params);
+extern void glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei *length, GLchar *infoLog);
+extern void glUseProgram(GLuint program);
+extern GLint glGetUniformLocation(GLuint program, const GLchar *name);
+extern GLint glGetAttribLocation(GLuint program, const GLchar *name);
+extern void glUniform1i(GLint location, GLint v0);
+extern void glUniform1f(GLint location, GLfloat v0);
+extern void glUniform2f(GLint location, GLfloat v0, GLfloat v1);
+extern void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2);
+extern void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+extern void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
+extern void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
+extern void glEnableVertexAttribArray(GLuint index);
+extern void glDisableVertexAttribArray(GLuint index);
+extern void glGenBuffers(GLsizei n, GLuint *buffers);
+extern void glDeleteBuffers(GLsizei n, const GLuint *buffers);
+extern void glBindBuffer(GLenum target, GLuint buffer);
+extern void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage);
+extern void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void *data);
+extern void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params);
+extern void glGenVertexArrays(GLsizei n, GLuint *arrays);
+extern void glDeleteVertexArrays(GLsizei n, const GLuint *arrays);
+extern void glBindVertexArray(GLuint array);
+extern void glDrawBuffers(GLsizei n, const GLenum *bufs);
+extern void glActiveTexture(GLenum texture);
+extern void glGenerateMipmap(GLenum target);
+extern void glBlendFuncSeparate(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha);
+extern void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
+}
+#else
 #include <GL/glew.h>
 #ifdef _WIN32
 #include <GL/wglew.h>
+#endif
 #endif
 
 #ifndef GL_FRAMEBUFFER_SRGB
@@ -30,6 +103,12 @@ extern "C" {
 #include "stdVR_OpenXR.h"
 #include "stdVR.h"
 #include "stdVR_Types.h"
+
+// JNI header needed for OpenXR Android platform types
+#ifdef __ANDROID__
+#include <jni.h>
+#include <SDL.h>  // For SDL_AndroidGetJNIEnv and SDL_AndroidGetActivity
+#endif
 
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
@@ -115,12 +194,21 @@ static XrSpace xrViewSpace = XR_NULL_HANDLE;
 static XrSessionState xrSessionState = XR_SESSION_STATE_UNKNOWN;
 static bool xrSessionRunning = false;
 
+// Platform-specific swapchain image type
+#ifdef __ANDROID__
+typedef XrSwapchainImageOpenGLESKHR XrSwapchainImageGL;
+#define XR_TYPE_SWAPCHAIN_IMAGE_GL XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR
+#else
+typedef XrSwapchainImageOpenGLKHR XrSwapchainImageGL;
+#define XR_TYPE_SWAPCHAIN_IMAGE_GL XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR
+#endif
+
 // Swapchain state
 static XrSwapchain xrSwapchains[STDVR_EYE_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
-static std::vector<XrSwapchainImageOpenGLKHR> xrSwapchainImages[STDVR_EYE_COUNT];
+static std::vector<XrSwapchainImageGL> xrSwapchainImages[STDVR_EYE_COUNT];
 static uint32_t xrSwapchainImageIndex[STDVR_EYE_COUNT] = { 0, 0 };
 static XrSwapchain xrNullSwapchains[STDVR_EYE_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
-static std::vector<XrSwapchainImageOpenGLKHR> xrNullSwapchainImages[STDVR_EYE_COUNT];
+static std::vector<XrSwapchainImageGL> xrNullSwapchainImages[STDVR_EYE_COUNT];
 static uint32_t xrNullSwapchainImageIndex[STDVR_EYE_COUNT] = { 0, 0 };
 static GLuint vrNullFBO[STDVR_EYE_COUNT] = { 0, 0 };
 static XrViewConfigurationView xrConfigViews[STDVR_EYE_COUNT];
@@ -128,7 +216,7 @@ static XrView xrViews[STDVR_EYE_COUNT];
 
 // HUD swapchain state (dedicated quad layer for in-game HUD)
 static XrSwapchain xrHudSwapchain = XR_NULL_HANDLE;
-static std::vector<XrSwapchainImageOpenGLKHR> xrHudSwapchainImages;
+static std::vector<XrSwapchainImageGL> xrHudSwapchainImages;
 static uint32_t xrHudSwapchainImageIndex = 0;
 static GLuint vrHudFBO = 0;
 static GLuint vrHudDepthTex = 0;
@@ -140,6 +228,13 @@ static bool vrHudFrameStarted = false;
 
 static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* label, int eye)
 {
+    static int waitSwapchainCount = 0;
+    waitSwapchainCount++;
+    if (waitSwapchainCount <= 20 || waitSwapchainCount % 100 == 0) {
+        stdPlatform_Printf("stdVR_OpenXR_WaitSwapchainImage(%s, eye=%d) ENTRY #%d\n",
+            label ? label : "swapchain", eye, waitSwapchainCount);
+    }
+
     XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = 1000000000; // 1 second
 
@@ -147,7 +242,12 @@ static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* la
     int retryCount = 0;
     while (result == XR_TIMEOUT_EXPIRED) {
         retryCount++;
+        stdPlatform_Printf("stdVR_OpenXR_WaitSwapchainImage: TIMEOUT, retry #%d\n", retryCount);
         result = xrWaitSwapchainImage(swapchain, &waitInfo);
+    }
+
+    if (waitSwapchainCount <= 20 || waitSwapchainCount % 100 == 0) {
+        stdPlatform_Printf("stdVR_OpenXR_WaitSwapchainImage: result=%d\n", result);
     }
 
     if (XR_FAILED(result)) {
@@ -393,6 +493,47 @@ extern "C" int stdVR_OpenXR_Init(void)
     VR_Log("stdVR_OpenXR: Initializing OpenXR...\n");
     VR_Log("stdVR_OpenXR: Build timestamp: %s %s\n", __DATE__, __TIME__);
 
+#ifdef __ANDROID__
+    // On Android, we MUST initialize the OpenXR loader with the Android context
+    // before calling any other OpenXR functions
+    VR_Log("stdVR_OpenXR: Initializing OpenXR loader for Android...\n");
+
+    // Get the function pointer for xrInitializeLoaderKHR
+    PFN_xrInitializeLoaderKHR initLoaderFunc = nullptr;
+    XrResult loaderResult = xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR",
+                                             (PFN_xrVoidFunction*)&initLoaderFunc);
+
+    if (XR_SUCCEEDED(loaderResult) && initLoaderFunc != nullptr) {
+        // Get JavaVM and Activity from SDL
+        // SDL_AndroidGetJNIEnv returns JNIEnv*, we need to get JavaVM from it
+        JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+        JavaVM* javaVM = nullptr;
+        if (env != nullptr) {
+            env->GetJavaVM(&javaVM);
+        }
+        jobject activity = (jobject)SDL_AndroidGetActivity();
+
+        if (javaVM != nullptr && activity != nullptr) {
+            XrLoaderInitInfoAndroidKHR loaderInitInfo = { XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR };
+            loaderInitInfo.applicationVM = javaVM;
+            loaderInitInfo.applicationContext = activity;
+
+            loaderResult = initLoaderFunc((XrLoaderInitInfoBaseHeaderKHR*)&loaderInitInfo);
+            if (XR_FAILED(loaderResult)) {
+                VR_Log("stdVR_OpenXR: Failed to initialize OpenXR loader: %d\n", loaderResult);
+                return 0;
+            }
+            VR_Log("stdVR_OpenXR: OpenXR loader initialized successfully\n");
+        } else {
+            VR_Log("stdVR_OpenXR: Failed to get Android context (JavaVM=%p, Activity=%p)\n", javaVM, activity);
+            return 0;
+        }
+    } else {
+        VR_Log("stdVR_OpenXR: xrInitializeLoaderKHR not available (result=%d)\n", loaderResult);
+        // Continue anyway - some runtimes may not require this
+    }
+#endif
+
     // Get available extensions
     uint32_t extensionCount = 0;
     xrEnumerateInstanceExtensionProperties(nullptr, 0, &extensionCount, nullptr);
@@ -400,7 +541,13 @@ extern "C" int stdVR_OpenXR_Init(void)
     std::vector<XrExtensionProperties> extensions(extensionCount, { XR_TYPE_EXTENSION_PROPERTIES });
     xrEnumerateInstanceExtensionProperties(nullptr, extensionCount, &extensionCount, extensions.data());
 
-    // Check for OpenGL extension
+    // Check for OpenGL/OpenGL ES extension (platform-specific)
+#ifdef __ANDROID__
+    const char* requiredGfxExtension = XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME;
+#else
+    const char* requiredGfxExtension = XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
+#endif
+
     bool hasOpenGL = false;
     VR_Log("stdVR_OpenXR: Available extensions:\n");
     for (const auto& ext : extensions) {
@@ -408,25 +555,32 @@ extern "C" int stdVR_OpenXR_Init(void)
         if (strstr(ext.extensionName, "enable") || strstr(ext.extensionName, "graphics")) {
             stdPlatform_Printf("  - %s\n", ext.extensionName);
         }
-        if (strcmp(ext.extensionName, XR_KHR_OPENGL_ENABLE_EXTENSION_NAME) == 0) {
+        if (strcmp(ext.extensionName, requiredGfxExtension) == 0) {
             hasOpenGL = true;
         }
     }
 
     if (!hasOpenGL) {
-        VR_Log("stdVR_OpenXR: ERROR - %s not supported by this runtime\n", XR_KHR_OPENGL_ENABLE_EXTENSION_NAME);
+        VR_Log("stdVR_OpenXR: ERROR - %s not supported by this runtime\n", requiredGfxExtension);
+#ifdef __ANDROID__
+        VR_Log("stdVR_OpenXR: OpenJKDF2 VR requires an OpenXR runtime with OpenGL ES support.\n");
+        VR_Log("stdVR_OpenXR: Compatible runtimes:\n");
+        stdPlatform_Printf("  - Meta Quest runtime\n");
+        stdPlatform_Printf("  - Pico runtime\n");
+#else
         VR_Log("stdVR_OpenXR: OpenJKDF2 VR requires an OpenXR runtime with OpenGL support.\n");
         VR_Log("stdVR_OpenXR: Compatible runtimes:\n");
         stdPlatform_Printf("  - SteamVR (recommended)\n");
         stdPlatform_Printf("  - Oculus runtime (with actual headset)\n");
         stdPlatform_Printf("  - Monado\n");
         VR_Log("stdVR_OpenXR: Note: Meta XR Simulator does not support OpenGL.\n");
+#endif
         return 0;
     }
 
     // Create instance
     const char* enabledExtensions[] = {
-        XR_KHR_OPENGL_ENABLE_EXTENSION_NAME
+        requiredGfxExtension
     };
 
     XrInstanceCreateInfo createInfo = { XR_TYPE_INSTANCE_CREATE_INFO };
@@ -759,7 +913,24 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
 
     VR_Log("stdVR_OpenXR: Creating session...\n");
 
-    // Check OpenGL requirements
+    // Check OpenGL/OpenGL ES requirements
+#ifdef __ANDROID__
+    XrGraphicsRequirementsOpenGLESKHR glReqs = { XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR };
+    PFN_xrGetOpenGLESGraphicsRequirementsKHR xrGetOpenGLESGraphicsRequirementsKHR = nullptr;
+    xrGetInstanceProcAddr(xrInstance, "xrGetOpenGLESGraphicsRequirementsKHR", (PFN_xrVoidFunction*)&xrGetOpenGLESGraphicsRequirementsKHR);
+    if (xrGetOpenGLESGraphicsRequirementsKHR) {
+        XrResult reqResult = xrGetOpenGLESGraphicsRequirementsKHR(xrInstance, xrSystemId, &glReqs);
+        if (XR_SUCCEEDED(reqResult)) {
+            VR_Log("stdVR_OpenXR: GLES requirements - min version: %d.%d.%d, max version: %d.%d.%d\n",
+                XR_VERSION_MAJOR(glReqs.minApiVersionSupported),
+                XR_VERSION_MINOR(glReqs.minApiVersionSupported),
+                XR_VERSION_PATCH(glReqs.minApiVersionSupported),
+                XR_VERSION_MAJOR(glReqs.maxApiVersionSupported),
+                XR_VERSION_MINOR(glReqs.maxApiVersionSupported),
+                XR_VERSION_PATCH(glReqs.maxApiVersionSupported));
+        }
+    }
+#else
     XrGraphicsRequirementsOpenGLKHR glReqs = { XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR };
     PFN_xrGetOpenGLGraphicsRequirementsKHR xrGetOpenGLGraphicsRequirementsKHR = nullptr;
     xrGetInstanceProcAddr(xrInstance, "xrGetOpenGLGraphicsRequirementsKHR", (PFN_xrVoidFunction*)&xrGetOpenGLGraphicsRequirementsKHR);
@@ -775,15 +946,26 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
                 XR_VERSION_PATCH(glReqs.maxApiVersionSupported));
         }
     }
+#endif
 
-    // Create session with OpenGL binding
+    // Create session with graphics binding
+    XrSessionCreateInfo sessionInfo = { XR_TYPE_SESSION_CREATE_INFO };
+    sessionInfo.systemId = xrSystemId;
+
+#ifdef __ANDROID__
+    // Android: Use OpenGL ES binding with EGL
+    XrGraphicsBindingOpenGLESAndroidKHR glBinding = { XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR };
+    glBinding.display = eglGetCurrentDisplay();
+    glBinding.config = (EGLConfig)0;  // Not needed for most runtimes
+    glBinding.context = eglGetCurrentContext();
+    sessionInfo.next = &glBinding;
+#else
+    // Windows: Use OpenGL binding with WGL
     XrGraphicsBindingOpenGLWin32KHR glBinding = { XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR };
     glBinding.hDC = wglGetCurrentDC();
     glBinding.hGLRC = (HGLRC)pGLContext;
-
-    XrSessionCreateInfo sessionInfo = { XR_TYPE_SESSION_CREATE_INFO };
     sessionInfo.next = &glBinding;
-    sessionInfo.systemId = xrSystemId;
+#endif
 
     XrResult sessionResult = xrCreateSession(xrInstance, &sessionInfo, &xrSession);
     if (XR_FAILED(sessionResult)) {
@@ -862,7 +1044,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
             // Get swapchain images
             uint32_t imageCount = 0;
             xrEnumerateSwapchainImages(xrSwapchains[eye], 0, &imageCount, nullptr);
-            xrSwapchainImages[eye].resize(imageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+            xrSwapchainImages[eye].resize(imageCount, { XR_TYPE_SWAPCHAIN_IMAGE_GL });
             xrEnumerateSwapchainImages(xrSwapchains[eye], imageCount, &imageCount, (XrSwapchainImageBaseHeader*)xrSwapchainImages[eye].data());
 
             // Create a null swapchain per-eye for screen-layer projection
@@ -874,7 +1056,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
 
             uint32_t nullImageCount = 0;
             xrEnumerateSwapchainImages(xrNullSwapchains[eye], 0, &nullImageCount, nullptr);
-            xrNullSwapchainImages[eye].resize(nullImageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+            xrNullSwapchainImages[eye].resize(nullImageCount, { XR_TYPE_SWAPCHAIN_IMAGE_GL });
             xrEnumerateSwapchainImages(xrNullSwapchains[eye], nullImageCount, &nullImageCount, (XrSwapchainImageBaseHeader*)xrNullSwapchainImages[eye].data());
         }
     }
@@ -947,7 +1129,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         } else {
             uint32_t hudImageCount = 0;
             xrEnumerateSwapchainImages(xrHudSwapchain, 0, &hudImageCount, nullptr);
-            xrHudSwapchainImages.resize(hudImageCount, { XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+            xrHudSwapchainImages.resize(hudImageCount, { XR_TYPE_SWAPCHAIN_IMAGE_GL });
             xrEnumerateSwapchainImages(xrHudSwapchain, hudImageCount, &hudImageCount,
                 (XrSwapchainImageBaseHeader*)xrHudSwapchainImages.data());
 
@@ -1113,11 +1295,14 @@ static void HandleSessionStateChange(XrSessionState newState)
 {
     VR_Log("stdVR_OpenXR: Session state change: %s -> %s\n",
         SessionStateToString(xrSessionState), SessionStateToString(newState));
+    stdPlatform_Printf("stdVR_OpenXR: Session state change: %s -> %s\n",
+        SessionStateToString(xrSessionState), SessionStateToString(newState));
     xrSessionState = newState;
 
     switch (newState) {
         case XR_SESSION_STATE_READY: {
             VR_Log("stdVR_OpenXR: Calling xrBeginSession...\n");
+            stdPlatform_Printf("stdVR_OpenXR: Calling xrBeginSession...\n");
             XrSessionBeginInfo beginInfo = { XR_TYPE_SESSION_BEGIN_INFO };
             beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
             XrResult result = xrBeginSession(xrSession, &beginInfo);
@@ -1125,8 +1310,10 @@ static void HandleSessionStateChange(XrSessionState newState)
                 xrSessionRunning = true;
                 stdVR_clientInfo.bSessionRunning = 1;
                 VR_Log("stdVR_OpenXR: Session started successfully! VR rendering active.\n");
+                stdPlatform_Printf("stdVR_OpenXR: xrBeginSession succeeded! bSessionRunning=1\n");
             } else {
                 VR_Log("stdVR_OpenXR: xrBeginSession failed with error %d\n", result);
+                stdPlatform_Printf("stdVR_OpenXR: xrBeginSession FAILED with error %d\n", result);
             }
             break;
         }
@@ -1266,7 +1453,18 @@ static XrQuaternionf QuaternionFromAxisAngle(const XrVector3f& axis, float angle
 
 extern "C" int stdVR_OpenXR_EndFrame(void)
 {
+    static int endFrameCount = 0;
+    endFrameCount++;
+    if (endFrameCount <= 20 || endFrameCount % 100 == 0) {
+        stdPlatform_Printf("stdVR_OpenXR_EndFrame ENTRY #%d: running=%d, inProgress=%d\n",
+            endFrameCount, xrSessionRunning, xrFrameInProgress);
+    }
+
     if (!xrSessionRunning || !xrFrameInProgress) {
+        if (endFrameCount <= 20) {
+            stdPlatform_Printf("stdVR_OpenXR_EndFrame: early exit (running=%d, inProgress=%d)\n",
+                xrSessionRunning, xrFrameInProgress);
+        }
         return 0;
     }
 
@@ -1453,9 +1651,18 @@ extern "C" int stdVR_OpenXR_EndFrameEmpty(void)
 
 extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
 {
+    static int prepareEntryCount = 0;
+    prepareEntryCount++;
+    if (prepareEntryCount <= 20 || prepareEntryCount % 100 == 0) {
+        stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d) ENTRY #%d\n", eye, prepareEntryCount);
+    }
+
     if (!xrSessionRunning || eye < 0 || eye >= STDVR_EYE_COUNT) {
         if (eye >= 0 && eye < STDVR_EYE_COUNT) {
             vrCurrentFBO[eye] = 0;
+        }
+        if (prepareEntryCount <= 20) {
+            stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d) early exit: running=%d\n", eye, xrSessionRunning);
         }
         return 0;
     }
@@ -1463,6 +1670,9 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     // Track which eye is being rendered (set early for debug logging)
     stdVR_currentEye = eye;
 
+    if (prepareEntryCount <= 20) {
+        stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): calling xrAcquireSwapchainImage\n", eye);
+    }
     bool swapchainAcquired = false;
     XrSwapchainImageAcquireInfo acquireInfo = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
     XrResult result = xrAcquireSwapchainImage(xrSwapchains[eye], &acquireInfo, &xrSwapchainImageIndex[eye]);
@@ -1472,12 +1682,21 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
         return 0;
     }
     swapchainAcquired = true;
+    if (prepareEntryCount <= 20) {
+        stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): xrAcquireSwapchainImage OK, calling WaitSwapchainImage\n", eye);
+    }
 
     if (!stdVR_OpenXR_WaitSwapchainImage(xrSwapchains[eye], "main", eye)) {
         if (swapchainAcquired) {
             stdVR_OpenXR_ReleaseSwapchainImage(eye);
         }
+        if (prepareEntryCount <= 20) {
+            stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): WaitSwapchainImage FAILED\n", eye);
+        }
         return 0;
+    }
+    if (prepareEntryCount <= 20) {
+        stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): WaitSwapchainImage OK\n", eye);
     }
 
     // OPTIMIZATION: Track state manually instead of GPU queries (avoids pipeline stalls)
@@ -1520,8 +1739,13 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     static int prepareLogCount = 0;
     if (++prepareLogCount <= 30 || prepareLogCount % 300 == 0) {
         // Check current GL context
+#ifdef __ANDROID__
+        void* currentRC = eglGetCurrentContext();
+        void* currentDC = eglGetCurrentDisplay();
+#else
         void* currentRC = wglGetCurrentContext();
         void* currentDC = wglGetCurrentDC();
+#endif
         VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) idx=%u tex=%u fbo=%u swapchain=%llu RC=%p DC=%p\n",
                eye, imageIdx, texture, fbo, (unsigned long long)xrSwapchains[eye], currentRC, currentDC);
     }

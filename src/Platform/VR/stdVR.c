@@ -15,7 +15,7 @@
 #include <math.h>
 
 // For debug drawing
-#include <GL/glew.h>
+#include "SDL2_helper.h"
 
 // Global VR state
 int stdVR_bEnabled = 0;
@@ -181,10 +181,19 @@ int stdVR_WaitFrame(void)
 
     vrWaitFrameCallCount++;
 
+    // Debug: Log every 100 frames or first 10
+    if (vrWaitFrameCallCount <= 10 || vrWaitFrameCallCount % 100 == 0) {
+        stdPlatform_Printf("stdVR_WaitFrame #%d: enabled=%d, sessionRunning=%d\n",
+            vrWaitFrameCallCount, stdVR_bEnabled, stdVR_clientInfo.bSessionRunning);
+    }
+
     // Always poll events to allow session state transitions
     stdVR_OpenXR_PollEvents();
 
     if (!stdVR_clientInfo.bSessionRunning) {
+        if (vrWaitFrameCallCount <= 10) {
+            stdPlatform_Printf("stdVR_WaitFrame: session not running, returning 0\n");
+        }
         return 0;
     }
 
@@ -1173,6 +1182,7 @@ void stdVR_DrawDebugControllerAxes(int hand)
     float uz = ctrlWorld.uvec.z * axisLen;
 
     // Draw axes using deprecated immediate mode (simple debug viz)
+    // gl4es translates these to GLES on Android
     glBegin(GL_LINES);
     // X axis - Red
     glColor3f(1.0f, 0.0f, 0.0f);
@@ -1200,6 +1210,8 @@ void stdVR_SyncConfigFromJkPlayer(void)
     // Import from jkPlayer.c
     extern int jkPlayer_vrEnabled;
     extern int jkPlayer_vrSnapTurnAngle;
+
+
     extern int jkPlayer_vrSmoothTurnSpeed;
     extern float jkPlayer_vrWorldScale;
     extern float jkPlayer_vrHeightOffset;

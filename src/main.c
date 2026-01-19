@@ -1,6 +1,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef TARGET_ANDROID
+// SDL_main.h provides the SDL_main macro that renames main to SDL_main
+// and ensures proper symbol export for Android shared library loading
+#include <SDL.h>
+#endif
+
 #include "hook.h"
 #include "jk.h"
 #include "types.h"

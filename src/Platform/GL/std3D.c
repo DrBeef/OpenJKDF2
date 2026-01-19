@@ -511,24 +511,36 @@ int init_resources()
 
     memset(std3D_aUITextures, 0, sizeof(std3D_aUITextures));
 
+    stdPlatform_Printf("std3D: Getting current FBO binding...\n");
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &std3D_windowFbo);
 
     int32_t tex_w = Window_xSize;
     int32_t tex_h = Window_ySize;
+    stdPlatform_Printf("std3D: Generating framebuffers %dx%d...\n", tex_w, tex_h);
 
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[0]);
+    stdPlatform_Printf("std3D: Framebuffer 0 done\n");
     std3D_generateFramebuffer(tex_w, tex_h, &std3D_framebuffers[1]);
+    stdPlatform_Printf("std3D: Framebuffer 1 done\n");
 
     std3D_activeFb = 1;
     std3D_pFb = &std3D_framebuffers[0];
-    
-    if ((programDefault = std3D_loadProgram("shaders/default")) == 0) return false;
-    if ((programMenu = std3D_loadProgram("shaders/menu")) == 0) return false;
-    if (!std3D_loadSimpleTexProgram("shaders/ui", &std3D_uiProgram)) return false;
-    if (!std3D_loadSimpleTexProgram("shaders/texfbo", &std3D_texFboStage)) return false;
-    if (!std3D_loadSimpleTexProgram("shaders/blur", &std3D_blurStage)) return false;
-    if (!std3D_loadSimpleTexProgram("shaders/ssao", &std3D_ssaoStage)) return false;
-    if (!std3D_loadSimpleTexProgram("shaders/ssao_mix", &std3D_ssaoMixStage)) return false;
+
+    stdPlatform_Printf("std3D: Loading shader 'default'...\n");
+    if ((programDefault = std3D_loadProgram("shaders/default")) == 0) { stdPlatform_Printf("std3D: FAILED to load default shader\n"); return false; }
+    stdPlatform_Printf("std3D: Loading shader 'menu'...\n");
+    if ((programMenu = std3D_loadProgram("shaders/menu")) == 0) { stdPlatform_Printf("std3D: FAILED to load menu shader\n"); return false; }
+    stdPlatform_Printf("std3D: Loading shader 'ui'...\n");
+    if (!std3D_loadSimpleTexProgram("shaders/ui", &std3D_uiProgram)) { stdPlatform_Printf("std3D: FAILED to load ui shader\n"); return false; }
+    stdPlatform_Printf("std3D: Loading shader 'texfbo'...\n");
+    if (!std3D_loadSimpleTexProgram("shaders/texfbo", &std3D_texFboStage)) { stdPlatform_Printf("std3D: FAILED to load texfbo shader\n"); return false; }
+    stdPlatform_Printf("std3D: Loading shader 'blur'...\n");
+    if (!std3D_loadSimpleTexProgram("shaders/blur", &std3D_blurStage)) { stdPlatform_Printf("std3D: FAILED to load blur shader\n"); return false; }
+    stdPlatform_Printf("std3D: Loading shader 'ssao'...\n");
+    if (!std3D_loadSimpleTexProgram("shaders/ssao", &std3D_ssaoStage)) { stdPlatform_Printf("std3D: FAILED to load ssao shader\n"); return false; }
+    stdPlatform_Printf("std3D: Loading shader 'ssao_mix'...\n");
+    if (!std3D_loadSimpleTexProgram("shaders/ssao_mix", &std3D_ssaoMixStage)) { stdPlatform_Printf("std3D: FAILED to load ssao_mix shader\n"); return false; }
+    stdPlatform_Printf("std3D: All shaders loaded!\n");
 
     // Attributes/uniforms
     attribute_coord3d = std3D_tryFindAttribute(programDefault, "coord3d");
@@ -1202,6 +1214,14 @@ void std3D_DrawMenu()
     double fake_windowW = (double)Window_xSize;
     double fake_windowH = (double)Window_ySize;
 
+#ifdef PLATFORM_VR
+    // In VR mode, use VR target dimensions for cutscene scaling calculations
+    if (std3D_vrTargetActive && std3D_vrTargetWidth > 0 && std3D_vrTargetHeight > 0) {
+        fake_windowW = (double)targetWidth;
+        fake_windowH = (double)targetHeight;
+    }
+#endif
+
     if (!jkGame_isDDraw && !jkGuiBuildMulti_bRendering && !jkCutscene_isRendering)
     {
         //menu_w = 640.0;
@@ -1367,8 +1387,8 @@ void std3D_DrawMenu()
             upscale2 = upscale;
         }
 
-        float shift_y = ((double)Window_ySize - fake_windowH) / 2.0;
-        float shift_x = ((double)Window_xSize - fake_windowW) / 2.0;
+        float shift_y = ((double)targetHeight - fake_windowH) / 2.0;
+        float shift_x = ((double)targetWidth - fake_windowW) / 2.0;
 
         float sub_width = 640*upscale2;
         float sub_x = (fake_windowW - sub_width) / 2.0;
@@ -3159,6 +3179,8 @@ static int std3D_ShouldLogVRFrame(int frame)
 
 void std3D_DebugLogGLState(const char* tag, int eye, int frame)
 {
+#ifndef TARGET_ANDROID
+    // GL_FRAMEBUFFER_SRGB and GL_DRAW_BUFFER are desktop GL features not available in GLES
     extern int stdVR_bEnabled;
     extern void VR_Log(const char* fmt, ...);
     if (!stdVR_bEnabled || !std3D_ShouldLogVRFrame(frame)) {
@@ -3191,6 +3213,11 @@ void std3D_DebugLogGLState(const char* tag, int eye, int frame)
         scissorEnabled ? 1 : 0,
         colorMask[0] ? 1 : 0, colorMask[1] ? 1 : 0, colorMask[2] ? 1 : 0, colorMask[3] ? 1 : 0,
         depthMask ? 1 : 0, blendEnabled ? 1 : 0, srgbEnabled ? 1 : 0);
+#else
+    (void)tag;
+    (void)eye;
+    (void)frame;
+#endif
 }
 
 void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame)

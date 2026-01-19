@@ -6,6 +6,10 @@
 #include "Win95/Window.h"
 #include "General/stdColor.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 void stdDisplay_SetGammaTable(int len, flex_d_t *table)
 {
     stdDisplay_gammaTableLen = len;
@@ -65,17 +69,30 @@ int stdDisplay_SetMode(unsigned int modeIdx, const void *palette, int paged)
     uint32_t newW = Window_xSize;
     uint32_t newH = Window_ySize;
 
+#ifdef PLATFORM_VR
+    // In VR mode, use VR render dimensions for menu buffer instead of SDL window size
+    int vrWidth = 0, vrHeight = 0;
+    stdVR_GetRecommendedRenderSize(&vrWidth, &vrHeight);
+    if (stdVR_bEnabled && vrWidth > 0 && vrHeight > 0) {
+        newW = vrWidth;
+        newH = vrHeight;
+        stdPlatform_Printf("stdDisplay: Using VR render size %dx%d for menu buffer\n", newW, newH);
+    }
+    else
+#endif
     //if (jkGame_isDDraw)
     {
         newW = (uint32_t)((flex_t)Window_xSize * ((480.0*2.0)/Window_ySize));
         newH = 480*2;
     }
 
+#ifndef PLATFORM_VR
     if (newW > Window_xSize)
     {
         newW = Window_xSize;
         newH = Window_ySize;
     }
+#endif
 
     if (newW < 640)
         newW = 640;
@@ -194,8 +211,14 @@ int stdDisplay_ClearRect(stdVBuffer *buf, int fillColor, rdRect *rect)
 
 
 
+static int flipCallCount = 0;
+
 int stdDisplay_DDrawGdiSurfaceFlip()
 {
+    flipCallCount++;
+    if (flipCallCount <= 10 || flipCallCount % 100 == 0) {
+        stdPlatform_Printf("stdDisplay_DDrawGdiSurfaceFlip #%d\n", flipCallCount);
+    }
     Window_SdlUpdate();
     return 1;
 }
@@ -501,6 +524,55 @@ int stdDisplay_GammaCorrect3(int a1)
 int stdDisplay_SetCooperativeLevel(uint32_t a){return 0;}
 int stdDisplay_DrawAndFlipGdi(uint32_t a){return 0;}
 void stdDisplay_422A50(){}
+
+int stdDisplay_VBufferCopyScaled(stdVBuffer *dst, stdVBuffer *src, int dstY, int dstH)
+{
+    if (!dst || !src) return 0;
+
+    uint32_t srcW = src->format.width;
+    uint32_t srcH = src->format.height;
+    uint32_t dstW = dst->format.width;
+
+    if (srcW == 0 || srcH == 0 || dstW == 0 || dstH == 0) return 0;
+
+    uint8_t* srcPixels = (uint8_t*)src->sdlSurface->pixels;
+    uint8_t* dstPixels = (uint8_t*)dst->sdlSurface->pixels;
+    uint32_t srcStride = src->format.width_in_bytes;
+    uint32_t dstStride = dst->format.width_in_bytes;
+
+    // Scale video to fill destination width, maintaining aspect ratio
+    // dstH is the height region we're allowed to draw into
+    float scaleX = (float)dstW / (float)srcW;
+    float scaleY = (float)dstH / (float)srcH;
+    float scale = (scaleX < scaleY) ? scaleX : scaleY; // Use smaller to maintain aspect
+
+    int scaledW = (int)(srcW * scale);
+    int scaledH = (int)(srcH * scale);
+
+    // Center horizontally, use dstY for vertical offset
+    int offsetX = (dstW - scaledW) / 2;
+    int offsetY = dstY;
+
+    // Bilinear-ish scaling (using nearest neighbor for speed)
+    for (int y = 0; y < scaledH; y++) {
+        int srcY = (int)((float)y / scale);
+        if (srcY >= (int)srcH) srcY = srcH - 1;
+
+        for (int x = 0; x < scaledW; x++) {
+            int srcX = (int)((float)x / scale);
+            if (srcX >= (int)srcW) srcX = srcW - 1;
+
+            int dstX = offsetX + x;
+            int dstYPos = offsetY + y;
+
+            if (dstX >= 0 && dstX < (int)dstW && dstYPos >= 0 && dstYPos < (int)dst->format.height) {
+                dstPixels[dstX + dstYPos * dstStride] = srcPixels[srcX + srcY * srcStride];
+            }
+        }
+    }
+
+    return 1;
+}
 #endif
 
 void stdDisplay_GammaCorrect(const void *pPal)

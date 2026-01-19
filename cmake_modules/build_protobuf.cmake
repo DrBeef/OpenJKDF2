@@ -106,6 +106,11 @@ if(PROTOBUF_BUILD_PROTOC_BINARIES)
     )
 endif()
 
+set(PROTOBUF_CMAKE_MAKE_PROGRAM_ARG "")
+if(CMAKE_MAKE_PROGRAM)
+    set(PROTOBUF_CMAKE_MAKE_PROGRAM_ARG "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}")
+endif()
+
 ExternalProject_Add(
     PROTOBUF
     SOURCE_DIR             ${CMAKE_SOURCE_DIR}/lib/protobuf
@@ -126,6 +131,7 @@ ExternalProject_Add(
                            -Dprotobuf_BUILD_PROTOC_BINARIES:BOOL=${PROTOBUF_BUILD_PROTOC_BINARIES}
                            -Dprotobuf_DISABLE_RTTI:BOOL=TRUE
                            -DZLIB_ROOT:PATH=${ZLIB_ROOT}
+                           ${PROTOBUF_CMAKE_MAKE_PROGRAM_ARG}
     DEPENDS                ${PROTOBUF_DEPENDS} # add platform specific zlib depency
     BUILD_BYPRODUCTS       ${libprotobuf_STATIC_LIBRARY_PATH} ${libprotobuf_SHARED_LIBRARY_PATH}
                            ${libprotobuf_lite_STATIC_LIBRARY_PATH} ${libprotobuf_lite_SHARED_LIBRARY_PATH}

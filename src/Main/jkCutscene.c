@@ -462,7 +462,7 @@ int jkCutscene_sub_421310(char* fpath)
     last_audioUs = Linux_TimeUs();
 
 	stdDisplay_VBufferFill(Video_pMenuBuffer, 0, NULL);
-	
+
 	stdDisplay_VBufferLock(Video_pMenuBuffer);
 	stdDisplay_VBufferCopy(Video_pMenuBuffer, jkCutscene_frameBuf, 0, 0, NULL, 0);
 #ifdef TARGET_TWL
@@ -944,7 +944,7 @@ int jkCutscene_smacker_process()
     stdDisplay_VBufferLock(jkCutscene_frameBuf);
     _memcpy(jkCutscene_frameBuf->surface_lock_alloc, smk_get_video(jkCutscene_smk), jkCutscene_smk_w*jkCutscene_smk_h);
     stdDisplay_VBufferUnlock(jkCutscene_frameBuf);
-    
+
     stdDisplay_VBufferLock(Video_pMenuBuffer);
     stdDisplay_VBufferCopy(Video_pMenuBuffer, jkCutscene_frameBuf, 0, 50, NULL, 0);
     stdDisplay_VBufferFill(Video_pMenuBuffer, 0, &jkCutscene_rect1);
@@ -1022,7 +1022,7 @@ int jkCutscene_smusher_process()
     stdDisplay_VBufferFill(Video_pMenuBuffer, 0, &jkCutscene_rect1);
     stdDisplay_VBufferCopy(Video_pMenuBuffer, &Video_otherBuf, jkCutscene_rect1.x, jkCutscene_rect1.y, &jkCutscene_rect1, 0);
     stdDisplay_VBufferUnlock(Video_pMenuBuffer);
-    
+
     smush_frame(jkCutscene_pSmush);
     smush_audio_flush(jkCutscene_pSmush);
     if (smush_done(jkCutscene_pSmush)) {

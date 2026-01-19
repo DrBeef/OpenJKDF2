@@ -238,8 +238,36 @@ int Window_msg_main_handler(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
             break;
     }
 
-    if ( !g_app_active || (g_app_suspended = 1, !g_window_active) )
-        g_app_suspended = 0;
+    {
+        int old_suspended = g_app_suspended;
+        if ( !g_app_active || (g_app_suspended = 1, !g_window_active) )
+            g_app_suspended = 0;
+
+#ifdef PLATFORM_VR
+        // In VR mode, keep app "active" even when SDL window loses focus
+        // because the VR compositor handles rendering, not the SDL window
+        if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+            g_app_suspended = 1;
+        }
+#endif
+
+        // Debug: log when g_app_suspended changes
+        static int suspendLogCount = 0;
+        if (old_suspended != g_app_suspended || suspendLogCount < 10) {
+            suspendLogCount++;
+            if (suspendLogCount <= 20) {
+                stdPlatform_Printf("g_app_suspended: %d -> %d (app_active=%d, window_active=%d, VR=%d)\n",
+                    old_suspended, g_app_suspended, g_app_active, g_window_active,
+#ifdef PLATFORM_VR
+                    stdVR_bEnabled && stdVR_IsSessionRunning()
+#else
+                    0
+#endif
+                );
+            }
+        }
+    }
+
     handler_count = 0;
 
     if ( g_handler_count <= 0 )
@@ -1191,9 +1219,20 @@ void Window_SdlUpdate()
         if (vrEnabled && vrRunning) {
             vrMenuFrameCount++;
 
+            if (vrMenuFrameCount <= 10 || vrMenuFrameCount % 100 == 0) {
+                stdPlatform_Printf("Window_SdlUpdate VR frame #%d starting\n", vrMenuFrameCount);
+            }
+
             // Wait for the next frame from the runtime (blocks until ready)
-            if (!stdVR_WaitFrame()) {
+            int waitResult = stdVR_WaitFrame();
+            if (vrMenuFrameCount <= 10) {
+                stdPlatform_Printf("Window_SdlUpdate: WaitFrame returned %d\n", waitResult);
+            }
+            if (!waitResult) {
                 // WaitFrame failed; skip this frame while VR is active
+                if (vrMenuFrameCount <= 10) {
+                    stdPlatform_Printf("Window_SdlUpdate: WaitFrame returned 0, returning early\n");
+                }
                 return;
             }
 
@@ -1214,24 +1253,44 @@ void Window_SdlUpdate()
 
             // Begin the VR frame
             int beginResult = stdVR_BeginFrame();
-            if (vrMenuFrameCount <= 30 || vrMenuFrameCount % 100 == 0) {
-                VR_Log("Window_SdlUpdate: BeginFrame returned %d, screenLayer=%d\n", beginResult, useScreenLayer);
+            if (vrMenuFrameCount <= 10) {
+                stdPlatform_Printf("Window_SdlUpdate: BeginFrame returned %d, screenLayer=%d\n", beginResult, useScreenLayer);
             }
 
             if (beginResult) {
+                if (vrMenuFrameCount <= 10) {
+                    stdPlatform_Printf("Window_SdlUpdate: BeginFrame OK, bShouldRender=%d, eyeCount=%d\n",
+                        stdVR_clientInfo.bShouldRender, useScreenLayer ? 1 : 2);
+                }
                 // Only render content if runtime says we should
                 if (stdVR_clientInfo.bShouldRender) {
                     // In screen layer mode, only render to eye 0 (quad layer uses single swapchain)
                     // In projection mode, render to both eyes
                     int eyeCount = useScreenLayer ? 1 : 2;
                     for (int eye = 0; eye < eyeCount; eye++) {
+                        if (vrMenuFrameCount <= 10) {
+                            stdPlatform_Printf("Window_SdlUpdate: Preparing eye %d buffer\n", eye);
+                        }
                         if (stdVR_PrepareEyeBuffer(eye)) {
+                            if (vrMenuFrameCount <= 10) {
+                                stdPlatform_Printf("Window_SdlUpdate: Eye %d buffer ready, jkGuiBuildMulti_bRendering=%d\n",
+                                    eye, jkGuiBuildMulti_bRendering);
+                            }
                             if (!jkGuiBuildMulti_bRendering) {
+                                if (vrMenuFrameCount <= 10) {
+                                    stdPlatform_Printf("Window_SdlUpdate: Calling std3D_StartScene for eye %d\n", eye);
+                                }
                                 std3D_StartScene();
+                                if (vrMenuFrameCount <= 10) {
+                                    stdPlatform_Printf("Window_SdlUpdate: std3D_StartScene done, calling DrawMenu\n");
+                                }
 #ifdef QUAKE_CONSOLE
                                 jkQuakeConsole_Render();
 #endif
                                 std3D_DrawMenu();
+                                if (vrMenuFrameCount <= 10) {
+                                    stdPlatform_Printf("Window_SdlUpdate: DrawMenu done, calling EndScene\n");
+                                }
                                 std3D_EndScene();
                             }
                             else {
@@ -1240,14 +1299,33 @@ void Window_SdlUpdate()
 #endif
                                 std3D_DrawMenu();
                             }
+                            if (vrMenuFrameCount <= 10) {
+                                stdPlatform_Printf("Window_SdlUpdate: Finishing eye %d buffer\n", eye);
+                            }
                             stdVR_FinishEyeBuffer(eye);
                         }
+                        else {
+                            if (vrMenuFrameCount <= 10) {
+                                stdPlatform_Printf("Window_SdlUpdate: PrepareEyeBuffer(%d) FAILED\n", eye);
+                            }
+                        }
                     }
+                }
+                if (vrMenuFrameCount <= 10) {
+                    stdPlatform_Printf("Window_SdlUpdate: About to call EndFrame\n");
                 }
                 // Always end the frame (with or without layers)
                 stdVR_EndFrame();
                 if (vrMenuFrameCount <= 30 || vrMenuFrameCount % 100 == 0) {
                     VR_Log("Window_SdlUpdate: EndFrame called (screenLayer=%d)\n", useScreenLayer);
+                }
+                if (vrMenuFrameCount <= 10) {
+                    stdPlatform_Printf("Window_SdlUpdate: VR frame #%d complete\n", vrMenuFrameCount);
+                }
+            }
+            else {
+                if (vrMenuFrameCount <= 10) {
+                    stdPlatform_Printf("Window_SdlUpdate: BeginFrame FAILED\n");
                 }
             }
             // Skip SDL swap - VR compositor handles presentation
@@ -1511,9 +1589,9 @@ void Window_RecreateSDL2Window()
 
     SDL_GL_MakeCurrent(displayWindow, glWindowContext);
     SDL_GL_SetSwapInterval(jkPlayer_enableVsync); // Disable vsync
-#ifndef TARGET_ANDROID
+    // Enable text input for keyboard/IME support
+    // On Quest VR, this triggers the system keyboard when text fields are focused
     SDL_StartTextInput();
-#endif
 
     SDL_GL_GetDrawableSize(displayWindow, &Window_xSize, &Window_ySize);
     SDL_GetWindowSize(displayWindow, &Window_screenXSize, &Window_screenYSize);
@@ -1537,17 +1615,41 @@ void Window_Main_Loop()
     static int mainLoopCount = 0;
     mainLoopCount++;
 
+    // Debug: log main loop execution
+    if (mainLoopCount <= 10 || mainLoopCount % 500 == 0) {
+        stdPlatform_Printf("Window_Main_Loop #%d START\n", mainLoopCount);
+    }
+
     if (stdVR_bEnabled) {
         // Always poll events to advance session state machine
+        if (mainLoopCount <= 10) {
+            stdPlatform_Printf("Window_Main_Loop #%d: calling stdVR_PollEvents\n", mainLoopCount);
+        }
         stdVR_PollEvents();
+        if (mainLoopCount <= 10) {
+            stdPlatform_Printf("Window_Main_Loop #%d: stdVR_PollEvents done\n", mainLoopCount);
+        }
 
         // VR frame timing is handled entirely in Window_SdlUpdate to ensure proper
         // Wait→Begin→Render→End cycle. We only poll events here.
     }
 #endif
 
+    if (mainLoopCount <= 10) {
+        stdPlatform_Printf("Window_Main_Loop #%d: calling jkMain_GuiAdvance\n", mainLoopCount);
+    }
     jkMain_GuiAdvance(); // TODO needed?
+    if (mainLoopCount <= 10) {
+        stdPlatform_Printf("Window_Main_Loop #%d: jkMain_GuiAdvance done\n", mainLoopCount);
+    }
+
+    if (mainLoopCount <= 10) {
+        stdPlatform_Printf("Window_Main_Loop #%d: calling Window_msg_main_handler(WM_PAINT)\n", mainLoopCount);
+    }
     Window_msg_main_handler(g_hWnd, WM_PAINT, 0, 0);
+    if (mainLoopCount <= 10) {
+        stdPlatform_Printf("Window_Main_Loop #%d END\n", mainLoopCount);
+    }
 
     //Window_SdlUpdate();
 }

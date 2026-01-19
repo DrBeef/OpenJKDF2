@@ -119,3 +119,5 @@ nintendo-dsi-shareware-demo.zip
 nintendo-dsi-debug.zip
 nintendo-dsi-shareware-demo/*
 build_openjkdf2_venv/*
+/build
+/build_quest_vr

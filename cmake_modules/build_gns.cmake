@@ -26,6 +26,11 @@ set(GameNetworkingSockets_SHARED_LIBRARY_PATH ${GameNetworkingSockets_ROOT}/lib/
 set(GameNetworkingSockets_STATIC_LIBRARY_PATH ${GameNetworkingSockets_ROOT}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}${GameNetworkingSockets_STATIC_LIBRARIES}${CMAKE_STATIC_LIBRARY_SUFFIX})
 set(GameNetworkingSockets_IMPORT_LIBRARY_PATH ${GameNetworkingSockets_ROOT}/lib/${CMAKE_IMPORT_LIBRARY_PREFIX}${GameNetworkingSockets_SHARED_LIBRARIES}${CMAKE_IMPORT_LIBRARY_SUFFIX})
 
+set(GNS_CMAKE_MAKE_PROGRAM_ARG "")
+if(CMAKE_MAKE_PROGRAM)
+    set(GNS_CMAKE_MAKE_PROGRAM_ARG "-DCMAKE_MAKE_PROGRAM:FILEPATH=${CMAKE_MAKE_PROGRAM}")
+endif()
+
 ExternalProject_Add(
     GAMENETWORKINGSOCKETS
     SOURCE_DIR             ${CMAKE_SOURCE_DIR}/lib/GameNetworkingSockets
@@ -35,6 +40,7 @@ ExternalProject_Add(
     CMAKE_ARGS             "--toolchain ${CMAKE_TOOLCHAIN_FILE}"
                            "--install-prefix ${GameNetworkingSockets_ROOT}"
                            -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}
+                           ${GNS_CMAKE_MAKE_PROGRAM_ARG}
     CMAKE_CACHE_ARGS       -DCMAKE_BUILD_TYPE:STRING=Release
                            -DCMAKE_POLICY_DEFAULT_CMP0074:STRING=NEW
                            -DCMAKE_POSITION_INDEPENDENT_CODE=ON

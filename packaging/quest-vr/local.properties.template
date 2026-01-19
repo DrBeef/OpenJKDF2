@@ -1,0 +1,7 @@
+# Copy this file to local.properties and set the paths for your system
+
+# Android SDK path
+sdk.dir=C\:\\Users\\YourUser\\AppData\\Local\\Android\\Sdk
+
+# Android NDK path (optional - Android Studio can download it)
+# ndk.dir=C\:\\Users\\YourUser\\AppData\\Local\\Android\\Sdk\\ndk\\26.1.10909125

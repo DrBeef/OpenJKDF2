@@ -36,7 +36,7 @@
 #include "World/sithWeapon.h"
 #include "World/sithTemplate.h"
 #include "World/sithThing.h"
-#include <GL/glew.h>
+#include "SDL2_helper.h"
 extern sithThing* sithPlayer_pLocalPlayerThing;
 #endif
 
