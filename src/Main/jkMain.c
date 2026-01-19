@@ -58,7 +58,12 @@
 #if defined(TARGET_TWL)
 #define TICKRATE_MS (0) // no cap
 #elif defined(QOL_IMPROVEMENTS)
+// Added: Disable FPS limit when VR is active - OpenXR compositor handles frame timing
+#ifdef PLATFORM_VR
+#define TICKRATE_MS ((stdVR_bEnabled && stdVR_IsSessionRunning()) ? 0 : (jkPlayer_fpslimit ? 1000 / jkPlayer_fpslimit : 0))
+#else
 #define TICKRATE_MS (jkPlayer_fpslimit ? 1000 / jkPlayer_fpslimit : 0) // no cap
+#endif
 #else
 #define TICKRATE_MS (20) // 50fps
 #endif

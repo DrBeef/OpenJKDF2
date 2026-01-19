@@ -623,6 +623,25 @@ void sithRender_Draw()
 #endif
 
     // TWL: 16ms
+#ifdef PLATFORM_VR
+    // DEBUG: Log sector/surface counts for VR world rendering diagnosis
+    {
+        extern int stdVR_bEnabled;
+        extern int stdVR_currentEye;
+        extern void VR_Log(const char* fmt, ...);
+        static int geoRenderLogCount = 0;
+        geoRenderLogCount++;
+        if (stdVR_bEnabled && (geoRenderLogCount <= 20 || geoRenderLogCount % 300 == 0)) {
+            VR_Log("sithRender PRE-GEO[eye%d #%d]: numSectors=%d numSurfaces=%d numSectors2=%d\n",
+                stdVR_currentEye, geoRenderLogCount, sithRender_numSectors, sithRender_numSurfaces, sithRender_numSectors2);
+            if (rdCamera_pCurCamera && rdCamera_pCurCamera->canvas) {
+                VR_Log("  canvas half_w=%.1f half_h=%.1f\n",
+                    rdCamera_pCurCamera->canvas->half_screen_width,
+                    rdCamera_pCurCamera->canvas->half_screen_height);
+            }
+        }
+    }
+#endif
     sithRender_RenderLevelGeometry();
 
 #ifdef TARGET_TWL

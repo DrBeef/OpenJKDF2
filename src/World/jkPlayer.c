@@ -887,6 +887,17 @@ void jkPlayer_DrawPov()
     rdVector3 trans;
     rdMatrix34 viewMat;
 
+    // Debug: confirm function is being called
+    static int drawPovCallCount = 0;
+    drawPovCallCount++;
+#ifdef PLATFORM_VR
+    extern void VR_Log(const char* fmt, ...);
+    if (drawPovCallCount % 200 == 1) {
+        VR_Log("=== jkPlayer_DrawPov called #%d, povModel=%p ===\n",
+            drawPovCallCount, (void*)playerThings[playerThingIdx].povModel.model3);
+    }
+#endif
+
     if (!playerThings[playerThingIdx].povModel.model3)
         return;
 

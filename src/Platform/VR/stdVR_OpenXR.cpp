@@ -51,10 +51,26 @@ static void VR_InitLog(void)
     if (vrLogInitialized) return;
     vrLogInitialized = true;
 
-    // Try to write to a known location
-    vrLogFile = fopen("E:/Github/OpenJKDF2/vr_debug.log", "w");
-    if (!vrLogFile) {
-        vrLogFile = fopen("vr_debug.log", "w");
+    // Try multiple locations for the log file
+    const char* logPaths[] = {
+        "vr_debug.log",  // Current directory (usually game dir)
+        "E:/Github/OpenJKDF2/vr_debug.log",
+        "C:/Users/ellio/AppData/Local/OpenJKDF2/vr_debug.log",
+        NULL
+    };
+
+    printf("[VR] Attempting to open log file...\n");
+    for (int i = 0; logPaths[i] != NULL; i++) {
+        printf("[VR] Trying: %s\n", logPaths[i]);
+        vrLogFile = fopen(logPaths[i], "w");
+        if (vrLogFile) {
+            printf("[VR] SUCCESS: Opened %s\n", logPaths[i]);
+            fprintf(vrLogFile, "VR log opened at: %s\n", logPaths[i]);
+            fflush(vrLogFile);
+            break;
+        } else {
+            printf("[VR] FAILED to open %s\n", logPaths[i]);
+        }
     }
 
     if (vrLogFile) {
@@ -1881,9 +1897,26 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
     centerPose.position.z = (xrViews[0].pose.position.z + xrViews[1].pose.position.z) * 0.5f;
     centerPose.orientation = xrViews[0].pose.orientation; // Use left eye orientation for simplicity
 
+    // Log raw HMD position before conversion
+    static int hmdLogCounter = 0;
+    hmdLogCounter++;
+    if (hmdLogCounter % 60 == 1) {
+        VR_Log("HMD OpenXR raw=(%.4f, %.4f, %.4f)\n",
+            centerPose.position.x, centerPose.position.y, centerPose.position.z);
+    }
+
+    // Convert from OpenXR coords to JKDF2 coords:
+    // OpenXR: X=right, Y=up, Z=back
+    // JKDF2:  X=right, Y=forward, Z=up
+    // JKDF2.x = OpenXR.x, JKDF2.y = -OpenXR.z, JKDF2.z = OpenXR.y
     stdVR_clientInfo.hmdPosition.x = centerPose.position.x;
-    stdVR_clientInfo.hmdPosition.y = centerPose.position.y;
-    stdVR_clientInfo.hmdPosition.z = centerPose.position.z;
+    stdVR_clientInfo.hmdPosition.y = -centerPose.position.z;  // Forward = -back
+    stdVR_clientInfo.hmdPosition.z = centerPose.position.y;   // Up = up
+
+    if (hmdLogCounter % 60 == 1) {
+        VR_Log("HMD JKDF2 pos=(%.4f, %.4f, %.4f)\n",
+            stdVR_clientInfo.hmdPosition.x, stdVR_clientInfo.hmdPosition.y, stdVR_clientInfo.hmdPosition.z);
+    }
 
     QuatToEuler(&centerPose.orientation, &stdVR_clientInfo.hmdOrientation);
     PoseToMatrix(&centerPose, &stdVR_clientInfo.hmdPoseMatrix);
@@ -1926,10 +1959,27 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
             stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
 
             if (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) {
+                // Log raw OpenXR position before conversion
+                static int ctrlLogCounter = 0;
+                ctrlLogCounter++;
+                if (ctrlLogCounter % 60 == 1) {
+                    VR_Log("Controller[%d] OpenXR raw=(%.4f, %.4f, %.4f)\n",
+                        hand, location.pose.position.x, location.pose.position.y, location.pose.position.z);
+                }
+
+                // Convert from OpenXR coords to JKDF2 coords:
+                // OpenXR: X=right, Y=up, Z=back
+                // JKDF2:  X=right, Y=forward, Z=up
+                // JKDF2.x = OpenXR.x, JKDF2.y = -OpenXR.z, JKDF2.z = OpenXR.y
                 pCtrl->position.x = location.pose.position.x;
-                pCtrl->position.y = location.pose.position.y;
-                pCtrl->position.z = location.pose.position.z;
+                pCtrl->position.y = -location.pose.position.z;  // Forward = -back
+                pCtrl->position.z = location.pose.position.y;   // Up = up
                 pCtrl->bTracking = 1;
+
+                if (ctrlLogCounter % 60 == 1) {
+                    VR_Log("Controller[%d] JKDF2 pos=(%.4f, %.4f, %.4f) tracking=%d\n",
+                        hand, pCtrl->position.x, pCtrl->position.y, pCtrl->position.z, pCtrl->bTracking);
+                }
             } else {
                 pCtrl->bTracking = 0;
             }

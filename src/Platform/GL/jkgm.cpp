@@ -573,23 +573,29 @@ void jkgm_populate_shortcuts(stdVBuffer *vbuf, rdDDrawSurface *texture, rdMateri
     if (!vbuf || !texture || jkgm_fastpath_disable) return;
 
     jkgm_populate_cache();
-
-    std::string hash = jkgm_get_tex_hash(vbuf, texture, material, is_alpha_tex);
-
     std::string full_fpath_str = std::string(material->mat_full_fpath);
     std::string cache_key = full_fpath_str + std::to_string(cel);
 
     //printf("%s %s %s\n", full_fpath_str.c_str(), cache_key.c_str(), hash.c_str());
 
     texture->cache_entry = NULL;
+    jkgm_cache_entry_t* entryPtr = NULL;
 
-    if (jkgm_cache.find(cache_key) != jkgm_cache.end()) {
-        texture->skip_jkgm = 0;
+    auto cacheIt = jkgm_cache.find(cache_key);
+    if (cacheIt != jkgm_cache.end()) {
+        entryPtr = &cacheIt->second;
+    } else if (!jkgm_cache_hash.empty()) {
+        std::string hash = jkgm_get_tex_hash(vbuf, texture, material, is_alpha_tex);
+        auto hashIt = jkgm_cache_hash.find(hash);
+        if (hashIt != jkgm_cache_hash.end()) {
+            entryPtr = &hashIt->second;
+        }
     }
-    else if (jkgm_cache_hash.find(hash) != jkgm_cache_hash.end()) {
+
+    if (entryPtr) {
         texture->skip_jkgm = 0;
-    }
-    else {
+        texture->cache_entry = entryPtr;
+    } else {
         texture->skip_jkgm = 1;
     }
 
@@ -603,8 +609,6 @@ void jkgm_populate_shortcuts(stdVBuffer *vbuf, rdDDrawSurface *texture, rdMateri
         }
         return;
     }
-
-    texture->cache_entry = &jkgm_cache[cache_key];
 
     rdTexture *pRdTexture = &material->textures[cel];
     //pRdTexture->has_jkgm_override = 1;

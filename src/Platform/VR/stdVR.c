@@ -775,6 +775,9 @@ stdVR_ControllerState* stdVR_GetOffhandController(void)
 // Takes controller position (in VR tracking space) and outputs world position
 void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
 {
+    static int debugCounter = 0;
+    debugCounter++;
+
     if (!pWorldPos || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
         return;
     }
@@ -798,6 +801,13 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
     offset.y = pCtrl->position.y - stdVR_clientInfo.hmdPosition.y;
     offset.z = pCtrl->position.z - stdVR_clientInfo.hmdPosition.z;
 
+    if (debugCounter % 100 == 0) {
+        VR_Log("ControllerToWorld[%d]: ctrlPos=(%.3f,%.3f,%.3f) hmdPos=(%.3f,%.3f,%.3f) offset=(%.3f,%.3f,%.3f)\n",
+            hand, pCtrl->position.x, pCtrl->position.y, pCtrl->position.z,
+            stdVR_clientInfo.hmdPosition.x, stdVR_clientInfo.hmdPosition.y, stdVR_clientInfo.hmdPosition.z,
+            offset.x, offset.y, offset.z);
+    }
+
     // Scale to game units (controller offset is in meters)
     float scale = stdVR_config.worldScale;
     if (scale <= 0.0f) scale = 1.0f;
@@ -805,9 +815,19 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
     offset.y *= scale;
     offset.z *= scale;
 
+    if (debugCounter % 100 == 0) {
+        VR_Log("  scaledOffset=(%.3f,%.3f,%.3f) scale=%.3f\n", offset.x, offset.y, offset.z, scale);
+    }
+
     // Transform offset by player orientation
     rdVector3 worldOffset;
     rdMatrix_TransformVector34(&worldOffset, &offset, &player->lookOrientation);
+
+    if (debugCounter % 100 == 0) {
+        VR_Log("  playerPos=(%.3f,%.3f,%.3f) worldOffset=(%.3f,%.3f,%.3f)\n",
+            player->position.x, player->position.y, player->position.z,
+            worldOffset.x, worldOffset.y, worldOffset.z);
+    }
 
     // Add to player position
     pWorldPos->x = player->position.x + worldOffset.x;
@@ -816,6 +836,11 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
 
     // Apply height offset
     pWorldPos->z += stdVR_config.heightOffset;
+
+    if (debugCounter % 100 == 0) {
+        VR_Log("  RESULT worldPos=(%.3f,%.3f,%.3f) heightOffset=%.3f\n",
+            pWorldPos->x, pWorldPos->y, pWorldPos->z, stdVR_config.heightOffset);
+    }
 }
 
 // Get controller aim direction in world space (where controller points)
@@ -916,15 +941,19 @@ float stdVR_GetSwingSpeed(void)
     return pCtrl->motion.swingSpeed;
 }
 
-// Get controller pose in view space (for rendering weapon at controller position)
+// Get controller pose as a view matrix (for rendering weapon at controller position)
 // Returns 1 if successful, 0 if controller not tracking
+//
+// This builds a view matrix that positions the weapon at the controller location
+// in world space, similar to how the eye view matrix is built.
 int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
 {
     static int debugCounter = 0;
+    static int logEvery = 60; // Log every N frames
     debugCounter++;
 
     if (!pViewMat || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
-        if (debugCounter % 100 == 0) {
+        if (debugCounter % logEvery == 0) {
             VR_Log("GetControllerViewMatrix: invalid params pViewMat=%p hand=%d\n", (void*)pViewMat, hand);
         }
         return 0;
@@ -932,67 +961,64 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
 
     stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
     if (!pCtrl->bTracking) {
-        if (debugCounter % 100 == 0) {
+        if (debugCounter % logEvery == 0) {
             VR_Log("GetControllerViewMatrix: controller %d not tracking\n", hand);
         }
         return 0;
     }
 
-    // Get current eye view matrix
+    // Get the current eye view matrix as our base - this has the correct world position
     rdMatrix34 eyeViewMat;
     if (!stdVR_GetCurrentEyeViewMatrix(&eyeViewMat)) {
-        if (debugCounter % 100 == 0) {
-            VR_Log("GetControllerViewMatrix: no current eye view matrix\n");
+        // Fallback: just return identity if no eye view available
+        if (debugCounter % logEvery == 0) {
+            VR_Log("GetControllerViewMatrix: no eye view matrix available\n");
         }
         return 0;
     }
 
-    // Get controller world matrix
-    rdMatrix34 controllerWorld;
-    stdVR_GetControllerWorldMatrix(hand, &controllerWorld);
+    // Controller and HMD positions are in JKDF2 coords (meters):
+    // X = right, Y = forward, Z = up
+    rdVector3 ctrlPos = pCtrl->position;
+    rdVector3 hmdPos = stdVR_clientInfo.hmdPosition;
 
-    // Controller in view space = inverse(eyeView) * controllerWorld
-    // But since we want to render the weapon FROM the controller's perspective,
-    // we need to compute how the controller appears relative to the eye.
-    //
-    // eyeViewMat transforms world -> view space
-    // So we transform controller world position/orientation to view space
+    // Offset from HMD to controller (in meters, JKDF2 coords)
+    rdVector3 offset;
+    offset.x = ctrlPos.x - hmdPos.x;
+    offset.y = ctrlPos.y - hmdPos.y;
+    offset.z = ctrlPos.z - hmdPos.z;
 
-    // Transform controller position to view space
-    rdVector3 controllerViewPos;
-    rdVector3 worldPos = { controllerWorld.scale.x, controllerWorld.scale.y, controllerWorld.scale.z };
+    // World scale converts VR meters to game world units
+    float scale = stdVR_config.worldScale;
+    if (scale <= 0.0f) scale = 1.0f;
 
-    // Subtract eye position, then rotate by eye orientation
-    rdVector3 relPos;
-    relPos.x = worldPos.x - eyeViewMat.scale.x;
-    relPos.y = worldPos.y - eyeViewMat.scale.y;
-    relPos.z = worldPos.z - eyeViewMat.scale.z;
+    // Scale the offset to world units (same scale used for HMD movement)
+    // Use worldScale * 2 to make weapon movement more noticeable
+    float weaponScale = scale * 2.0f;
 
-    // The eye view matrix's rotation part transforms world coords to view coords
-    // We need the transpose (inverse for orthonormal) to transform our vector
-    rdMatrix34 eyeRotInv;
-    rdMatrix_Copy34(&eyeRotInv, &eyeViewMat);
-    eyeRotInv.scale.x = 0; eyeRotInv.scale.y = 0; eyeRotInv.scale.z = 0;
-    rdMatrix_TransformVector34(&controllerViewPos, &relPos, &eyeRotInv);
+    rdVector3 worldOffset;
+    worldOffset.x = offset.x * weaponScale;
+    worldOffset.y = offset.y * weaponScale;
+    worldOffset.z = offset.z * weaponScale;
 
-    // Combine controller orientation with eye orientation (in view space)
-    // Controller's forward should point where the controller aims in view space
-    rdMatrix34 controllerRot;
-    rdMatrix_Copy34(&controllerRot, &controllerWorld);
-    controllerRot.scale.x = 0; controllerRot.scale.y = 0; controllerRot.scale.z = 0;
+    // Start with the eye view matrix (has correct camera world position and orientation)
+    rdMatrix_Copy34(pViewMat, &eyeViewMat);
 
-    // Transform controller orientation to view space
-    rdMatrix_Multiply34(pViewMat, &eyeRotInv, &controllerRot);
+    // Add the controller offset to the position (in world space)
+    // The eye view matrix position is already in world coordinates
+    pViewMat->scale.x += worldOffset.x;
+    pViewMat->scale.y += worldOffset.y;
+    pViewMat->scale.z += worldOffset.z;
 
-    // Set the position
-    pViewMat->scale.x = controllerViewPos.x;
-    pViewMat->scale.y = controllerViewPos.y;
-    pViewMat->scale.z = controllerViewPos.z;
-
-    if (debugCounter % 100 == 0) {
-        VR_Log("GetControllerViewMatrix SUCCESS: ctrlWorld=(%.2f,%.2f,%.2f) viewPos=(%.2f,%.2f,%.2f)\n",
-            controllerWorld.scale.x, controllerWorld.scale.y, controllerWorld.scale.z,
-            controllerViewPos.x, controllerViewPos.y, controllerViewPos.z);
+    if (debugCounter % logEvery == 0) {
+        VR_Log("=== GetControllerViewMatrix hand=%d frame=%d ===\n", hand, debugCounter);
+        VR_Log("  eyeViewMat pos=(%.3f, %.3f, %.3f)\n",
+            eyeViewMat.scale.x, eyeViewMat.scale.y, eyeViewMat.scale.z);
+        VR_Log("  offset (meters)=(%.4f, %.4f, %.4f)\n", offset.x, offset.y, offset.z);
+        VR_Log("  worldOffset    =(%.4f, %.4f, %.4f) scale=%.3f\n",
+            worldOffset.x, worldOffset.y, worldOffset.z, weaponScale);
+        VR_Log("  final pos      =(%.3f, %.3f, %.3f)\n",
+            pViewMat->scale.x, pViewMat->scale.y, pViewMat->scale.z);
     }
 
     return 1;

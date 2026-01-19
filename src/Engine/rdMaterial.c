@@ -13,6 +13,8 @@
 #include "Platform/GL/jkgm.h"
 #endif
 
+extern int Main_verboseLevel;
+
 #ifdef TARGET_TWL
 #include <nds.h>
 #endif
@@ -301,7 +303,9 @@ LABEL_21:
 #endif
 
 #if !defined(TARGET_TWL)
-        printf("Load %s tex %d/%d mip %d/%d\n", mat_fpath, tex_numa, material->num_textures, mipmap_num, texture->num_mipmaps);
+        if (Main_verboseLevel) {
+            printf("Load %s tex %d/%d mip %d/%d\n", mat_fpath, tex_numa, material->num_textures, mipmap_num, texture->num_mipmaps);
+        }
         created_tex = stdDisplay_VBufferNew(&format, create_ddraw_surface, gpu_mem, 0);
         *texture_struct = created_tex;
         if ( !created_tex )
@@ -322,7 +326,9 @@ LABEL_21:
 #else
         // Limit textures that are loaded on TWL
         if ((format.width <= 16 || mipmap_num >= texture->num_mipmaps-1)) {
-            printf("Load %s tex %d/%d mip %d/%d\n", mat_fpath, tex_numa, material->num_textures, mipmap_num, texture->num_mipmaps);
+            if (Main_verboseLevel) {
+                printf("Load %s tex %d/%d mip %d/%d\n", mat_fpath, tex_numa, material->num_textures, mipmap_num, texture->num_mipmaps);
+            }
             created_tex = stdDisplay_VBufferNew(&format, create_ddraw_surface, gpu_mem, 0);
             *texture_struct = created_tex;
             material->bDataLoaded = bDoLoad;
