@@ -63,10 +63,10 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_motionConfig.forceDistanceTrigger = 0.3f;     // meters for push/pull
     stdVR_motionConfig.weaponPitchAdjust = -45.0f;      // degrees - rotate weapon to point forward
     stdVR_motionConfig.saberPitchAdjust = -45.0f;       // degrees
-    stdVR_motionConfig.weaponOffsetX = 0.0f;            // meters
-    stdVR_motionConfig.weaponOffsetY = -0.15f;          // meters - pull weapon back toward player
-    stdVR_motionConfig.weaponOffsetZ = 0.0f;            // meters
-    stdVR_motionConfig.weaponModelScale = 1.7f;         // VR weapon model size multiplier
+    stdVR_motionConfig.weaponOffsetX = 0.0f;            // meters - left/right
+    stdVR_motionConfig.weaponOffsetY = -0.1f;           // meters - forward (negative = back toward player)
+    stdVR_motionConfig.weaponOffsetZ = 0.05f;           // meters - up/down (positive = up)
+    stdVR_motionConfig.weaponModelScale = 1.4f;         // VR weapon model size multiplier
     stdVR_motionConfig.bMotionAimEnabled = 1;           // Enable controller aiming by default
     stdVR_motionConfig.bMotionSaberEnabled = 1;         // Enable swing-to-attack
     stdVR_motionConfig.bMotionForceEnabled = 0;         // Disable force gestures for now
@@ -823,6 +823,17 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
     offset.y = pCtrl->position.y - stdVR_clientInfo.hmdPosition.y;
     offset.z = pCtrl->position.z - stdVR_clientInfo.hmdPosition.z;
 
+    // Apply pitch adjustment to match weapon visual (same as GetControllerViewMatrix)
+    rdMatrix34 adjustedPose;
+    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+        rdMatrix34 pitchRot;
+        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
+        rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
+    } else {
+        rdMatrix_Copy34(&adjustedPose, &pCtrl->poseMatrix);
+    }
+
     // Apply weapon position offset in controller local space (for fire position)
     if (stdVR_motionConfig.weaponOffsetX != 0.0f ||
         stdVR_motionConfig.weaponOffsetY != 0.0f ||
@@ -832,9 +843,9 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
         localOffset.y = stdVR_motionConfig.weaponOffsetY;
         localOffset.z = stdVR_motionConfig.weaponOffsetZ;
 
-        // Transform local offset by controller orientation
+        // Transform local offset by ADJUSTED controller orientation (matches weapon visual)
         rdVector3 transformedOffset;
-        rdMatrix_TransformVector34(&transformedOffset, &localOffset, &pCtrl->poseMatrix);
+        rdMatrix_TransformVector34(&transformedOffset, &localOffset, &adjustedPose);
 
         offset.x += transformedOffset.x;
         offset.y += transformedOffset.y;
@@ -1085,9 +1096,8 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
         offset.z += transformedOffset.z;
     }
 
-    // Scale offset to game world units
-    // Use a larger scale for weapon to make motion more visible
-    float weaponScale = worldScale * 2.0f;
+    // Scale offset to game world units (1:1 with world scale)
+    float weaponScale = worldScale;
     rdVector3 scaledOffset;
     scaledOffset.x = offset.x * weaponScale;
     scaledOffset.y = offset.y * weaponScale;
