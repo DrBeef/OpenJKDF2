@@ -33,7 +33,11 @@
 #ifdef PLATFORM_VR
 #include "Platform/VR/stdVR.h"
 #include "Engine/rdCamera.h"
+#include "World/sithWeapon.h"
+#include "World/sithTemplate.h"
+#include "World/sithThing.h"
 #include <GL/glew.h>
+extern sithThing* sithPlayer_pLocalPlayerThing;
 #endif
 
 int jkGame_Startup()
@@ -530,6 +534,72 @@ int jkGame_Update()
             if (Main_bVRTest && Main_vrTestState == 1) {
                 Main_vrTestFrameCount++;
 
+                // VR TEST: Auto-fire every 180 frames (~3 seconds) to test fire positions
+                // This fires a projectile from the controller position
+                // Using 180 frames gives 20 fire events over 60 seconds with varied positions
+                if (Main_vrTestFrameCount % 180 == 90 && sithPlayer_pLocalPlayerThing) {
+                    // Find a projectile template (bryar pistol bolt)
+                    sithThing* pProjectile = sithTemplate_GetEntryByName("+bryarbolt");
+                    if (!pProjectile) {
+                        pProjectile = sithTemplate_GetEntryByName("+stlaser");
+                    }
+                    if (!pProjectile) {
+                        pProjectile = sithTemplate_GetEntryByName("+laser");
+                    }
+
+                    if (pProjectile) {
+                        rdVector3 fireOffset = {0.0f, 0.0f, 0.0f};
+                        rdVector3 aimError = {0.0f, 0.0f, 0.0f};
+
+                        VR_Log("\n=== VR TEST AUTO-FIRE frame %d ===\n", Main_vrTestFrameCount);
+                        VR_Log("Player pos: (%.3f, %.3f, %.3f)\n",
+                            sithPlayer_pLocalPlayerThing->position.x,
+                            sithPlayer_pLocalPlayerThing->position.y,
+                            sithPlayer_pLocalPlayerThing->position.z);
+
+                        // Log controller orientation for rotation testing
+                        int hand = stdVR_GetDominantHand();
+                        stdVR_ControllerState* pCtrl = stdVR_GetController(hand);
+                        if (pCtrl && pCtrl->bTracking) {
+                            VR_Log("Controller orientation: pitch=%.1f yaw=%.1f roll=%.1f\n",
+                                pCtrl->orientation.x, pCtrl->orientation.y, pCtrl->orientation.z);
+                            VR_Log("Controller poseMatrix lvec (forward): (%.3f, %.3f, %.3f)\n",
+                                pCtrl->poseMatrix.lvec.x, pCtrl->poseMatrix.lvec.y, pCtrl->poseMatrix.lvec.z);
+                        }
+
+                        // Fire the projectile - this should use controller position in VR
+                        sithThing* pFired = sithWeapon_FireProjectile(
+                            sithPlayer_pLocalPlayerThing,
+                            pProjectile,
+                            NULL,  // No sound
+                            -1,    // Mode
+                            &fireOffset,
+                            &aimError,
+                            1.0f,  // Scale
+                            0,     // Scale flags
+                            0.0f,  // No autoaim
+                            0.0f,
+                            0
+                        );
+
+                        if (pFired) {
+                            VR_Log("Fired projectile at: (%.3f, %.3f, %.3f)\n",
+                                pFired->position.x, pFired->position.y, pFired->position.z);
+
+                            // Take screenshot showing bullet and gun position
+                            static int fireScreenshotNum = 0;
+                            char screenshotName[128];
+                            snprintf(screenshotName, sizeof(screenshotName), "vrtest_fire_%02d.bmp", fireScreenshotNum++);
+                            VR_Log("Saving screenshot: %s\n", screenshotName);
+                            jkGame_Screenshot();
+                        } else {
+                            VR_Log("Fire FAILED - no projectile spawned\n");
+                        }
+                    } else {
+                        VR_Log("VR TEST: No projectile template found for auto-fire\n");
+                    }
+                }
+
                 // Check if we should exit after target frame count
                 // Note: Per-eye screenshots are saved in the render loop above
                 if (Main_vrTestFrameCount == Main_vrTestFrameTarget) {
@@ -539,9 +609,9 @@ int jkGame_Update()
 
                     Main_vrTestState = 2;  // Mark as done
 
-                    // Keep window visible for 20 seconds so user can see the result
-                    stdPlatform_Printf("VR Test Complete - window will close in 20 seconds...\n");
-                    SDL_Delay(20000);
+                    // Keep window visible for 2 seconds so user can see the result
+                    stdPlatform_Printf("VR Test Complete - exiting...\n");
+                    SDL_Delay(2000);
 
                     // Exit the game
                     extern void Main_Shutdown(void);

@@ -35,6 +35,10 @@ static int stdVR_bFrameInProgress = 0;  // BeginFrame called but EndFrame not ye
 static rdMatrix34 stdVR_currentEyeViewMat;
 static int stdVR_currentEyeViewMatValid = 0;
 
+// Added: Store game camera separately (without VR applied) for controller matrix calculation
+static rdMatrix34 stdVR_currentGameCamera;
+static int stdVR_currentGameCameraValid = 0;
+
 // Default configuration
 static void stdVR_InitDefaultConfig(void)
 {
@@ -57,8 +61,12 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_motionConfig.saberVelocityTrigger = 2.5f;     // m/s for saber attack
     stdVR_motionConfig.forceVelocityTrigger = 1.5f;     // m/s for force gesture
     stdVR_motionConfig.forceDistanceTrigger = 0.3f;     // meters for push/pull
-    stdVR_motionConfig.weaponPitchAdjust = 0.0f;        // degrees
-    stdVR_motionConfig.saberPitchAdjust = 0.0f;         // degrees
+    stdVR_motionConfig.weaponPitchAdjust = -45.0f;      // degrees - rotate weapon to point forward
+    stdVR_motionConfig.saberPitchAdjust = -45.0f;       // degrees
+    stdVR_motionConfig.weaponOffsetX = 0.0f;            // meters
+    stdVR_motionConfig.weaponOffsetY = -0.15f;          // meters - pull weapon back toward player
+    stdVR_motionConfig.weaponOffsetZ = 0.0f;            // meters
+    stdVR_motionConfig.weaponModelScale = 1.7f;         // VR weapon model size multiplier
     stdVR_motionConfig.bMotionAimEnabled = 1;           // Enable controller aiming by default
     stdVR_motionConfig.bMotionSaberEnabled = 1;         // Enable swing-to-attack
     stdVR_motionConfig.bMotionForceEnabled = 0;         // Disable force gestures for now
@@ -610,6 +618,10 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
         return;
     }
 
+    // Store game camera for controller matrix calculations
+    rdMatrix_Copy34(&stdVR_currentGameCamera, pGameCamera);
+    stdVR_currentGameCameraValid = 1;
+
     float worldScale = stdVR_config.worldScale;
     if (worldScale <= 0.0f) {
         worldScale = 1.0f;
@@ -738,6 +750,7 @@ int stdVR_GetCurrentEyeViewMatrix(rdMatrix34* pOut)
 void stdVR_ClearCurrentEyeViewMatrix(void)
 {
     stdVR_currentEyeViewMatValid = 0;
+    stdVR_currentGameCameraValid = 0;
 }
 
 // ============================================================================
@@ -801,11 +814,22 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
     offset.y = pCtrl->position.y - stdVR_clientInfo.hmdPosition.y;
     offset.z = pCtrl->position.z - stdVR_clientInfo.hmdPosition.z;
 
-    if (debugCounter % 100 == 0) {
-        VR_Log("ControllerToWorld[%d]: ctrlPos=(%.3f,%.3f,%.3f) hmdPos=(%.3f,%.3f,%.3f) offset=(%.3f,%.3f,%.3f)\n",
-            hand, pCtrl->position.x, pCtrl->position.y, pCtrl->position.z,
-            stdVR_clientInfo.hmdPosition.x, stdVR_clientInfo.hmdPosition.y, stdVR_clientInfo.hmdPosition.z,
-            offset.x, offset.y, offset.z);
+    // Apply weapon position offset in controller local space (for fire position)
+    if (stdVR_motionConfig.weaponOffsetX != 0.0f ||
+        stdVR_motionConfig.weaponOffsetY != 0.0f ||
+        stdVR_motionConfig.weaponOffsetZ != 0.0f) {
+        rdVector3 localOffset;
+        localOffset.x = stdVR_motionConfig.weaponOffsetX;
+        localOffset.y = stdVR_motionConfig.weaponOffsetY;
+        localOffset.z = stdVR_motionConfig.weaponOffsetZ;
+
+        // Transform local offset by controller orientation
+        rdVector3 transformedOffset;
+        rdMatrix_TransformVector34(&transformedOffset, &localOffset, &pCtrl->poseMatrix);
+
+        offset.x += transformedOffset.x;
+        offset.y += transformedOffset.y;
+        offset.z += transformedOffset.z;
     }
 
     // Scale to game units (controller offset is in meters)
@@ -867,11 +891,11 @@ void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection)
         return;
     }
 
-    // Forward direction from controller pose (Y axis in JKDF2)
+    // Forward direction from controller pose (lvec = forward in JKDF2)
     rdVector3 ctrlForward;
-    ctrlForward.x = pCtrl->poseMatrix.uvec.x;
-    ctrlForward.y = pCtrl->poseMatrix.uvec.y;
-    ctrlForward.z = pCtrl->poseMatrix.uvec.z;
+    ctrlForward.x = pCtrl->poseMatrix.lvec.x;
+    ctrlForward.y = pCtrl->poseMatrix.lvec.y;
+    ctrlForward.z = pCtrl->poseMatrix.lvec.z;
 
     // Apply ergonomic pitch adjustment if configured
     if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
@@ -910,8 +934,19 @@ void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix)
 
     sithThing* player = sithPlayer_pLocalPlayerThing;
 
-    // Combine player body orientation with controller orientation
-    rdMatrix_Multiply34(pMatrix, &player->lookOrientation, &pCtrl->poseMatrix);
+    // Apply pitch adjustment to controller pose if configured
+    rdMatrix34 adjustedPose;
+    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+        rdMatrix34 pitchRot;
+        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
+        rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
+    } else {
+        rdMatrix_Copy34(&adjustedPose, &pCtrl->poseMatrix);
+    }
+
+    // Combine player body orientation with adjusted controller orientation
+    rdMatrix_Multiply34(pMatrix, &player->lookOrientation, &adjustedPose);
 
     // Set position
     rdVector3 worldPos;
@@ -944,8 +979,8 @@ float stdVR_GetSwingSpeed(void)
 // Get controller pose as a view matrix (for rendering weapon at controller position)
 // Returns 1 if successful, 0 if controller not tracking
 //
-// This builds a view matrix that positions the weapon at the controller location
-// in world space, similar to how the eye view matrix is built.
+// This builds a view matrix that positions AND orients the weapon according to the
+// controller, combining game camera body orientation with controller orientation.
 int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
 {
     static int debugCounter = 0;
@@ -967,58 +1002,123 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
         return 0;
     }
 
-    // Get the current eye view matrix as our base - this has the correct world position
-    rdMatrix34 eyeViewMat;
-    if (!stdVR_GetCurrentEyeViewMatrix(&eyeViewMat)) {
-        // Fallback: just return identity if no eye view available
+    // We need the game camera (body orientation/position) to combine with controller
+    if (!stdVR_currentGameCameraValid) {
         if (debugCounter % logEvery == 0) {
-            VR_Log("GetControllerViewMatrix: no eye view matrix available\n");
+            VR_Log("GetControllerViewMatrix: no game camera available\n");
         }
         return 0;
     }
 
-    // Controller and HMD positions are in JKDF2 coords (meters):
-    // X = right, Y = forward, Z = up
+    const rdMatrix34* pGameCamera = &stdVR_currentGameCamera;
+
+    // World scale converts VR meters to game world units
+    float worldScale = stdVR_config.worldScale;
+    if (worldScale <= 0.0f) worldScale = 1.0f;
+
+    // ==========================================
+    // ORIENTATION: Combine game camera body rotation with controller orientation
+    // ==========================================
+    // Just like eye view: combined = gameCamera * vrPose
+    // But for controller, we use controller pose instead of eye pose
+    //
+    // This makes the weapon point where the controller points, but rotated
+    // into game world space by the body direction.
+
+    // First apply pitch adjustment to controller pose if configured
+    rdMatrix34 adjustedPose;
+    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+        // Build pitch rotation matrix
+        rdMatrix34 pitchRot;
+        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
+
+        // Apply pitch adjustment: adjustedPose = controllerPose * pitchRot
+        rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
+    } else {
+        rdMatrix_Copy34(&adjustedPose, &pCtrl->poseMatrix);
+    }
+
+    rdMatrix34 combined;
+    rdMatrix_Multiply34(&combined, pGameCamera, &adjustedPose);
+
+    // ==========================================
+    // POSITION: Game camera position + controller offset from HMD
+    // ==========================================
+    // Controller position is in VR tracking space (meters, JKDF2 coords)
+    // We need offset from HMD to controller, transformed by body orientation
+
     rdVector3 ctrlPos = pCtrl->position;
     rdVector3 hmdPos = stdVR_clientInfo.hmdPosition;
 
-    // Offset from HMD to controller (in meters, JKDF2 coords)
+    // Offset from HMD to controller (in meters)
     rdVector3 offset;
     offset.x = ctrlPos.x - hmdPos.x;
     offset.y = ctrlPos.y - hmdPos.y;
     offset.z = ctrlPos.z - hmdPos.z;
 
-    // World scale converts VR meters to game world units
-    float scale = stdVR_config.worldScale;
-    if (scale <= 0.0f) scale = 1.0f;
+    // Apply weapon position offset in controller local space
+    // Transform the offset by controller orientation before adding
+    if (stdVR_motionConfig.weaponOffsetX != 0.0f ||
+        stdVR_motionConfig.weaponOffsetY != 0.0f ||
+        stdVR_motionConfig.weaponOffsetZ != 0.0f) {
+        rdVector3 localOffset;
+        localOffset.x = stdVR_motionConfig.weaponOffsetX;
+        localOffset.y = stdVR_motionConfig.weaponOffsetY;
+        localOffset.z = stdVR_motionConfig.weaponOffsetZ;
 
-    // Scale the offset to world units (same scale used for HMD movement)
-    // Use worldScale * 2 to make weapon movement more noticeable
-    float weaponScale = scale * 2.0f;
+        // Transform local offset by controller orientation
+        rdVector3 transformedOffset;
+        rdMatrix_TransformVector34(&transformedOffset, &localOffset, &adjustedPose);
 
+        offset.x += transformedOffset.x;
+        offset.y += transformedOffset.y;
+        offset.z += transformedOffset.z;
+    }
+
+    // Scale offset to game world units
+    // Use a larger scale for weapon to make motion more visible
+    float weaponScale = worldScale * 2.0f;
+    rdVector3 scaledOffset;
+    scaledOffset.x = offset.x * weaponScale;
+    scaledOffset.y = offset.y * weaponScale;
+    scaledOffset.z = offset.z * weaponScale;
+
+    // Transform offset by game camera orientation (rotate into world space)
     rdVector3 worldOffset;
-    worldOffset.x = offset.x * weaponScale;
-    worldOffset.y = offset.y * weaponScale;
-    worldOffset.z = offset.z * weaponScale;
+    rdMatrix_TransformVector34(&worldOffset, &scaledOffset, pGameCamera);
 
-    // Start with the eye view matrix (has correct camera world position and orientation)
-    rdMatrix_Copy34(pViewMat, &eyeViewMat);
+    // Also include HMD offset from tracking origin (same as eye view does)
+    rdVector3 hmdOffset;
+    hmdOffset.x = hmdPos.x * worldScale;
+    hmdOffset.y = hmdPos.y * worldScale;
+    hmdOffset.z = hmdPos.z * worldScale;
 
-    // Add the controller offset to the position (in world space)
-    // The eye view matrix position is already in world coordinates
-    pViewMat->scale.x += worldOffset.x;
-    pViewMat->scale.y += worldOffset.y;
-    pViewMat->scale.z += worldOffset.z;
+    rdVector3 hmdOffsetWorld;
+    rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
+
+    // Final position = game camera position + HMD offset + controller offset
+    combined.scale.x = pGameCamera->scale.x + hmdOffsetWorld.x + worldOffset.x;
+    combined.scale.y = pGameCamera->scale.y + hmdOffsetWorld.y + worldOffset.y;
+    combined.scale.z = pGameCamera->scale.z + hmdOffsetWorld.z + worldOffset.z;
+
+    rdMatrix_Copy34(pViewMat, &combined);
 
     if (debugCounter % logEvery == 0) {
         VR_Log("=== GetControllerViewMatrix hand=%d frame=%d ===\n", hand, debugCounter);
-        VR_Log("  eyeViewMat pos=(%.3f, %.3f, %.3f)\n",
-            eyeViewMat.scale.x, eyeViewMat.scale.y, eyeViewMat.scale.z);
+        VR_Log("  gameCamera pos=(%.3f, %.3f, %.3f)\n",
+            pGameCamera->scale.x, pGameCamera->scale.y, pGameCamera->scale.z);
+        VR_Log("  ctrlPose   ori: rvec=(%.3f,%.3f,%.3f) lvec=(%.3f,%.3f,%.3f)\n",
+            pCtrl->poseMatrix.rvec.x, pCtrl->poseMatrix.rvec.y, pCtrl->poseMatrix.rvec.z,
+            pCtrl->poseMatrix.lvec.x, pCtrl->poseMatrix.lvec.y, pCtrl->poseMatrix.lvec.z);
         VR_Log("  offset (meters)=(%.4f, %.4f, %.4f)\n", offset.x, offset.y, offset.z);
         VR_Log("  worldOffset    =(%.4f, %.4f, %.4f) scale=%.3f\n",
             worldOffset.x, worldOffset.y, worldOffset.z, weaponScale);
         VR_Log("  final pos      =(%.3f, %.3f, %.3f)\n",
             pViewMat->scale.x, pViewMat->scale.y, pViewMat->scale.z);
+        VR_Log("  final ori: rvec=(%.3f,%.3f,%.3f) lvec=(%.3f,%.3f,%.3f)\n",
+            pViewMat->rvec.x, pViewMat->rvec.y, pViewMat->rvec.z,
+            pViewMat->lvec.x, pViewMat->lvec.y, pViewMat->lvec.z);
     }
 
     return 1;
@@ -1300,7 +1400,7 @@ void stdVR_UpdateMenuCursor(void)
     // Convert to normalized cursor coordinates (0.0 - 1.0)
     // Based on user testing: pitch controls X, roll controls Y
     float pitchRange = 45.0f;  // Degrees of pitch that spans the screen width
-    float rollRange = 30.0f;   // Degrees of roll that spans the screen height (more sensitive)
+    float rollRange = 15.0f;   // Degrees of roll that spans the screen height (2x sensitivity)
 
     // X: Pitch controls horizontal (negate so tilting left moves cursor left)
     float cursorX = 0.5f - (controllerPitch / pitchRange) * 0.5f;

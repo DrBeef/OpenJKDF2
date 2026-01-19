@@ -229,6 +229,14 @@ typedef struct stdVR_MotionConfig {
     float weaponPitchAdjust;        // Controller pitch offset for weapons
     float saberPitchAdjust;         // Controller pitch offset for saber
 
+    // Weapon position offset (meters, in controller local space)
+    float weaponOffsetX;            // Left/right offset
+    float weaponOffsetY;            // Forward/back offset (negative = closer to player)
+    float weaponOffsetZ;            // Up/down offset
+
+    // Weapon model scale (default 1.0, increase for larger weapon model)
+    float weaponModelScale;
+
     // Feature toggles
     int bMotionAimEnabled;          // Aim with controller instead of HMD
     int bMotionSaberEnabled;        // Swing to attack with saber

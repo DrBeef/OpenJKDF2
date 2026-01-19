@@ -1400,18 +1400,68 @@ sithThing* sithWeapon_FireProjectile(sithThing *sender, sithThing *projectileTem
             rdMatrix_PreRotate34(&out, &sender->actorParams.eyePYR);
     }
 
-    if ( fireOffset->x == 0.0 && fireOffset->y == 0.0 && fireOffset->z == 0.0 )
+#ifdef PLATFORM_VR
+    // VR motion controls: fire from controller position, not player body
+    if (stdVR_bEnabled && stdVR_motionConfig.bMotionAimEnabled &&
+        thingtype == SITH_THING_PLAYER && sender == sithPlayer_pLocalPlayerThing)
     {
-        *fireOffset = sender->position;
+        stdVR_ControllerState* pCtrl = stdVR_GetDominantController();
+        if (pCtrl && pCtrl->bTracking)
+        {
+            // Get controller world position as fire origin
+            rdVector3 controllerWorldPos;
+            stdVR_ControllerToWorld(stdVR_GetDominantHand(), &controllerWorldPos);
+
+            // Debug: Log fire position and direction from controller
+            extern void VR_Log(const char* fmt, ...);
+            VR_Log("VR FIRE: controller pos=(%.3f, %.3f, %.3f) player pos=(%.3f, %.3f, %.3f)\n",
+                controllerWorldPos.x, controllerWorldPos.y, controllerWorldPos.z,
+                sender->position.x, sender->position.y, sender->position.z);
+            VR_Log("VR FIRE: aim direction (lvec)=(%.3f, %.3f, %.3f)\n",
+                out.lvec.x, out.lvec.y, out.lvec.z);
+
+            if ( fireOffset->x == 0.0 && fireOffset->y == 0.0 && fireOffset->z == 0.0 )
+            {
+                // No offset specified, use controller position directly
+                *fireOffset = controllerWorldPos;
+            }
+            else
+            {
+                // Transform offset by controller orientation, then add to controller position
+                rdMatrix_TransformVector34Acc(fireOffset, &out);
+                fireOffset->x = controllerWorldPos.x + fireOffset->x;
+                fireOffset->y = controllerWorldPos.y + fireOffset->y;
+                fireOffset->z = controllerWorldPos.z + fireOffset->z;
+            }
+
+            VR_Log("VR FIRE: final fireOffset=(%.3f, %.3f, %.3f)\n",
+                fireOffset->x, fireOffset->y, fireOffset->z);
+        }
+        else
+        {
+            // Controller not tracking, fall back to player position
+            goto use_player_position;
+        }
     }
     else
+#endif
     {
-        rdMatrix_TransformVector34Acc(fireOffset, &out);
-        v13 = sender->position.y + fireOffset->y;
-        v14 = sender->position.z + fireOffset->z;
-        fireOffset->x = fireOffset->x + sender->position.x;
-        fireOffset->y = v13;
-        fireOffset->z = v14;
+#ifdef PLATFORM_VR
+use_player_position:
+#endif
+        if ( fireOffset->x == 0.0 && fireOffset->y == 0.0 && fireOffset->z == 0.0 )
+        {
+            *fireOffset = sender->position;
+        }
+        else
+        {
+            rdMatrix_TransformVector34Acc(fireOffset, &out);
+            v13 = sender->position.y + fireOffset->y;
+            v14 = sender->position.z + fireOffset->z;
+            fireOffset->x = fireOffset->x + sender->position.x;
+            fireOffset->y = v13;
+            fireOffset->z = v14;
+        }
     }
 
     if ( (sithWeapon_bAutoAim & 1) != 0 && (scaleFlags & 0x20) != 0 && (!sithNet_isMulti || (scaleFlags & 0x40) != 0) )

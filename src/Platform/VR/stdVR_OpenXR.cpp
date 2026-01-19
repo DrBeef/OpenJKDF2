@@ -59,17 +59,11 @@ static void VR_InitLog(void)
         NULL
     };
 
-    printf("[VR] Attempting to open log file...\n");
     for (int i = 0; logPaths[i] != NULL; i++) {
-        printf("[VR] Trying: %s\n", logPaths[i]);
         vrLogFile = fopen(logPaths[i], "w");
         if (vrLogFile) {
-            printf("[VR] SUCCESS: Opened %s\n", logPaths[i]);
             fprintf(vrLogFile, "VR log opened at: %s\n", logPaths[i]);
-            fflush(vrLogFile);
             break;
-        } else {
-            printf("[VR] FAILED to open %s\n", logPaths[i]);
         }
     }
 
@@ -79,6 +73,9 @@ static void VR_InitLog(void)
         fflush(vrLogFile);
     }
 }
+
+// Set to 1 to enable verbose VR logging to console (performance impact!)
+#define VR_VERBOSE_CONSOLE_LOGGING 0
 
 extern "C" void VR_Log(const char* fmt, ...)
 {
@@ -90,18 +87,18 @@ extern "C" void VR_Log(const char* fmt, ...)
     va_list args;
     va_start(args, fmt);
 
-    // Print to console
+#if VR_VERBOSE_CONSOLE_LOGGING
+    // Print to console (disabled by default for performance)
     char buffer[1024];
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     stdPlatform_Printf("%s", buffer);
+#endif
 
-    // Also write to log file
+    // Write to log file only (no console spam)
     if (vrLogFile) {
         va_list args2;
         va_start(args2, fmt);
         vfprintf(vrLogFile, fmt, args2);
-        // Temporarily re-enabled fflush for debugging motion controls
-        fflush(vrLogFile);
         va_end(args2);
     }
 

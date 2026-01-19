@@ -995,14 +995,18 @@ void jkPlayer_DrawPov()
                 // Force weapon model to rebuild hierarchyNodeMatrices for this eye
                 playerThings[playerThingIdx].povModel.frameTrue = 0;
 
-                // Apply weapon model offset - the gun model origin needs adjustment
-                // to align with the controller grip position
-                rdVector3 weaponOffset = { 0.0f, 0.0f, 0.0f };  // Tune as needed
-                rdMatrix_PreTranslate34(&viewMat, &weaponOffset);
-
-                if (vrDebugCounter % 100 == 0) {
-                    VR_Log("  vrMotionWeapon=1, ViewMat pos: (%.3f, %.3f, %.3f)\n",
-                        viewMat.scale.x, viewMat.scale.y, viewMat.scale.z);
+                // Apply weapon model scale for VR (makes weapon appear larger)
+                float weaponScale = stdVR_motionConfig.weaponModelScale;
+                if (weaponScale > 0.0f && weaponScale != 1.0f) {
+                    viewMat.rvec.x *= weaponScale;
+                    viewMat.rvec.y *= weaponScale;
+                    viewMat.rvec.z *= weaponScale;
+                    viewMat.lvec.x *= weaponScale;
+                    viewMat.lvec.y *= weaponScale;
+                    viewMat.lvec.z *= weaponScale;
+                    viewMat.uvec.x *= weaponScale;
+                    viewMat.uvec.y *= weaponScale;
+                    viewMat.uvec.z *= weaponScale;
                 }
             } else if (vrDebugCounter % 100 == 0) {
                 VR_Log("  GetControllerViewMatrix FAILED\n");
