@@ -744,6 +744,14 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 // Left grip = use inventory item
                 vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_L);
                 break;
+            case INPUT_FUNC_NEXTWEAPON:
+                // Y button = cycle to next weapon
+                vrInput = stdVR_Input_IsButtonPressed(STDVR_BTN_Y);
+                break;
+            case INPUT_FUNC_GAMESAVE:
+                // Left thumbstick click = quick save
+                vrInput = stdVR_Input_IsButtonPressed(STDVR_BTN_THUMBSTICK_L);
+                break;
             default:
                 break;
         }

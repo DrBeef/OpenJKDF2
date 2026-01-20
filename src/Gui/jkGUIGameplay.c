@@ -14,6 +14,7 @@
 #include "Gui/jkGUISetup.h"
 #include "World/sithWeapon.h"
 #include "World/jkPlayer.h"
+#include "Engine/sithCamera.h"
 #include "types_enums.h"
 
 static wchar_t slider_val_text[5] = {0};
@@ -21,7 +22,7 @@ static int32_t slider_images[2] = {JKGUI_BM_SLIDER_BACK_200, JKGUI_BM_SLIDER_THU
 
 void jkGuiGameplay_ScaleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 
-static jkGuiElement jkGuiGameplay_buttons[45] = {
+static jkGuiElement jkGuiGameplay_buttons[46] = {
     {ELEMENT_TEXT, 0, 0, 0, 3, {0, 410, 640, 20}, 1, 0, 0, 0, 0, 0, {0}, 0},
     {ELEMENT_TEXT, 0, 6, "GUI_SETUP", 3, {20, 20, 600, 40}, 1, 0, 0, 0, 0, 0, {0}, 0},
     {ELEMENT_TEXTBUTTON, 100, 2, "GUI_GENERAL", 3, {20, 80, 120, 40},  1, 0, "GUI_GENERAL_HINT", 0, 0, 0, {0}, 0},
@@ -72,11 +73,12 @@ static jkGuiElement jkGuiGameplay_buttons[45] = {
     {ELEMENT_CHECKBOX, 0, 0, "GUIEXT_SHOW_SABER_CROSSHAIR", 0, {30, 230, 270, 20}, 1, 0, "GUIEXT_SHOW_SABER_CROSSHAIR_HINT", 0, 0, 0, {0}, 0},
     {ELEMENT_CHECKBOX, 0, 0, "GUIEXT_SHOW_FIST_CROSSHAIR", 0, {30, 250, 270, 20}, 1, 0, "GUIEXT_SHOW_FIST_CROSSHAIR_HINT", 0, 0, 0, {0}, 0},
     {ELEMENT_CHECKBOX, 0, 0, "GUIEXT_DISABLE_WAGGLE", 0, {30, 270, 270, 20}, 1, 0, "GUIEXT_DISABLE_WAGGLE_HINT", 0, 0, 0, {0}, 0},
+    {ELEMENT_CHECKBOX, 0, 0, "GUIEXT_DISABLE_POV_SHAKE", 0, {30, 290, 270, 20}, 1, 0, "GUIEXT_DISABLE_POV_SHAKE_HINT", 0, 0, 0, {0}, 0},
 
-    // 41
-    {ELEMENT_SLIDER, 0, 0, (const char*)10, 50, { 30, 345, 235, 30 }, 1, 0, "GUIEXT_CROSSHAIR_SCALE_HINT", jkGuiGameplay_ScaleDraw, 0, slider_images, {0}, 0},
-    {ELEMENT_TEXT,         0,            0, "GUIEXT_CROSSHAIR_SCALE",                 3, {30, 345-25, 235, 20}, 1,  0, 0, 0, 0, 0, {0}, 0},
-    {ELEMENT_TEXT,         0,            0, slider_val_text,        3, {30, 345+30, 235, 20}, 1,  0, 0, 0, 0, 0, {0}, 0},
+    // 42
+    {ELEMENT_SLIDER, 0, 0, (const char*)10, 50, { 30, 365, 235, 30 }, 1, 0, "GUIEXT_CROSSHAIR_SCALE_HINT", jkGuiGameplay_ScaleDraw, 0, slider_images, {0}, 0},
+    {ELEMENT_TEXT,         0,            0, "GUIEXT_CROSSHAIR_SCALE",                 3, {30, 365-25, 235, 20}, 1,  0, 0, 0, 0, 0, {0}, 0},
+    {ELEMENT_TEXT,         0,            0, slider_val_text,        3, {30, 365+30, 235, 20}, 1,  0, 0, 0, 0, 0, {0}, 0},
 #endif /* QOL_IMPROVEMENTS */
  
     {ELEMENT_END, 0, 0, 0, 0, {0}, 0, 0, 0, 0, 0, 0, {0}, 0},
@@ -97,14 +99,14 @@ void jkGuiGameplay_Shutdown()
 #ifdef QOL_IMPROVEMENTS
 void jkGuiGameplay_ScaleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
 {
-    flex_t tmp = ((flex_t)jkGuiGameplay_buttons[41].selectedTextEntry)*0.2f; // FLEXTODO
-    
+    flex_t tmp = ((flex_t)jkGuiGameplay_buttons[42].selectedTextEntry)*0.2f; // FLEXTODO
+
     jk_snwprintf(slider_val_text, 5, L"%f", tmp);
-    jkGuiGameplay_buttons[42].wstr = slider_val_text;
-    
+    jkGuiGameplay_buttons[44].wstr = slider_val_text;
+
     jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
-    
-    jkGuiRend_UpdateAndDrawClickable(&jkGuiGameplay_buttons[42], menu, 1);
+
+    jkGuiRend_UpdateAndDrawClickable(&jkGuiGameplay_buttons[44], menu, 1);
 }
 #endif // QOL_IMPROVEMENTS
 
@@ -137,7 +139,8 @@ int jkGuiGameplay_Show()
     jkGuiGameplay_buttons[38].selectedTextEntry = jkPlayer_setCrosshairOnLightsaber;
     jkGuiGameplay_buttons[39].selectedTextEntry = jkPlayer_setCrosshairOnFist;
     jkGuiGameplay_buttons[40].selectedTextEntry = jkPlayer_bDisableWeaponWaggle;
-    jkGuiGameplay_buttons[41].selectedTextEntry = jkPlayer_crosshairScale * 5;
+    jkGuiGameplay_buttons[41].selectedTextEntry = sithCamera_bDisablePovShake;
+    jkGuiGameplay_buttons[42].selectedTextEntry = jkPlayer_crosshairScale * 5;
 #endif /* QOL_IMPROVEMENTS */
     
 
@@ -181,7 +184,8 @@ int jkGuiGameplay_Show()
         jkPlayer_setCrosshairOnLightsaber = jkGuiGameplay_buttons[38].selectedTextEntry;
         jkPlayer_setCrosshairOnFist = jkGuiGameplay_buttons[39].selectedTextEntry;
         jkPlayer_bDisableWeaponWaggle = jkGuiGameplay_buttons[40].selectedTextEntry;
-        jkPlayer_crosshairScale = ((flex_t)jkGuiGameplay_buttons[41].selectedTextEntry)*0.2f; // FLEXTODO
+        sithCamera_bDisablePovShake = jkGuiGameplay_buttons[41].selectedTextEntry;
+        jkPlayer_crosshairScale = ((flex_t)jkGuiGameplay_buttons[42].selectedTextEntry)*0.2f; // FLEXTODO
 #endif /* QOL_IMPROVEMENTS */
     
         jkPlayer_WriteConf(jkPlayer_playerShortName);

@@ -1,4 +1,4 @@
-MSGS 100          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 102          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -16,6 +16,8 @@ MSGS 100          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_SHOW_FIST_CROSSHAIR_HINT"      0 "Display the crosshair when the fists are equipped?"
    "GUIEXT_DISABLE_WAGGLE"                0 "Disable Weapon Waggle"
    "GUIEXT_DISABLE_WAGGLE_HINT"           0 "Disable weapon waggle when moving?"
+   "GUIEXT_DISABLE_POV_SHAKE"             0 "Disable Camera Shake"
+   "GUIEXT_DISABLE_POV_SHAKE_HINT"        0 "Disable camera shake when firing weapons?"
    "GUIEXT_CROSSHAIR_SCALE"               0 "Crosshair Scale"
    "GUIEXT_CROSSHAIR_SCALE_HINT"          0 "Adjust the size of the crosshair (from 0% to 200%)"
 

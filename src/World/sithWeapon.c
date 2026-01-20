@@ -1409,6 +1409,8 @@ sithThing* sithWeapon_FireProjectile(sithThing *sender, sithThing *projectileTem
         if (pCtrl && pCtrl->bTracking)
         {
             // Get controller world position as fire origin
+            // stdVR_ControllerToWorld already includes weapon offsets (weaponOffsetX/Y/Z)
+            // which position the fire origin at the weapon's muzzle location.
             rdVector3 controllerWorldPos;
             stdVR_ControllerToWorld(stdVR_GetDominantHand(), &controllerWorldPos);
 
@@ -1420,19 +1422,18 @@ sithThing* sithWeapon_FireProjectile(sithThing *sender, sithThing *projectileTem
             VR_Log("VR FIRE: aim direction (lvec)=(%.3f, %.3f, %.3f)\n",
                 out.lvec.x, out.lvec.y, out.lvec.z);
 
-            if ( fireOffset->x == 0.0 && fireOffset->y == 0.0 && fireOffset->z == 0.0 )
-            {
-                // No offset specified, use controller position directly
-                *fireOffset = controllerWorldPos;
-            }
-            else
-            {
-                // Transform offset by controller orientation, then add to controller position
-                rdMatrix_TransformVector34Acc(fireOffset, &out);
-                fireOffset->x = controllerWorldPos.x + fireOffset->x;
-                fireOffset->y = controllerWorldPos.y + fireOffset->y;
-                fireOffset->z = controllerWorldPos.z + fireOffset->z;
-            }
+            // In VR, use controller position directly as the fire origin.
+            // The COG script's fireOffset is designed for non-VR (relative to player body)
+            // and applying it here with the pitch-adjusted orientation causes the projectile
+            // to spawn too low. The weapon position offsets in stdVR_ControllerToWorld
+            // already account for where the muzzle should be.
+            //
+            // Add a small forward offset along the aim direction so projectiles spawn
+            // in front of the weapon model, not inside it.
+            float muzzleOffset = 0.02f;  // 2cm forward in game units
+            fireOffset->x = controllerWorldPos.x + out.lvec.x * muzzleOffset;
+            fireOffset->y = controllerWorldPos.y + out.lvec.y * muzzleOffset;
+            fireOffset->z = controllerWorldPos.z + out.lvec.z * muzzleOffset;
 
             VR_Log("VR FIRE: final fireOffset=(%.3f, %.3f, %.3f)\n",
                 fireOffset->x, fireOffset->y, fireOffset->z);

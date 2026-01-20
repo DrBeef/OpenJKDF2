@@ -140,7 +140,6 @@ void stdVR_Input_MapToGame(void)
         // Button released
         if (stdVR_menuButtonHeld == 1) {
             // Short press - trigger escape/menu
-            // Route to controller escape key handling
             stdVR_menuTriggeredThisFrame = 1;
             stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.3f, 0.1f, 100.0f);
         }
