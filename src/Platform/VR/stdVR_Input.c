@@ -121,7 +121,10 @@ void stdVR_Input_MapToGame(void)
 
     // Handle menu button (escape/pause)
     // Short press = menu/escape, Long press = recenter
-    if (stdVR_clientInfo.buttonState & STDVR_BTN_MENU) {
+    // Accept both MENU button (if available) and Y button (Quest standard for pause)
+    int menuButtonPressed = (stdVR_clientInfo.buttonState & STDVR_BTN_MENU) ||
+                            (stdVR_clientInfo.buttonState & STDVR_BTN_Y);
+    if (menuButtonPressed) {
         if (!stdVR_menuButtonHeld) {
             // Button just pressed
             stdVR_menuButtonHeld = 1;
@@ -136,7 +139,9 @@ void stdVR_Input_MapToGame(void)
                 stdVR_menuButtonHeld = 2;  // Mark as handled (prevent repeated recenter)
             }
         }
-    } else {
+    }
+
+    if (!menuButtonPressed) {
         // Button released
         if (stdVR_menuButtonHeld == 1) {
             // Short press - trigger escape/menu
