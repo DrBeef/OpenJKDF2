@@ -61,6 +61,11 @@ void sithCamera_PrepareFrameVR(void);
 void sithCamera_SetVRView(int eye);
 #endif
 
+// Added: Option to disable POV shake
+#ifdef QOL_IMPROVEMENTS
+extern int sithCamera_bDisablePovShake;
+#endif
+
 #ifndef __cplusplus
 //static void (*sithCamera_Shutdown)() = (void*)sithCamera_Shutdown_ADDR;
 static int (*sithCamera_NewEntry_)(sithCamera *camera, int a2, int a3, flex_t fov, flex_t a5, rdCanvas* a6, sithThing *focus_far, sithThing *focus_near) = (void*)sithCamera_NewEntry_ADDR;

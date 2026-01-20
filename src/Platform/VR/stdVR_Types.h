@@ -237,11 +237,18 @@ typedef struct stdVR_MotionConfig {
     // Weapon model scale (default 1.0, increase for larger weapon model)
     float weaponModelScale;
 
+    // Fire position offset (meters, in world space - adjusts where bullets spawn)
+    // These are applied ON TOP of weapon offsets, only affecting fire position not weapon visual
+    float fireOffsetX;              // Right offset (positive = right)
+    float fireOffsetY;              // Forward offset (positive = forward)
+    float fireOffsetZ;              // Up offset (positive = up)
+
     // Feature toggles
     int bMotionAimEnabled;          // Aim with controller instead of HMD
     int bMotionSaberEnabled;        // Swing to attack with saber
     int bMotionForceEnabled;        // Gestures for Force powers
     int bTwoHandedEnabled;          // Off-hand for rifle grip stabilization
+    int bDisablePovAnims;           // Disable weapon recoil/fire animations in VR
 
     // Smoothing
     int positionSmoothingSamples;   // 1-10 samples (default: 3)

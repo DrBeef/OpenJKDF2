@@ -205,6 +205,7 @@ void jkPlayer_StartupVars()
     sithCvar_RegisterBool("hud_setCrosshairOnLightsaber", 1,                        &jkPlayer_setCrosshairOnLightsaber, CVARFLAG_LOCAL);
     sithCvar_RegisterBool("hud_setCrosshairOnFist",     1,                          &jkPlayer_setCrosshairOnFist,       CVARFLAG_LOCAL);
     sithCvar_RegisterBool("hud_disableWeaponWaggle",    0,                          &jkPlayer_bDisableWeaponWaggle,     CVARFLAG_LOCAL);
+    sithCvar_RegisterBool("hud_disablePovShake",       1,                          &sithCamera_bDisablePovShake,       CVARFLAG_LOCAL);
     sithCvar_RegisterFlex("g_canonicalCogTickrate",     CANONICAL_COG_TICKRATE,     &jkPlayer_canonicalCogTickrate,     CVARFLAG_LOCAL);
     sithCvar_RegisterFlex("g_canonicalPhysTickrate",    CANONICAL_PHYS_TICKRATE,    &jkPlayer_canonicalPhysTickrate,    CVARFLAG_LOCAL);
 
@@ -252,6 +253,7 @@ void jkPlayer_ResetVars()
     jkPlayer_setCrosshairOnLightsaber = 1;
     jkPlayer_setCrosshairOnFist = 1;
     jkPlayer_bDisableWeaponWaggle = 0;
+    sithCamera_bDisablePovShake = 1;
 
     jkPlayer_bHasLoadedSettingsOnce = 0;
 #endif
@@ -598,6 +600,8 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveFloat(ext_fpath, "gamma", jkPlayer_gamma);
 #ifdef PLATFORM_VR
         stdJSON_SaveFloat(ext_fpath, "vrSupersampling", jkPlayer_vrSupersampling);
+        stdJSON_SaveInt(ext_fpath, "vrSnapTurnAngle", jkPlayer_vrSnapTurnAngle);
+        stdJSON_SaveInt(ext_fpath, "vrSmoothTurnSpeed", jkPlayer_vrSmoothTurnSpeed);
 #endif
         stdJSON_SaveBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         stdJSON_SaveBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
@@ -614,6 +618,7 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveBool(ext_fpath, "setCrosshairOnLightsaber", jkPlayer_setCrosshairOnLightsaber);
         stdJSON_SaveBool(ext_fpath, "setCrosshairOnFist", jkPlayer_setCrosshairOnFist);
         stdJSON_SaveBool(ext_fpath, "bDisableWeaponWaggle", jkPlayer_bDisableWeaponWaggle);
+        stdJSON_SaveBool(ext_fpath, "bDisablePovShake", sithCamera_bDisablePovShake);
 #endif
 #ifdef FIXED_TIMESTEP_PHYS
         stdJSON_SaveBool(ext_fpath, "bJankyPhysics", jkPlayer_bJankyPhysics);
@@ -795,6 +800,8 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_gamma = stdJSON_GetFloat(ext_fpath, "gamma", jkPlayer_gamma);
 #ifdef PLATFORM_VR
         jkPlayer_vrSupersampling = stdJSON_GetFloat(ext_fpath, "vrSupersampling", jkPlayer_vrSupersampling);
+        jkPlayer_vrSnapTurnAngle = stdJSON_GetInt(ext_fpath, "vrSnapTurnAngle", jkPlayer_vrSnapTurnAngle);
+        jkPlayer_vrSmoothTurnSpeed = stdJSON_GetInt(ext_fpath, "vrSmoothTurnSpeed", jkPlayer_vrSmoothTurnSpeed);
 #endif
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
@@ -812,6 +819,7 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_setCrosshairOnLightsaber = stdJSON_GetBool(ext_fpath, "setCrosshairOnLightsaber", jkPlayer_setCrosshairOnLightsaber);
         jkPlayer_setCrosshairOnFist = stdJSON_GetBool(ext_fpath, "setCrosshairOnFist", jkPlayer_setCrosshairOnFist);
         jkPlayer_bDisableWeaponWaggle = stdJSON_GetBool(ext_fpath, "bDisableWeaponWaggle", jkPlayer_bDisableWeaponWaggle);
+        sithCamera_bDisablePovShake = stdJSON_GetBool(ext_fpath, "bDisablePovShake", sithCamera_bDisablePovShake);
 #endif
 #ifdef FIXED_TIMESTEP_PHYS
         jkPlayer_bJankyPhysics = stdJSON_GetBool(ext_fpath, "bJankyPhysics", jkPlayer_bJankyPhysics);

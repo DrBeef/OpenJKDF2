@@ -1144,7 +1144,11 @@ void Window_SdlUpdate()
                 if (jkPlayer_bHasLoadedSettingsOnce) {
                     jkPlayer_WriteConf(jkPlayer_playerShortName);
                 }
-                
+
+#ifdef PLATFORM_VR
+                // Added: Shutdown VR before exit to prevent hang
+                stdVR_Shutdown();
+#endif
                 exit(-1);
                 break;
             default:
@@ -1205,7 +1209,25 @@ void Window_SdlUpdate()
 #ifdef PLATFORM_VR
         static int vrMenuFrameCount = 0;
         static int vrMenuCheckCount = 0;
+        static int vrSessionRetryCount = 0;
         vrMenuCheckCount++;
+
+        // Retry VR session creation if not yet running (headset might not have been ready initially)
+        if (stdVR_bInitted && stdVR_bEnabled && !stdVR_IsSessionRunning()) {
+            // Retry every 60 frames (~1 second at 60fps)
+            if (vrSessionRetryCount % 60 == 0) {
+                extern void* glWindowContext;
+                if (stdVR_CreateSession(glWindowContext)) {
+                    stdPlatform_Printf("Window: VR session created (retry #%d)\n", vrSessionRetryCount / 60);
+                }
+            }
+            vrSessionRetryCount++;
+        } else {
+            vrSessionRetryCount = 0;
+        }
+
+        // Poll VR events even when not rendering to catch session state changes
+        stdVR_PollEvents();
 
         int vrEnabled = stdVR_bEnabled;
         int vrRunning = stdVR_IsSessionRunning();

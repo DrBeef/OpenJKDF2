@@ -184,6 +184,9 @@ extern "C" void VR_Log(const char* fmt, ...)
     va_end(args);
 }
 
+// Forward declarations
+static void PollEvents(void);
+
 // OpenXR state
 static XrInstance xrInstance = XR_NULL_HANDLE;
 static XrSystemId xrSystemId = XR_NULL_SYSTEM_ID;
@@ -1197,6 +1200,32 @@ cleanup_session:
 
 extern "C" void stdVR_OpenXR_DestroySession(void)
 {
+    VR_Log("stdVR_OpenXR: DestroySession called, session=%p, running=%d\n",
+           (void*)xrSession, xrSessionRunning ? 1 : 0);
+
+    // If session is running, request proper exit first
+    if (xrSession != XR_NULL_HANDLE && xrSessionRunning) {
+        VR_Log("stdVR_OpenXR: Requesting session exit...\n");
+        XrResult result = xrRequestExitSession(xrSession);
+        if (XR_SUCCEEDED(result)) {
+            // Poll events to process the exit (STOPPING -> xrEndSession -> IDLE)
+            // Give it a few attempts to complete the state machine
+            for (int i = 0; i < 10 && xrSessionRunning; i++) {
+                PollEvents();
+                if (!xrSessionRunning) break;
+                // Small sleep to allow runtime to process
+#ifdef _WIN32
+                Sleep(10);
+#else
+                usleep(10000);
+#endif
+            }
+            VR_Log("stdVR_OpenXR: Session exit complete, running=%d\n", xrSessionRunning ? 1 : 0);
+        } else {
+            VR_Log("stdVR_OpenXR: xrRequestExitSession failed: %d\n", result);
+        }
+    }
+
     xrSessionRunning = false;
     stdVR_clientInfo.bSessionRunning = 0;
 
@@ -1394,9 +1423,21 @@ extern "C" void stdVR_OpenXR_PollEvents(void)
 
 extern "C" int stdVR_OpenXR_WaitFrame(void)
 {
+    // Poll events first to catch session state changes
     PollEvents();
 
+    // Check session state - don't try to wait if session isn't in a running state
     if (!xrSessionRunning) {
+        return 0;
+    }
+
+    // Also check explicit session states that shouldn't call WaitFrame
+    if (xrSessionState == XR_SESSION_STATE_STOPPING ||
+        xrSessionState == XR_SESSION_STATE_EXITING ||
+        xrSessionState == XR_SESSION_STATE_LOSS_PENDING ||
+        xrSessionState == XR_SESSION_STATE_IDLE) {
+        VR_Log("stdVR_OpenXR: WaitFrame skipped - session state is %s\n",
+            SessionStateToString(xrSessionState));
         return 0;
     }
 
@@ -1406,6 +1447,8 @@ extern "C" int stdVR_OpenXR_WaitFrame(void)
 
     if (XR_FAILED(result)) {
         VR_Log("stdVR_OpenXR: xrWaitFrame failed with error %d\n", result);
+        // If WaitFrame fails, session may be ending - poll again to update state
+        PollEvents();
         return 0;
     }
 

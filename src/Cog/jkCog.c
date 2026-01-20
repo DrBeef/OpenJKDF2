@@ -23,6 +23,10 @@
 
 #include "jk.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 // MOTS added
 int jkCog_bubbleIdx = 0;
 
@@ -287,6 +291,20 @@ void jkCog_PlayPovKey(sithCog *ctx)
     v2 = sithCogExec_PopInt(ctx);
     keyframe = sithCogExec_PopKeyframe(ctx);
     actorThing = sithCogExec_PopThing(ctx);
+
+    // Added: Skip POV animations in VR when motion controls are active
+    // The weapon is attached to the controller, so recoil animations look wrong
+#ifdef PLATFORM_VR
+    extern int stdVR_bEnabled;
+    extern stdVR_MotionConfig stdVR_motionConfig;
+    extern void VR_Log(const char* fmt, ...);
+    if (stdVR_bEnabled && stdVR_motionConfig.bMotionAimEnabled && stdVR_motionConfig.bDisablePovAnims) {
+        VR_Log("jkCog_PlayPovKey: Skipping POV animation (VR motion controls active)\n");
+        sithCogExec_PushInt(ctx, -1);
+        return;
+    }
+#endif
+
     if ( actorThing
       && keyframe
       && ((v5 = actorThing->type, v5 == SITH_THING_ACTOR) || v5 == SITH_THING_PLAYER)

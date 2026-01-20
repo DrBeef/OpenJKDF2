@@ -67,10 +67,14 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_motionConfig.weaponOffsetY = -0.1f;           // meters - forward (negative = back toward player)
     stdVR_motionConfig.weaponOffsetZ = 0.05f;           // meters - up/down (positive = up)
     stdVR_motionConfig.weaponModelScale = 1.4f;         // VR weapon model size multiplier
+    stdVR_motionConfig.fireOffsetX = 0.3f;              // meters - fire position right offset (~1 foot)
+    stdVR_motionConfig.fireOffsetY = 0.3f;              // meters - fire position forward offset (~1 foot)
+    stdVR_motionConfig.fireOffsetZ = 0.15f;             // meters - fire position up offset (~6 inches)
     stdVR_motionConfig.bMotionAimEnabled = 1;           // Enable controller aiming by default
     stdVR_motionConfig.bMotionSaberEnabled = 1;         // Enable swing-to-attack
     stdVR_motionConfig.bMotionForceEnabled = 0;         // Disable force gestures for now
     stdVR_motionConfig.bTwoHandedEnabled = 0;           // Disable two-handed for now
+    stdVR_motionConfig.bDisablePovAnims = 1;            // Disable weapon recoil animations by default
     stdVR_motionConfig.positionSmoothingSamples = 3;
     stdVR_motionConfig.velocitySmoothingFactor = 0.5f;
 }
@@ -714,9 +718,12 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
     rdVector3 hmdOffsetWorld;
     rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
 
-    // Transform IPD offset by the combined orientation (where you're actually looking)
+    // Transform IPD offset by game camera orientation only (not combined)
+    // The ipdOffset already includes head rotation from OpenXR (eye positions move with head roll),
+    // so we only need to apply body rotation to convert from tracking space to world space.
+    // Using 'combined' here would double-apply head roll, breaking stereo when tilting head.
     rdVector3 ipdOffsetWorld;
-    rdMatrix_TransformVector34(&ipdOffsetWorld, &ipdOffset, &combined);
+    rdMatrix_TransformVector34(&ipdOffsetWorld, &ipdOffset, pGameCamera);
 
     // Final position = game camera position + HMD offset (in world) + IPD offset (in world)
     combined.scale.x = pGameCamera->scale.x + hmdOffsetWorld.x + ipdOffsetWorld.x;
@@ -756,10 +763,14 @@ int stdVR_GetCurrentEyeViewMatrix(rdMatrix34* pOut)
 }
 
 // Added: Clear the current eye view matrix (called when not rendering an eye)
+// Note: We do NOT clear stdVR_currentGameCameraValid here because the game camera
+// is needed for fire position calculation which happens during game logic BEFORE
+// the next render pass sets a new camera. The last known game camera position is
+// much better than falling back to player->position for fire origin.
 void stdVR_ClearCurrentEyeViewMatrix(void)
 {
     stdVR_currentEyeViewMatValid = 0;
-    stdVR_currentGameCameraValid = 0;
+    // Keep stdVR_currentGameCameraValid = 1 so fire position uses last known camera
 }
 
 // ============================================================================
@@ -795,6 +806,8 @@ stdVR_ControllerState* stdVR_GetOffhandController(void)
 
 // Transform controller position to game world coordinates
 // Takes controller position (in VR tracking space) and outputs world position
+// This must match the position calculation in stdVR_GetControllerViewMatrix for
+// the fire position to align with the rendered weapon.
 void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
 {
     static int debugCounter = 0;
@@ -809,19 +822,37 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
         return;
     }
 
-    // Get player's world position and orientation
-    extern sithThing* sithPlayer_pLocalPlayerThing;
-    if (!sithPlayer_pLocalPlayerThing) {
-        return;
+    // Use game camera if available (matches weapon visual calculation exactly)
+    // Fall back to player thing if game camera not available
+    const rdMatrix34* pCamera = NULL;
+    rdVector3 cameraPos;
+
+    if (stdVR_currentGameCameraValid) {
+        pCamera = &stdVR_currentGameCamera;
+        cameraPos.x = pCamera->scale.x;
+        cameraPos.y = pCamera->scale.y;
+        cameraPos.z = pCamera->scale.z;
+    } else {
+        // Fallback to player orientation
+        extern sithThing* sithPlayer_pLocalPlayerThing;
+        if (!sithPlayer_pLocalPlayerThing) {
+            return;
+        }
+        pCamera = &sithPlayer_pLocalPlayerThing->lookOrientation;
+        cameraPos = sithPlayer_pLocalPlayerThing->position;
     }
 
-    sithThing* player = sithPlayer_pLocalPlayerThing;
+    float worldScale = stdVR_config.worldScale;
+    if (worldScale <= 0.0f) worldScale = 1.0f;
 
-    // Controller offset from HMD in tracking space
+    rdVector3 ctrlPos = pCtrl->position;
+    rdVector3 hmdPos = stdVR_clientInfo.hmdPosition;
+
+    // Controller offset from HMD in tracking space (meters)
     rdVector3 offset;
-    offset.x = pCtrl->position.x - stdVR_clientInfo.hmdPosition.x;
-    offset.y = pCtrl->position.y - stdVR_clientInfo.hmdPosition.y;
-    offset.z = pCtrl->position.z - stdVR_clientInfo.hmdPosition.z;
+    offset.x = ctrlPos.x - hmdPos.x;
+    offset.y = ctrlPos.y - hmdPos.y;
+    offset.z = ctrlPos.z - hmdPos.z;
 
     // Apply pitch adjustment to match weapon visual (same as GetControllerViewMatrix)
     rdMatrix34 adjustedPose;
@@ -852,38 +883,64 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
         offset.z += transformedOffset.z;
     }
 
-    // Scale to game units (controller offset is in meters)
-    float scale = stdVR_config.worldScale;
-    if (scale <= 0.0f) scale = 1.0f;
-    offset.x *= scale;
-    offset.y *= scale;
-    offset.z *= scale;
+    // Scale offset to game world units (same as GetControllerViewMatrix)
+    rdVector3 scaledOffset;
+    scaledOffset.x = offset.x * worldScale;
+    scaledOffset.y = offset.y * worldScale;
+    scaledOffset.z = offset.z * worldScale;
 
-    if (debugCounter % 100 == 0) {
-        VR_Log("  scaledOffset=(%.3f,%.3f,%.3f) scale=%.3f\n", offset.x, offset.y, offset.z, scale);
-    }
-
-    // Transform offset by player orientation
+    // Transform offset by camera orientation (rotate into world space)
     rdVector3 worldOffset;
-    rdMatrix_TransformVector34(&worldOffset, &offset, &player->lookOrientation);
+    rdMatrix_TransformVector34(&worldOffset, &scaledOffset, pCamera);
 
-    if (debugCounter % 100 == 0) {
-        VR_Log("  playerPos=(%.3f,%.3f,%.3f) worldOffset=(%.3f,%.3f,%.3f)\n",
-            player->position.x, player->position.y, player->position.z,
-            worldOffset.x, worldOffset.y, worldOffset.z);
+    // Also include HMD offset from tracking origin (same as GetControllerViewMatrix does)
+    // This is critical - without this, the fire position is missing the roomscale/standing offset
+    rdVector3 hmdOffset;
+    hmdOffset.x = hmdPos.x * worldScale;
+    hmdOffset.y = hmdPos.y * worldScale;
+    hmdOffset.z = hmdPos.z * worldScale;
+
+    rdVector3 hmdOffsetWorld;
+    rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pCamera);
+
+    // Final position = camera position + HMD offset + controller offset (matches weapon visual)
+    pWorldPos->x = cameraPos.x + hmdOffsetWorld.x + worldOffset.x;
+    pWorldPos->y = cameraPos.y + hmdOffsetWorld.y + worldOffset.y;
+    pWorldPos->z = cameraPos.z + hmdOffsetWorld.z + worldOffset.z;
+
+    // Apply fire position offset in controller local space (so it moves with weapon aim)
+    // Transform by combined body + controller orientation so offset rotates with weapon
+    if (stdVR_motionConfig.fireOffsetX != 0.0f ||
+        stdVR_motionConfig.fireOffsetY != 0.0f ||
+        stdVR_motionConfig.fireOffsetZ != 0.0f) {
+        rdVector3 fireOffset;
+        fireOffset.x = stdVR_motionConfig.fireOffsetX * worldScale;
+        fireOffset.y = stdVR_motionConfig.fireOffsetY * worldScale;
+        fireOffset.z = stdVR_motionConfig.fireOffsetZ * worldScale;
+
+        // Build combined orientation: body rotation * controller rotation
+        rdMatrix34 combinedOrientation;
+        rdMatrix_Multiply34(&combinedOrientation, pCamera, &adjustedPose);
+
+        rdVector3 fireOffsetWorld;
+        rdMatrix_TransformVector34(&fireOffsetWorld, &fireOffset, &combinedOrientation);
+
+        pWorldPos->x += fireOffsetWorld.x;
+        pWorldPos->y += fireOffsetWorld.y;
+        pWorldPos->z += fireOffsetWorld.z;
     }
-
-    // Add to player position
-    pWorldPos->x = player->position.x + worldOffset.x;
-    pWorldPos->y = player->position.y + worldOffset.y;
-    pWorldPos->z = player->position.z + worldOffset.z;
 
     // Apply height offset
     pWorldPos->z += stdVR_config.heightOffset;
 
     if (debugCounter % 100 == 0) {
-        VR_Log("  RESULT worldPos=(%.3f,%.3f,%.3f) heightOffset=%.3f\n",
-            pWorldPos->x, pWorldPos->y, pWorldPos->z, stdVR_config.heightOffset);
+        VR_Log("ControllerToWorld: camera=(%.3f,%.3f,%.3f) hmdOffset=(%.3f,%.3f,%.3f) ctrlOffset=(%.3f,%.3f,%.3f)\n",
+            cameraPos.x, cameraPos.y, cameraPos.z,
+            hmdOffsetWorld.x, hmdOffsetWorld.y, hmdOffsetWorld.z,
+            worldOffset.x, worldOffset.y, worldOffset.z);
+        VR_Log("  fireOffset=(%.3f,%.3f,%.3f) RESULT worldPos=(%.3f,%.3f,%.3f)\n",
+            stdVR_motionConfig.fireOffsetX, stdVR_motionConfig.fireOffsetY, stdVR_motionConfig.fireOffsetZ,
+            pWorldPos->x, pWorldPos->y, pWorldPos->z);
     }
 }
 

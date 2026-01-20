@@ -24,6 +24,11 @@ static rdVector3 sithCamera_trans2 = {0.0, 0.2, 0.0};
 static rdVector3 sithCamera_trans3 = {0.0, 1.0, 1.0};
 static int sithCamera_camIdxToGlobalIdx[2] = {0,1};
 
+// Added: Option to disable POV shake (camera shake when firing weapons)
+#ifdef QOL_IMPROVEMENTS
+int sithCamera_bDisablePovShake = 1;
+#endif
+
 int sithCamera_Startup()
 {
     sithCamera_NewEntry(&sithCamera_cameras[0], 0, 0x1, SITHCAMERA_FOV, SITHCAMERA_ASPECT, NULL, NULL, NULL);
@@ -255,7 +260,11 @@ void sithCamera_FollowFocus(sithCamera *cam)
 
                 if ( focusThing->moveType == SITH_MT_PHYSICS )
                 {
-                    v76.z = rdMath_clampf(5.0 * rdVector_Dot3(&focusThing->lookOrientation.rvec, &focusThing->physicsParams.vel), -8.0, 8.0); 
+#ifdef PLATFORM_VR
+                    // Skip strafe roll in VR - causes motion sickness
+                    if (!stdVR_bEnabled)
+#endif
+                    v76.z = rdMath_clampf(5.0 * rdVector_Dot3(&focusThing->lookOrientation.rvec, &focusThing->physicsParams.vel), -8.0, 8.0);
                 }
 
                 // MOTS added: hmm??
@@ -599,6 +608,21 @@ sithSector* sithCamera_create_unk_struct(sithThing *a3, sithSector *a2, rdVector
 
 void sithCamera_SetPovShake(rdVector3 *a1, rdVector3 *a2, flex_t a3, flex_t a4)
 {
+    // Added: Option to disable POV shake
+#ifdef QOL_IMPROVEMENTS
+#ifdef PLATFORM_VR
+    extern void VR_Log(const char* fmt, ...);
+    VR_Log("sithCamera_SetPovShake called: bDisablePovShake=%d, shake=(%.2f,%.2f,%.2f)\n",
+        sithCamera_bDisablePovShake, a1->x, a1->y, a1->z);
+#endif
+    if (sithCamera_bDisablePovShake) {
+#ifdef PLATFORM_VR
+        VR_Log("  -> POV shake disabled, skipping\n");
+#endif
+        return;
+    }
+#endif
+
     rdVector_Copy3(&sithCamera_povShakeVector1, a1);
     rdVector_Copy3(&sithCamera_povShakeVector2, a2);
     sithCamera_povShakeF1 = a3;
