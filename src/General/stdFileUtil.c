@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #ifndef _WIN32
 #include <dirent.h>
 #include <unistd.h>
@@ -278,22 +279,22 @@ static int parse_ext(const struct dirent *dir)
     if(!dir)
         return 0;
 
-    if(dir->d_type == DT_REG) 
-    {
-        const char *ext = strrchr(dir->d_name,'.');
-        if((!ext) || (ext == dir->d_name)) {
-            return 0;
-        }
-        else 
-        {
-            if(__strnicmp(ext, search_ext, 3) == 0)
-                return 1;
-        }
+    stdPlatform_Printf("OpenJKDF2: parse_ext '%s' d_type=%d\n", dir->d_name, dir->d_type);
+
+    // Always include . and .. (needed for index math in FindNext)
+    // Check by name since d_type may be DT_UNKNOWN on some filesystems
+    if (!strcmp(dir->d_name, ".") || !strcmp(dir->d_name, "..")) {
+        return 1;
     }
-    else
+
+    // Check extension for any file type (d_type unreliable on Android sdcard)
+    const char *ext = strrchr(dir->d_name,'.');
+    if(ext && ext != dir->d_name)
     {
-        if (!strncmp(dir->d_name, ".", 1)) return 1;
-        if (!strncmp(dir->d_name, "..", 1)) return 1;
+        if(__strnicmp(ext, search_ext, 4) == 0) {
+            stdPlatform_Printf("OpenJKDF2: parse_ext MATCHED '%s'\n", dir->d_name);
+            return 1;
+        }
     }
 
     return 0;
@@ -309,10 +310,18 @@ int stdFileUtil_FindNext(stdFileSearch *a1, stdFileSearchResult *a2)
 
     if (a1->isNotFirst++)
     {
+#ifdef TARGET_ANDROID
+        // Android: no . and .. entries, so use adjusted index
+        if (a1->isNotFirst > a1->num_found)
+            iter = NULL;
+        else
+            iter = a1->namelist[a1->isNotFirst - 1];
+#else
         if (a1->isNotFirst >= a1->num_found)
             iter = NULL;
         else
             iter = a1->namelist[a1->isNotFirst];
+#endif
     }
     else
     {
@@ -346,22 +355,35 @@ int stdFileUtil_FindNext(stdFileSearch *a1, stdFileSearchResult *a2)
                 tmp[i] = '/';
             }
         }
-        if (tmp[strlen(tmp)-1] = '/') {
+        if (tmp[strlen(tmp)-1] == '/') {  // Fixed: was = (assignment) instead of == (comparison)
             tmp[strlen(tmp)-1] = 0;
         }
 
+        stdPlatform_Printf("OpenJKDF2: stdFileUtil_FindNext - scandir path: '%s', ext: '%s'\n", tmp, search_ext ? search_ext : "(null)");
 #ifdef TARGET_TWL
         errno = 0;
 #endif
+        errno = 0;
         a1->num_found = scandir(tmp, &a1->namelist, search_ext ? parse_ext : NULL, alphasort);
-        
+        stdPlatform_Printf("OpenJKDF2: stdFileUtil_FindNext - scandir result: %d files, errno: %d (%s)\n", a1->num_found, errno, strerror(errno));
+
         if (!a1->namelist || a1->num_found <= 0) return 0;
-        
+
+#ifdef TARGET_ANDROID
+        // Android sdcard doesn't return . and .. entries, so start at index 0
+        iter = a1->namelist[0];
+        a1->isNotFirst = 1;
+#else
         iter = a1->namelist[2];
         a1->isNotFirst = 2;
+#endif
     }
 
+#ifdef TARGET_ANDROID
+    if (a1->num_found <= 0 || !iter)
+#else
     if (a1->num_found <= 2 || !iter)
+#endif
         return 0;
 
     strncpy(a2->fpath, iter->d_name, sizeof(a2->fpath));

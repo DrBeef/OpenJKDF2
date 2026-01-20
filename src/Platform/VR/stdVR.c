@@ -45,8 +45,8 @@ static void stdVR_InitDefaultConfig(void)
     memset(&stdVR_config, 0, sizeof(stdVR_config));
 
     stdVR_config.moveDirection = STDVR_MOVE_CONTROLLER;
-    stdVR_config.turnMode = STDVR_TURN_SMOOTH;
-    stdVR_config.snapTurnAngle = 30;
+    stdVR_config.turnMode = STDVR_TURN_SNAP;
+    stdVR_config.snapTurnAngle = 45;
     stdVR_config.smoothTurnSpeed = 120.0f;
     stdVR_config.worldScale = 0.075f;  // IPD/roomscale multiplier - reduced for less physical movement
     stdVR_config.heightOffset = 0.0f;

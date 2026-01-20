@@ -282,7 +282,21 @@ retry_file:
         }
         stdPlatform_Printf("stdEmbeddedRes: Not found in APK assets, trying filesystem paths\n");
 
-        // Try external storage path
+        // Try /sdcard/OpenJKDF2 path (new preferred location)
+        {
+            stdPlatform_Printf("stdEmbeddedRes: Trying /sdcard/OpenJKDF2 path\n");
+            snprintf(tmp_filepath, 256-1, "/sdcard/OpenJKDF2/resource/%s", filepath);
+            stdPlatform_Printf("stdEmbeddedRes: Full path: %s\n", tmp_filepath);
+
+            f = fopen(tmp_filepath, "rb");
+            if (f) {
+                stdPlatform_Printf("stdEmbeddedRes: File found at: %s\n", tmp_filepath);
+                goto retry_file;
+            }
+            stdPlatform_Printf("stdEmbeddedRes: File not found at: %s\n", tmp_filepath);
+        }
+
+        // Try external storage path (legacy app-specific location)
         const char* ext_path = SDL_AndroidGetExternalStoragePath();
         if (ext_path) {
             stdPlatform_Printf("stdEmbeddedRes: Trying Android external path: %s\n", ext_path);

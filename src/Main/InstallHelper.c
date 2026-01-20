@@ -1122,13 +1122,8 @@ void InstallHelper_SetCwd()
 void InstallHelper_SetCwd()
 {
 #if defined(TARGET_ANDROID)
-    chdir(SDL_AndroidGetExternalStoragePath());
-    if (!Main_bMotsCompat) {
-        chdir("jk1/");
-    }
-    else {
-        chdir("mots/");
-    }
+    // Use /sdcard/OpenJKDF2 for game data (requires MANAGE_EXTERNAL_STORAGE permission)
+    chdir("/sdcard/OpenJKDF2");
 #elif defined(TARGET_TWL)
     char tmp[128];
     extern char openjkdf2_aOrigCwd[512];

@@ -286,19 +286,27 @@ int jkRes_LoadNew(jkResGobDirectory *resGob, char *name, int a3)
     }
 
     v15 = stdFileUtil_NewFind(name, 3, JKRES_GOB_EXT);
+    stdPlatform_Printf("OpenJKDF2: jkRes_LoadNew - searching for GOBs in '%s'\n", name);
     while (stdFileUtil_FindNext(v15, &v18))
     {
+        stdPlatform_Printf("OpenJKDF2: jkRes_LoadNew - found file: '%s'\n", v18.fpath);
         if ( resGob->numGobs >= STDGOB_MAX_GOBS )
             break;
         if ( v18.fpath[0] != '.' )
         {
             stdString_snprintf(jkRes_idkGobPath, 0x80u, "%s%c%s", name, LEC_PATH_SEPARATOR_CHR, v18.fpath);
+            stdPlatform_Printf("OpenJKDF2: jkRes_LoadNew - loading GOB: '%s'\n", jkRes_idkGobPath);
             resGob->gobs[resGob->numGobs] = stdGob_Load(jkRes_idkGobPath, 16, 0);
 
-            if ( resGob->gobs[resGob->numGobs] )
+            if ( resGob->gobs[resGob->numGobs] ) {
+                stdPlatform_Printf("OpenJKDF2: jkRes_LoadNew - GOB loaded successfully: '%s'\n", jkRes_idkGobPath);
                 resGob->numGobs++;
+            } else {
+                stdPlatform_Printf("OpenJKDF2: jkRes_LoadNew - FAILED to load GOB: '%s'\n", jkRes_idkGobPath);
+            }
         }
     }
+    stdPlatform_Printf("OpenJKDF2: jkRes_LoadNew - total GOBs loaded: %d\n", resGob->numGobs);
 
     stdFileUtil_DisposeFind(v15);
 

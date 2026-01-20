@@ -257,12 +257,14 @@ int jkGui_Startup()
 
     stdPlatform_Printf("OpenJKDF2: %s\n", __func__);
 
+    stdPlatform_Printf("OpenJKDF2: jkGui_Startup - loading player name\n");
     stdString_WcharToChar(playerShortName, jkPlayer_playerShortName, 31);
     playerShortName[31] = 0;
     wuRegistry_GetString("playerShortName", playerShortName, 32, playerShortName);
     stdString_CharToWchar(jkPlayer_playerShortName, playerShortName, 31);
     jkPlayer_playerShortName[31] = 0;
 
+    stdPlatform_Printf("OpenJKDF2: jkGui_Startup - loading %d fonts\n", JKGUI_NUM_FONTS);
     for (int i = 0; i < JKGUI_NUM_FONTS; i++)
     {
         // TODO: Eviction caching for stdBitmap, rdMaterial
@@ -274,10 +276,13 @@ int jkGui_Startup()
         }
 #endif
         stdString_snprintf(tmp, 128, "ui\\sft\\%s", jkGui_aFonts[i]);
+        stdPlatform_Printf("OpenJKDF2: jkGui_Startup - loading font %d: %s\n", i, tmp);
         jkGui_stdFonts[i] = stdFont_Load(tmp, 1, 0);
         if (jkGui_stdFonts[i] == NULL) {
+            stdPlatform_Printf("OpenJKDF2: jkGui_Startup - FAILED to load font %s\n", tmp);
             Windows_GameErrorMsgbox("ERR_CANNOT_LOAD_FILE %s", tmp);
         }
+        stdPlatform_Printf("OpenJKDF2: jkGui_Startup - font %d loaded OK\n", i);
     }
 #ifdef TARGET_TWL
     stdPlatform_PrintHeapStats();
