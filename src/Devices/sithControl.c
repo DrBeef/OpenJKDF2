@@ -745,8 +745,12 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_L);
                 break;
             case INPUT_FUNC_NEXTWEAPON:
-                // Right Grip = cycle to next weapon (Y is used for menu)
-                vrInput = stdVR_Input_IsButtonPressed(STDVR_BTN_GRIP_R);
+                // Right thumbstick up flick = next weapon
+                vrInput = stdVR_Input_IsNextWeaponTriggered();
+                break;
+            case INPUT_FUNC_PREVWEAPON:
+                // Right thumbstick down flick = previous weapon
+                vrInput = stdVR_Input_IsPrevWeaponTriggered();
                 break;
             // Left thumbstick click is used for walk/run toggle (handled in stdVR_Input_MapToGame)
             default:

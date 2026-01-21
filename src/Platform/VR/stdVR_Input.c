@@ -30,6 +30,12 @@ static uint32_t stdVR_menuButtonHoldStart = 0;
 // Walk/run toggle (left thumbstick click)
 static int stdVR_walkMode = 1;  // 0 = run (default), 1 = walk
 
+// Weapon switching via dominant hand thumbstick up/down
+static int stdVR_weaponSwitchState = 0;  // 0 = neutral, 1 = up triggered, -1 = down triggered
+static int stdVR_nextWeaponTriggered = 0;
+static int stdVR_prevWeaponTriggered = 0;
+#define STDVR_WEAPON_SWITCH_THRESHOLD 0.7f
+
 // Deadzone for thumbsticks
 #define STDVR_THUMBSTICK_DEADZONE 0.2f
 #define STDVR_SNAP_TURN_THRESHOLD 0.7f
@@ -104,6 +110,8 @@ void stdVR_Input_MapToGame(void)
     }
 
     stdVR_menuTriggeredThisFrame = 0;
+    stdVR_nextWeaponTriggered = 0;
+    stdVR_prevWeaponTriggered = 0;
 
     // Process snap turn
     stdVR_Input_ProcessSnapTurn();
@@ -111,6 +119,29 @@ void stdVR_Input_MapToGame(void)
     // Get movement input
     float moveX = 0.0f, moveY = 0.0f;
     stdVR_Input_GetMovementDirection(&moveX, &moveY);
+
+    // Weapon switching via dominant hand thumbstick up/down
+    // Use the turn stick (right thumbstick) Y axis
+    float weaponSwitchY = stdVR_clientInfo.analogTurn[1];  // Y axis of turn stick
+
+    if (weaponSwitchY > STDVR_WEAPON_SWITCH_THRESHOLD) {
+        // Thumbstick pushed up - next weapon
+        if (stdVR_weaponSwitchState != 1) {
+            stdVR_nextWeaponTriggered = 1;
+            stdVR_weaponSwitchState = 1;
+            stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
+        }
+    } else if (weaponSwitchY < -STDVR_WEAPON_SWITCH_THRESHOLD) {
+        // Thumbstick pushed down - previous weapon
+        if (stdVR_weaponSwitchState != -1) {
+            stdVR_prevWeaponTriggered = 1;
+            stdVR_weaponSwitchState = -1;
+            stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
+        }
+    } else if (weaponSwitchY > -0.3f && weaponSwitchY < 0.3f) {
+        // Thumbstick returned to center - reset state
+        stdVR_weaponSwitchState = 0;
+    }
 
     // Map movement axes
     // INPUT_FUNC_FORWARD = 0, INPUT_FUNC_TURN = 1, INPUT_FUNC_SLIDE = 2, etc.
@@ -301,6 +332,24 @@ int stdVR_Input_IsWalkMode(void)
         return 0;
     }
     return stdVR_walkMode;
+}
+
+// Check if next weapon was triggered this frame (thumbstick up flick)
+int stdVR_Input_IsNextWeaponTriggered(void)
+{
+    if (!stdVR_bEnabled) {
+        return 0;
+    }
+    return stdVR_nextWeaponTriggered;
+}
+
+// Check if previous weapon was triggered this frame (thumbstick down flick)
+int stdVR_Input_IsPrevWeaponTriggered(void)
+{
+    if (!stdVR_bEnabled) {
+        return 0;
+    }
+    return stdVR_prevWeaponTriggered;
 }
 
 #endif // PLATFORM_VR

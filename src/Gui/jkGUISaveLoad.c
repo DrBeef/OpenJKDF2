@@ -1,5 +1,7 @@
 #include "jkGUISaveLoad.h"
 
+#include <time.h>
+
 #include "Main/jkEpisode.h"
 #include "General/stdFileUtil.h"
 #include "General/Darray.h"
@@ -315,7 +317,19 @@ int jkGuiSaveLoad_Show(int bIsSave)
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiSaveLoad_menu, &jkGuiSaveLoad_aElements[12]);
     jkGuiSaveLoad_menu.focusedElement = &jkGuiSaveLoad_aElements[2];
     jkGuiSaveLoad_PopulateInfo(0);
-    _wcsncpy(jkGuiSaveLoad_word_559830, &jkGuiSaveLoad_word_559C54[8], 0xFFu);
+
+    // Auto-populate save name with date/time for VR convenience (no keyboard needed)
+    if (bIsSave) {
+        time_t now = time(NULL);
+        struct tm* t = localtime(&now);
+        char dateStr[64];
+        snprintf(dateStr, sizeof(dateStr), "%04d-%02d-%02d %02d.%02d",
+            t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+            t->tm_hour, t->tm_min);
+        stdString_CharToWchar(jkGuiSaveLoad_word_559830, dateStr, 255);
+    } else {
+        _wcsncpy(jkGuiSaveLoad_word_559830, &jkGuiSaveLoad_word_559C54[8], 0xFFu);
+    }
     jkGuiSaveLoad_word_559830[255] = 0;
     while ( 1 )
     {

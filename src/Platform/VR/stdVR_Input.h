@@ -41,6 +41,10 @@ int stdVR_Input_IsMenuPressed(void);
 // Walk/run toggle (left thumbstick click to toggle)
 int stdVR_Input_IsWalkMode(void);
 
+// Weapon switching via dominant hand thumbstick up/down flick
+int stdVR_Input_IsNextWeaponTriggered(void);
+int stdVR_Input_IsPrevWeaponTriggered(void);
+
 #ifdef __cplusplus
 }
 #endif
