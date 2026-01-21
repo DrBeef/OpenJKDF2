@@ -2,7 +2,9 @@
 #include "version.h"
 
 const char* openjkdf2_aReleaseVersion         = OPENJKDF2_RELEASE_VERSION_STRING;
+const char* openjkdf2_aVRReleaseVersion         = OPENJKDF2VR_RELEASE_VERSION_STRING;
 const wchar_t* openjkdf2_waReleaseVersion     = OPENJKDF2_RELEASE_VERSION_STRING_W;
+const wchar_t* openjkdf2_waVRReleaseVersion   = OPENJKDF2VR_RELEASE_VERSION_STRING_W;
 const char* openjkdf2_aReleaseCommit          = OPENJKDF2_RELEASE_COMMIT;
 const wchar_t* openjkdf2_waReleaseCommit      = OPENJKDF2_RELEASE_COMMIT_W;
 const char* openjkdf2_aReleaseCommitShort     = OPENJKDF2_RELEASE_COMMIT_SHORT;

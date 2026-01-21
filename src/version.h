@@ -2,7 +2,9 @@
 #define _OPENJKDF2_VERSION_H
 
 extern const char* openjkdf2_aReleaseVersion;
+extern const char* openjkdf2_aVRReleaseVersion;
 extern const wchar_t* openjkdf2_waReleaseVersion;
+extern const wchar_t* openjkdf2_waVRReleaseVersion;
 extern const char* openjkdf2_aReleaseCommit;
 extern const wchar_t* openjkdf2_waReleaseCommit;
 extern const char* openjkdf2_aReleaseCommitShort;

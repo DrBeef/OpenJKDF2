@@ -276,7 +276,7 @@ void jkQuakeConsole_Render()
     stdFont_DrawAsciiGPU(jkQuakeConsole_pFont, 0, realShadeBottom - fontHeight*2, screenW, tmpBlink, 1, jkPlayer_hudScale);
     stdFont_DrawAsciiGPU(jkQuakeConsole_pFont, blink_pos_x, realShadeBottom - fontHeight*2 + (fontHeight / 4), screenW, isBlink ? " " : "_", 1, jkPlayer_hudScale);
 
-    stdString_snprintf(tmpBlink, sizeof(tmpBlink), "OpenJKDF2 %s (%s)", openjkdf2_aReleaseVersion, openjkdf2_aReleaseCommitShort);
+    stdString_snprintf(tmpBlink, sizeof(tmpBlink), "OpenJKDF2 VR %s (%s)", openjkdf2_aVRReleaseVersion, openjkdf2_aReleaseVersion);
     uint32_t strW = stdFont_DrawAsciiWidth(jkQuakeConsole_pFont, 0, realShadeBottom - fontHeight, screenW, tmpBlink, 1, jkPlayer_hudScale);
     stdFont_DrawAsciiGPU(jkQuakeConsole_pFont, screenW - strW, realShadeBottom - fontHeight, screenW, tmpBlink, 1, jkPlayer_hudScale);
     

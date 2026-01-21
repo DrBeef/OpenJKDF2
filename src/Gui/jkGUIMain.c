@@ -133,7 +133,11 @@ void jkGuiMain_Show()
 #endif
 
     // Added: OpenJKDF2 version
+#ifdef PLATFORM_VR
+    jkGuiMain_elements[8].wstr = openjkdf2_waVRReleaseVersion;
+#else
     jkGuiMain_elements[8].wstr = openjkdf2_waReleaseVersion;
+#endif
     jkGuiMain_elements[9].wstr = openjkdf2_waReleaseCommitShort;
 
     // Added

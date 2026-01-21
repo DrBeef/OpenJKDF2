@@ -16,6 +16,10 @@
 #include "World/sithWeapon.h"
 #include "jk.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#endif
+
 static int lastDoorOpenTime = 0;
 
 void sithPlayerActions_Activate(sithThing *thing)
@@ -35,7 +39,18 @@ void sithPlayerActions_Activate(sithThing *thing)
         rdVector_Copy3(&thingPos, &thing->position);
         if ( thing->type == SITH_THING_ACTOR || thing->type == SITH_THING_PLAYER )
         {
-            rdMatrix_PreRotate34(&out, &thing->actorParams.eyePYR);
+#ifdef PLATFORM_VR
+            // In VR, use HMD orientation (pitch and yaw) for activation direction
+            if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+                rdVector3 hmdPYR;
+                stdVR_GetHMDPose(NULL, &hmdPYR);
+                // Apply HMD yaw and pitch to the look direction
+                rdMatrix_PreRotate34(&out, &hmdPYR);
+            } else
+#endif
+            {
+                rdMatrix_PreRotate34(&out, &thing->actorParams.eyePYR);
+            }
             rdVector_Add3Acc(&thingPos, &thing->actorParams.eyeOffset);
         }
         v4 = sithCollision_GetSectorLookAt(thing->sector, &thing->position, &thingPos, 0.0);
