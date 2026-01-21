@@ -1465,12 +1465,22 @@ use_player_position:
         }
     }
 
+#ifdef PLATFORM_VR
+    // VR: Disable auto-aim - player aims with motion controller
+    if ( !stdVR_bEnabled && (sithWeapon_bAutoAim & 1) != 0 && (scaleFlags & 0x20) != 0 && (!sithNet_isMulti || (scaleFlags & 0x40) != 0) )
+#else
     if ( (sithWeapon_bAutoAim & 1) != 0 && (scaleFlags & 0x20) != 0 && (!sithNet_isMulti || (scaleFlags & 0x40) != 0) )
+#endif
         sithWeapon_ProjectileAutoAim(&v20, sender, &out, fireOffset, autoaimFov, autoaimMaxDist);
     else
 
         _memcpy(&v20, &out, sizeof(v20));
+#ifdef PLATFORM_VR
+    // VR: Disable aim error/spread - projectiles go exactly where controller points
+    if ( !stdVR_bEnabled && (aimError->x != 0.0 || aimError->y != 0.0 || aimError->z != 0.0) )
+#else
     if ( aimError->x != 0.0 || aimError->y != 0.0 || aimError->z != 0.0 )
+#endif
         rdMatrix_PreRotate34(&v20, aimError);
     v19 = v20.lvec;
     if ( (scaleFlags & 0x10) == 0 )
