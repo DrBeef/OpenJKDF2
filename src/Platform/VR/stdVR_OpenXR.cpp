@@ -117,6 +117,7 @@ extern void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
+#include <algorithm>  // For std::clamp
 #include <vector>
 #include <cstdio>
 #include <cstdarg>
