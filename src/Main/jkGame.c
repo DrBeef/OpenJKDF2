@@ -482,6 +482,7 @@ int jkGame_Update()
                 std3D_DrawOverlayToCurrentFBO(hudWidth, hudHeight);
 
                 // Debug: Save HUD FBO content to file for inspection
+#if 0
                 {
                     extern int32_t Main_bVRTest;
                     extern int32_t Main_vrTestFrameCount;
@@ -516,7 +517,7 @@ int jkGame_Update()
                         }
                     }
                 }
-
+#endif
                 stdVR_FinishHudBuffer();
             }
         }

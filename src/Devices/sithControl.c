@@ -745,13 +745,10 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_L);
                 break;
             case INPUT_FUNC_NEXTWEAPON:
-                // Y button = cycle to next weapon
-                vrInput = stdVR_Input_IsButtonPressed(STDVR_BTN_Y);
+                // Right Grip = cycle to next weapon (Y is used for menu)
+                vrInput = stdVR_Input_IsButtonPressed(STDVR_BTN_GRIP_R);
                 break;
-            case INPUT_FUNC_GAMESAVE:
-                // Left thumbstick click = quick save
-                vrInput = stdVR_Input_IsButtonPressed(STDVR_BTN_THUMBSTICK_L);
-                break;
+            // Left thumbstick click is used for walk/run toggle (handled in stdVR_Input_MapToGame)
             default:
                 break;
         }
@@ -1531,6 +1528,9 @@ LAB_00527d1c:
     }
 }
 
+#define MATH_PI 3.14159265358979323846f
+
+
 void sithControl_PlayerMovement(sithThing *player)
 {
     if (Main_bMotsCompat) {
@@ -1556,6 +1556,7 @@ void sithControl_PlayerMovement(sithThing *player)
         move_multiplier = 2.0;
     if ( sithControl_ReadFunctionMap(INPUT_FUNC_SLOW, 0) )
         move_multiplier = move_multiplier * 0.5;
+    // Note: VR walk mode is handled directly in VR movement section below
     int old_state = player->physicsParams.physflags;
     if ( !sithControl_ReadFunctionMap(INPUT_FUNC_DUCK, 0) )
     {
@@ -1607,6 +1608,12 @@ void sithControl_PlayerMovement(sithThing *player)
                 float moveX = 0.0f, moveY = 0.0f;
                 stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
+                rdVector3 pos, orientation;
+                stdVR_GetHMDPose(&pos, &orientation);
+                rdVector2 move;
+                move.x = -sinf(orientation.x * (MATH_PI / 180.0f)) * moveY + cosf(orientation.x * (MATH_PI / 180.0f)) * moveX;
+                move.y = sinf(orientation.x * (MATH_PI / 180.0f)) * moveX + cosf(orientation.x * (MATH_PI / 180.0f)) * moveY;
+
                 // Handle VR turning first (so movement uses updated direction)
                 int snapAngle = stdVR_Input_GetSnapTurnAngle();
                 if (snapAngle != 0) {
@@ -1622,8 +1629,9 @@ void sithControl_PlayerMovement(sithThing *player)
                 // Movement is relative to player's facing direction (includes snap turns)
                 // Forward on stick = forward in game (where player body faces)
                 flex_t thrust = player->actorParams.maxThrust + player->actorParams.extraSpeed;
-                player->physicsParams.acceleration.x = moveY * thrust;           // Forward/back (up stick = forward)
-                player->physicsParams.acceleration.y = -moveX * thrust * 0.7f;   // Strafe (right stick = right)
+                flex_t walk = stdVR_Input_IsWalkMode() ? 0.6f : 1.1f;
+                player->physicsParams.acceleration.x = move.y * thrust * walk;           // Forward/back (up stick = forward)
+                player->physicsParams.acceleration.y = -move.x * thrust * walk;   // Strafe (right stick = right)
             } else
 #endif // PLATFORM_VR
             {

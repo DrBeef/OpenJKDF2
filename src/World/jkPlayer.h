@@ -182,7 +182,6 @@ extern int jkPlayer_bJankyPhysics;
 extern int jkPlayer_vrEnabled;           // Is VR mode active
 extern int jkPlayer_vrSnapTurnAngle;     // Snap turn angle: 0, 30, 45, 90 degrees
 extern int jkPlayer_vrSmoothTurnSpeed;   // Smooth turn speed in deg/sec
-extern float jkPlayer_vrWorldScale;      // World scale multiplier (default 1.0)
 extern float jkPlayer_vrHeightOffset;    // Player height offset in meters
 extern int jkPlayer_vrComfortVignette;   // Enable comfort vignette (0/1)
 extern int jkPlayer_vrDominantHand;      // 0=left, 1=right

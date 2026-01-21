@@ -48,7 +48,7 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_config.turnMode = STDVR_TURN_SNAP;
     stdVR_config.snapTurnAngle = 45;
     stdVR_config.smoothTurnSpeed = 120.0f;
-    stdVR_config.worldScale = 0.075f;  // IPD/roomscale multiplier - reduced for less physical movement
+    stdVR_config.worldScale = 0.08f;  // IPD/roomscale multiplier - reduced for less physical movement
     stdVR_config.heightOffset = 0.0f;
     stdVR_config.bComfortVignette = 1;
     stdVR_config.dominantHand = STDVR_CONTROLLER_RIGHT;
@@ -61,15 +61,16 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_motionConfig.saberVelocityTrigger = 2.5f;     // m/s for saber attack
     stdVR_motionConfig.forceVelocityTrigger = 1.5f;     // m/s for force gesture
     stdVR_motionConfig.forceDistanceTrigger = 0.3f;     // meters for push/pull
-    stdVR_motionConfig.weaponPitchAdjust = -45.0f;      // degrees - rotate weapon to point forward
-    stdVR_motionConfig.saberPitchAdjust = -45.0f;       // degrees
-    stdVR_motionConfig.weaponOffsetX = 0.0f;            // meters - left/right
-    stdVR_motionConfig.weaponOffsetY = -0.1f;           // meters - forward (negative = back toward player)
-    stdVR_motionConfig.weaponOffsetZ = 0.05f;           // meters - up/down (positive = up)
-    stdVR_motionConfig.weaponModelScale = 1.4f;         // VR weapon model size multiplier
+    stdVR_motionConfig.weaponPitchAdjust = 0.0f;      // degrees - rotate weapon to point forward
+    stdVR_motionConfig.weaponAimPitchAdjust = -90.0f;      // degrees - rotate weapon to point forward
+    stdVR_motionConfig.saberPitchAdjust = 0.0f;       // degrees
+    stdVR_motionConfig.weaponOffsetX = -0.3f;            // meters - left/right
+    stdVR_motionConfig.weaponOffsetY = 0.0f;           // meters - forward (negative = back toward player)
+    stdVR_motionConfig.weaponOffsetZ = 0.3f;           // meters - up/down (positive = up)
+    stdVR_motionConfig.weaponModelScale = 0.8f;         // VR weapon model size multiplier
     stdVR_motionConfig.fireOffsetX = 0.3f;              // meters - fire position right offset (~1 foot)
-    stdVR_motionConfig.fireOffsetY = 0.3f;              // meters - fire position forward offset (~1 foot)
-    stdVR_motionConfig.fireOffsetZ = 0.15f;             // meters - fire position up offset (~6 inches)
+    stdVR_motionConfig.fireOffsetY = 0.0f;              // meters - fire position forward offset (~1 foot)
+    stdVR_motionConfig.fireOffsetZ = -0.3f;             // meters - fire position up offset (~6 inches)
     stdVR_motionConfig.bMotionAimEnabled = 1;           // Enable controller aiming by default
     stdVR_motionConfig.bMotionSaberEnabled = 1;         // Enable swing-to-attack
     stdVR_motionConfig.bMotionForceEnabled = 0;         // Disable force gestures for now
@@ -856,9 +857,9 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
 
     // Apply pitch adjustment to match weapon visual (same as GetControllerViewMatrix)
     rdMatrix34 adjustedPose;
-    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+    if (stdVR_motionConfig.weaponAimPitchAdjust != 0.0f) {
         rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdVector3 pitchAngles = { stdVR_motionConfig.weaponAimPitchAdjust, 0.0f, 0.0f };
         rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
         rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
     } else {
@@ -1013,9 +1014,9 @@ void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix)
 
     // Apply pitch adjustment to controller pose if configured
     rdMatrix34 adjustedPose;
-    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+    if (stdVR_motionConfig.weaponAimPitchAdjust != 0.0f) {
         rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdVector3 pitchAngles = { stdVR_motionConfig.weaponAimPitchAdjust, 0.0f, 0.0f };
         rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
         rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
     } else {
@@ -1305,7 +1306,6 @@ void stdVR_SyncConfigFromJkPlayer(void)
     stdVR_config.smoothTurnSpeed = (float)jkPlayer_vrSmoothTurnSpeed;
 
     // Scale and comfort
-    stdVR_config.worldScale = jkPlayer_vrWorldScale;
     stdVR_config.heightOffset = jkPlayer_vrHeightOffset;
     stdVR_config.bComfortVignette = jkPlayer_vrComfortVignette;
 
@@ -1340,7 +1340,6 @@ void stdVR_SyncConfigToJkPlayer(void)
         jkPlayer_vrSnapTurnAngle = 0;
     }
     jkPlayer_vrSmoothTurnSpeed = (int)stdVR_config.smoothTurnSpeed;
-    jkPlayer_vrWorldScale = stdVR_config.worldScale;
     jkPlayer_vrHeightOffset = stdVR_config.heightOffset;
     jkPlayer_vrComfortVignette = stdVR_config.bComfortVignette;
     jkPlayer_vrDominantHand = stdVR_config.dominantHand;
@@ -1379,7 +1378,8 @@ int stdVR_UseScreenLayer(void)
 
     // Detect transition INTO screen layer mode - snap position/orientation
     // Only log transitions, not every frame
-    if (shouldUseScreenLayer && !stdVR_prevScreenLayerState) {
+    static int f = 0;
+    if (f++ < 240 || (shouldUseScreenLayer && !stdVR_prevScreenLayerState)) {
         stdVR_UpdateScreenLayerSnap();
         VR_Log("stdVR: Entering screen layer mode\n");
     }
@@ -1407,7 +1407,7 @@ void stdVR_UpdateScreenLayerSnap(void)
 {
     // Store current HMD position and yaw for screen placement
     rdVector_Copy3(&stdVR_clientInfo.screenLayerSnapPos, &stdVR_clientInfo.hmdPosition);
-    stdVR_clientInfo.screenLayerSnapYaw = stdVR_clientInfo.hmdOrientation.y;
+    stdVR_clientInfo.screenLayerSnapYaw = stdVR_clientInfo.hmdOrientation.x;
 
     // Initialize screen layer parameters if not already set
     if (stdVR_clientInfo.screenLayerDistance <= 0.0f) {
@@ -1443,6 +1443,7 @@ float stdVR_GetScreenLayerDistance(void)
 
 // Previous trigger state for edge detection
 static int stdVR_prevMenuTriggerDown = 0;
+#define DEG2RAD( x )	((float)(x) * (float)(M_PI / 180.f))
 
 // Update cursor position from controller angles
 // Uses the right controller (or dominant hand) to aim at the screen
@@ -1462,46 +1463,12 @@ void stdVR_UpdateMenuCursor(void)
     int controllerIndex = stdVR_config.dominantHand;
     stdVR_ControllerState* pController = &stdVR_clientInfo.controllers[controllerIndex];
 
-    // Get controller orientation for pointing
-    // For controller pointing at a virtual screen:
-    // - Roll (Z rotation) controls horizontal cursor position (wrist tilt left/right)
-    // - Pitch (X rotation) controls vertical cursor position (wrist tilt up/down)
-    float controllerRoll, controllerPitch;
-    if (pController->bTracking) {
-        controllerRoll = pController->orientation.z;   // Roll for X
-        controllerPitch = pController->orientation.x;  // Pitch for Y
-    } else {
-        // Fallback to HMD orientation if controller not tracked
-        controllerRoll = stdVR_clientInfo.hmdOrientation.z;
-        controllerPitch = stdVR_clientInfo.hmdOrientation.x;
-    }
-
-    // Convert to normalized cursor coordinates (0.0 - 1.0)
-    // Based on user testing: pitch controls X, roll controls Y
-    float pitchRange = 45.0f;  // Degrees of pitch that spans the screen width
-    float rollRange = 15.0f;   // Degrees of roll that spans the screen height (2x sensitivity)
-
-    // X: Pitch controls horizontal (negate so tilting left moves cursor left)
-    float cursorX = 0.5f - (controllerPitch / pitchRange) * 0.5f;
-
-    // Y: Roll controls vertical, with offset to account for natural controller hold angle
-    // Adding offset so neutral hold position is closer to screen center
-    // Negate so tilting up moves cursor up
-    float rollOffset = 15.0f;  // Assume controller is naturally tilted ~15 degrees
-    float cursorY = 0.5f - ((controllerRoll - rollOffset) / rollRange) * 0.5f;
-
-    // Clamp to valid range
-    if (cursorX < 0.0f) cursorX = 0.0f;
-    if (cursorX > 1.0f) cursorX = 1.0f;
-    if (cursorY < 0.0f) cursorY = 0.0f;
-    if (cursorY > 1.0f) cursorY = 1.0f;
-
-    stdVR_clientInfo.menuCursorX = cursorX;
-    stdVR_clientInfo.menuCursorY = cursorY;
+    stdVR_clientInfo.menuCursorX = -sinf(DEG2RAD(pController->orientation.x - stdVR_clientInfo.screenLayerSnapYaw)) + 0.5f;
+    stdVR_clientInfo.menuCursorY = 1.f - (float)(pController->orientation.z / 45.0) + 0.5f;
 
     // Convert to screen pixel coordinates (assuming 640x480 menu resolution)
-    stdVR_clientInfo.menuCursorScreenX = (int)(cursorX * 640.0f);
-    stdVR_clientInfo.menuCursorScreenY = (int)(cursorY * 480.0f);
+    stdVR_clientInfo.menuCursorScreenX = (int)(stdVR_clientInfo.menuCursorX * 640.0f);
+    stdVR_clientInfo.menuCursorScreenY = (int)(stdVR_clientInfo.menuCursorY * 480.0f);
 
     // Handle trigger input for "clicks"
     // Use the trigger from the same controller

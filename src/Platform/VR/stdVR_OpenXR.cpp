@@ -23,6 +23,7 @@ extern "C" {
 // Include OpenGL headers
 #ifdef __ANDROID__
 #include <EGL/egl.h>
+#include <unistd.h>  // For usleep
 // Use gl4es which provides standard GL headers translating to GLES
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -384,6 +385,8 @@ static XrAction xrPoseAction = XR_NULL_HANDLE;
 static XrAction xrTriggerAction = XR_NULL_HANDLE;
 static XrAction xrGripAction = XR_NULL_HANDLE;
 static XrAction xrThumbstickAction = XR_NULL_HANDLE;
+static XrAction xrThumbstickClickLAction = XR_NULL_HANDLE;
+static XrAction xrThumbstickClickRAction = XR_NULL_HANDLE;
 static XrAction xrButtonAAction = XR_NULL_HANDLE;
 static XrAction xrButtonBAction = XR_NULL_HANDLE;
 static XrAction xrButtonXAction = XR_NULL_HANDLE;
@@ -717,6 +720,14 @@ static int CreateActionSet(void)
     strcpy(actionInfo.localizedActionName, "Menu");
     XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrMenuAction));
 
+    strcpy(actionInfo.actionName, "thumbstick_click_l");
+    strcpy(actionInfo.localizedActionName, "Left Thumbstick Click");
+    XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrThumbstickClickLAction));
+
+    strcpy(actionInfo.actionName, "thumbstick_click_r");
+    strcpy(actionInfo.localizedActionName, "Right Thumbstick Click");
+    XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrThumbstickClickRAction));
+
     // Create haptic action
     actionInfo.countSubactionPaths = STDVR_CONTROLLER_COUNT;
     actionInfo.subactionPaths = xrHandPaths;
@@ -747,6 +758,8 @@ static int CreateActionSet(void)
     bindings.push_back({ xrButtonYAction, path });
     xrStringToPath(xrInstance, "/user/hand/left/input/menu/click", &path);
     bindings.push_back({ xrMenuAction, path });
+    xrStringToPath(xrInstance, "/user/hand/left/input/thumbstick/click", &path);
+    bindings.push_back({ xrThumbstickClickLAction, path });
     xrStringToPath(xrInstance, "/user/hand/left/output/haptic", &path);
     bindings.push_back({ xrHapticAction, path });
 
@@ -763,6 +776,8 @@ static int CreateActionSet(void)
     bindings.push_back({ xrButtonAAction, path });
     xrStringToPath(xrInstance, "/user/hand/right/input/b/click", &path);
     bindings.push_back({ xrButtonBAction, path });
+    xrStringToPath(xrInstance, "/user/hand/right/input/thumbstick/click", &path);
+    bindings.push_back({ xrThumbstickClickRAction, path });
     xrStringToPath(xrInstance, "/user/hand/right/output/haptic", &path);
     bindings.push_back({ xrHapticAction, path });
 
@@ -790,6 +805,8 @@ static int CreateActionSet(void)
         bindings.push_back({ xrButtonXAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/b/click", &path);  // Index has B on left
         bindings.push_back({ xrButtonYAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/thumbstick/click", &path);
+        bindings.push_back({ xrThumbstickClickLAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/output/haptic", &path);
         bindings.push_back({ xrHapticAction, path });
 
@@ -806,6 +823,8 @@ static int CreateActionSet(void)
         bindings.push_back({ xrButtonAAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/b/click", &path);
         bindings.push_back({ xrButtonBAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/thumbstick/click", &path);
+        bindings.push_back({ xrThumbstickClickRAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/output/haptic", &path);
         bindings.push_back({ xrHapticAction, path });
 
@@ -2407,6 +2426,18 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
     xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
     if (boolState.isActive && boolState.currentState) {
         stdVR_clientInfo.buttonState |= STDVR_BTN_MENU;
+    }
+
+    getInfo.action = xrThumbstickClickLAction;
+    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+    if (boolState.isActive && boolState.currentState) {
+        stdVR_clientInfo.buttonState |= STDVR_BTN_THUMBSTICK_L;
+    }
+
+    getInfo.action = xrThumbstickClickRAction;
+    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+    if (boolState.isActive && boolState.currentState) {
+        stdVR_clientInfo.buttonState |= STDVR_BTN_THUMBSTICK_R;
     }
 
     // Compute pressed/released

@@ -10,6 +10,11 @@
 #include "stdPlatform.h"
 #include "General/stdMath.h"
 #include "Primitives/rdVector.h"
+#include "Cog/sithCog.h"
+
+#include "Main/jkHud.h"
+#include "Main/jkMain.h"
+#include "Main/jkSmack.h"
 
 #include <math.h>
 
@@ -21,6 +26,9 @@ static float stdVR_lastSnapTurnInput = 0.0f;
 static int stdVR_menuButtonHeld = 0;
 static uint32_t stdVR_menuButtonHoldStart = 0;
 #define STDVR_MENU_LONGPRESS_MS 1000  // Hold menu 1 second to recenter
+
+// Walk/run toggle (left thumbstick click)
+static int stdVR_walkMode = 1;  // 0 = run (default), 1 = walk
 
 // Deadzone for thumbsticks
 #define STDVR_THUMBSTICK_DEADZONE 0.2f
@@ -121,12 +129,14 @@ void stdVR_Input_MapToGame(void)
 
     // Handle menu button (escape/pause)
     // Short press = menu/escape, Long press = recenter
-    if (stdVR_clientInfo.buttonState & STDVR_BTN_MENU) {
+    // Accept Y button as menu on Quest (the system menu button isn't accessible)
+    int menuButtonDown = (stdVR_clientInfo.buttonState & STDVR_BTN_MENU) != 0;
+    if (menuButtonDown) {
         if (!stdVR_menuButtonHeld) {
             // Button just pressed
             stdVR_menuButtonHeld = 1;
             stdVR_menuButtonHoldStart = stdPlatform_GetTimeMsec();
-        } else {
+        } else if (stdVR_menuButtonHeld == 1) {
             // Check for long press (recenter)
             uint32_t holdTime = stdPlatform_GetTimeMsec() - stdVR_menuButtonHoldStart;
             if (holdTime >= STDVR_MENU_LONGPRESS_MS) {
@@ -144,6 +154,27 @@ void stdVR_Input_MapToGame(void)
             stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.3f, 0.1f, 100.0f);
         }
         stdVR_menuButtonHeld = 0;
+    }
+    // Mirror JKXR-style logic: use screen layer when UI/cinematics/menus are active
+    int guiState = jkSmack_GetCurrentGuiState();
+    int inGameplay = (guiState == JK_GAMEMODE_GAMEPLAY);
+    if (inGameplay && stdVR_menuTriggeredThisFrame) {
+        if (Main_bMotsCompat) {
+            if (!jkGuiMultiplayer_mpcInfo.pCutsceneCog) {
+                if (jkHud_bChatOpen)
+                    jkHud_idk_time();
+                else
+                    jkMain_do_guistate6();
+            } else {
+                sithCog_SendMessage(jkGuiMultiplayer_mpcInfo.pCutsceneCog, SITH_MESSAGE_ESCAPED, 0,
+                                    0, 0, 0, 0);
+            }
+        } else {
+            if (jkHud_bChatOpen)
+                jkHud_idk_time();
+            else
+                jkMain_do_guistate6();
+        }
     }
 
     // Simulate a controller escape key press on short menu release (one-frame pulse)
@@ -168,6 +199,19 @@ void stdVR_Input_MapToGame(void)
     // Trigger haptic feedback for force power
     if (stdVR_clientInfo.buttonPressed & STDVR_BTN_TRIGGER_L) {
         stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.4f, 0.15f, 75.0f);
+    }
+
+    // Left thumbstick click = toggle walk/run mode
+    if (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_L) {
+        stdVR_walkMode = !stdVR_walkMode;
+        // Haptic feedback: short pulse for run, double pulse for walk
+        if (stdVR_walkMode) {
+            // Walk mode: two short pulses
+            stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.3f, 0.1f, 100.0f);
+        } else {
+            // Run mode: one longer pulse
+            stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.5f, 0.15f, 150.0f);
+        }
     }
 }
 
@@ -248,6 +292,15 @@ float stdVR_Input_GetGrip(int hand)
         return 0.0f;
     }
     return (hand == STDVR_CONTROLLER_LEFT) ? stdVR_clientInfo.gripLeft : stdVR_clientInfo.gripRight;
+}
+
+// Check if walk mode is active (toggled via left thumbstick click)
+int stdVR_Input_IsWalkMode(void)
+{
+    if (!stdVR_bEnabled) {
+        return 0;
+    }
+    return stdVR_walkMode;
 }
 
 #endif // PLATFORM_VR

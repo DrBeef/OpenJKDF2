@@ -38,6 +38,9 @@ float stdVR_Input_GetGrip(int hand);
 // Menu button state (short press = menu/escape, long press = recenter)
 int stdVR_Input_IsMenuPressed(void);
 
+// Walk/run toggle (left thumbstick click to toggle)
+int stdVR_Input_IsWalkMode(void);
+
 #ifdef __cplusplus
 }
 #endif
