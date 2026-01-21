@@ -1612,11 +1612,9 @@ void sithControl_PlayerMovement(sithThing *player)
                 float moveX = 0.0f, moveY = 0.0f;
                 stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
-                rdVector3 pos, orientation;
-                stdVR_GetHMDPose(&pos, &orientation);
                 rdVector2 move;
-                move.x = -sinf(orientation.x * (MATH_PI / 180.0f)) * moveY + cosf(orientation.x * (MATH_PI / 180.0f)) * moveX;
-                move.y = sinf(orientation.x * (MATH_PI / 180.0f)) * moveX + cosf(orientation.x * (MATH_PI / 180.0f)) * moveY;
+                move.x = -sinf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveY + cosf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveX;
+                move.y = sinf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveX + cosf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveY;
 
                 // Handle VR turning first (so movement uses updated direction)
                 int snapAngle = stdVR_Input_GetSnapTurnAngle();

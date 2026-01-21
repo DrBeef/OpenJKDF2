@@ -419,23 +419,74 @@ static char xrRuntimeName[XR_MAX_RUNTIME_NAME_SIZE] = "Unknown";
     } while (0)
 
 // Convert XrQuaternionf to Euler angles (Pitch, Yaw, Roll in degrees)
+// OpenXR coords: X=right, Y=up, Z=backward (forward = -Z)
+// JKDF2 coords:  X=right, Y=forward, Z=up
+//
+// Uses vector-based extraction so angles are independent:
+// - Pitch is based on forward vector's elevation (independent of yaw)
+// - Yaw is based on forward vector's horizontal direction
+// - Roll is based on up vector tilt
 static void QuatToEuler(const XrQuaternionf* q, rdVector3* euler)
 {
-    // Convert quaternion to Euler angles
-    float sinr_cosp = 2.0f * (q->w * q->x + q->y * q->z);
-    float cosr_cosp = 1.0f - 2.0f * (q->x * q->x + q->y * q->y);
-    euler->z = std::atan2(sinr_cosp, cosr_cosp) * (180.0f / 3.14159265f); // Roll
+    const float RAD_TO_DEG = 180.0f / 3.14159265f;
 
-    float sinp = 2.0f * (q->w * q->y - q->z * q->x);
-    if (std::abs(sinp) >= 1.0f) {
-        euler->x = std::copysign(90.0f, sinp); // Pitch
-    } else {
-        euler->x = std::asin(sinp) * (180.0f / 3.14159265f);
-    }
+    // Extract the forward vector (-Z in OpenXR) after rotation
+    // forward = quaternion * (0, 0, -1)
+    float fx = -2.0f * (q->x * q->z + q->w * q->y);
+    float fy = 2.0f * (q->w * q->x - q->y * q->z);
+    float fz = 2.0f * (q->x * q->x + q->y * q->y) - 1.0f;
 
-    float siny_cosp = 2.0f * (q->w * q->z + q->x * q->y);
-    float cosy_cosp = 1.0f - 2.0f * (q->y * q->y + q->z * q->z);
-    euler->y = std::atan2(siny_cosp, cosy_cosp) * (180.0f / 3.14159265f); // Yaw
+    // Extract the up vector (+Y in OpenXR) after rotation
+    // up = quaternion * (0, 1, 0)
+    float ux = 2.0f * (q->x * q->y - q->w * q->z);
+    float uy = 1.0f - 2.0f * (q->x * q->x + q->z * q->z);
+    float uz = 2.0f * (q->y * q->z + q->w * q->x);
+
+    // Pitch: angle of forward vector above/below horizontal
+    // This is INDEPENDENT of yaw - purely how much you're looking up/down
+    // fy is how much the forward vector points up (+) or down (-)
+    // In OpenXR, fy > 0 means looking up
+    float pitch_oxr = std::asin(std::clamp(fy, -1.0f, 1.0f));
+
+    // Yaw: horizontal angle of forward vector in XZ plane
+    // atan2(-fx, -fz) gives angle from -Z axis (forward) toward -X axis (left)
+    float yaw_oxr = std::atan2(-fx, -fz);
+
+    // Roll: tilt of up vector around the forward axis
+    // Project up vector onto plane perpendicular to forward, measure angle from world up
+    // When looking horizontally, roll = atan2(ux, uy)
+    // But we need to account for pitch...
+
+    // Compute expected up direction if there were no roll (just yaw and pitch)
+    // After yaw and pitch, the "up" should still be in the plane containing world-up and forward
+    float cosP = std::cos(pitch_oxr);
+    float sinP = std::sin(pitch_oxr);
+    float cosY = std::cos(yaw_oxr);
+    float sinY = std::sin(yaw_oxr);
+
+    // Expected up with no roll (derived from yaw-pitch rotation)
+    float expectedUpX = sinY * sinP;
+    float expectedUpY = cosP;
+    float expectedUpZ = cosY * sinP;
+
+    // Expected right with no roll
+    float expectedRightX = cosY;
+    float expectedRightY = 0.0f;
+    float expectedRightZ = -sinY;
+
+    // Roll is the angle between actual up and expected up, measured around forward axis
+    // Project actual up onto expected up and expected right
+    float upDotExpUp = ux * expectedUpX + uy * expectedUpY + uz * expectedUpZ;
+    float upDotExpRight = ux * expectedRightX + uy * expectedRightY + uz * expectedRightZ;
+    float roll_oxr = std::atan2(upDotExpRight, upDotExpUp);
+
+    // Convert to JKDF2 coordinate system:
+    // - JKDF2 Pitch: positive = looking UP. In OpenXR, pitch_oxr > 0 = looking up. Same convention!
+    // - JKDF2 Yaw: positive = turn left. In OpenXR, yaw_oxr > 0 = turn left. Same convention!
+    // - JKDF2 Roll: axis flip (JKDF2 Y = -OpenXR Z), so negate
+    euler->x = pitch_oxr * RAD_TO_DEG;   // Pitch: same convention
+    euler->y = yaw_oxr * RAD_TO_DEG;     // Yaw: full range [-180, +180]
+    euler->z = -roll_oxr * RAD_TO_DEG;   // Roll: negated due to axis flip
 }
 
 // Convert XrPosef to rdMatrix34

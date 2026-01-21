@@ -1407,7 +1407,7 @@ void stdVR_UpdateScreenLayerSnap(void)
 {
     // Store current HMD position and yaw for screen placement
     rdVector_Copy3(&stdVR_clientInfo.screenLayerSnapPos, &stdVR_clientInfo.hmdPosition);
-    stdVR_clientInfo.screenLayerSnapYaw = stdVR_clientInfo.hmdOrientation.x;
+    stdVR_clientInfo.screenLayerSnapYaw = stdVR_clientInfo.hmdOrientation.y;
 
     // Initialize screen layer parameters if not already set
     if (stdVR_clientInfo.screenLayerDistance <= 0.0f) {
@@ -1463,8 +1463,8 @@ void stdVR_UpdateMenuCursor(void)
     int controllerIndex = stdVR_config.dominantHand;
     stdVR_ControllerState* pController = &stdVR_clientInfo.controllers[controllerIndex];
 
-    stdVR_clientInfo.menuCursorX = -sinf(DEG2RAD(pController->orientation.x - stdVR_clientInfo.screenLayerSnapYaw)) + 0.5f;
-    stdVR_clientInfo.menuCursorY = 1.f - (float)(pController->orientation.z / 45.0) + 0.5f;
+    stdVR_clientInfo.menuCursorX = -sinf(DEG2RAD(pController->orientation.y - stdVR_clientInfo.screenLayerSnapYaw)) + 0.5f;
+    stdVR_clientInfo.menuCursorY = (float)(-pController->orientation.x / 45.0f) + 1.5f;
 
     // Convert to screen pixel coordinates (assuming 640x480 menu resolution)
     stdVR_clientInfo.menuCursorScreenX = (int)(stdVR_clientInfo.menuCursorX * 640.0f);

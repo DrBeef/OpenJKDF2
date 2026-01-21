@@ -25,6 +25,11 @@ android {
     compileSdk 34
     ndkVersion "26.1.10909125"  // Compatible with AGP 8.2
 
+    // Enable native debugging
+    packagingOptions {
+        doNotStrip "**/*.so"
+    }
+
     defaultConfig {
         applicationId "org.openjkdf2.vr"
         minSdk 29  // Quest 2/3 minimum
@@ -40,7 +45,6 @@ android {
             cmake {
                 arguments "-DPLAT_ANDROID_ARM64=TRUE",
                           "-DTARGET_USE_VR=TRUE",
-                          "-DCMAKE_BUILD_TYPE=Release",
                           "-DANDROID_STL=c++_shared",
                           "-DANDROID_PLATFORM=android-29"
                 cppFlags "-std=c++17 -fexceptions"
@@ -52,10 +56,25 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_BUILD_TYPE=Release"
+                    cppFlags "-O2"
+                    cFlags "-O2"
+                }
+            }
         }
         debug {
             debuggable true
             jniDebuggable true
+            externalNativeBuild {
+                cmake {
+                    arguments "-DCMAKE_BUILD_TYPE=Debug",
+                              "-DANDROID_ARM_MODE=arm",
+                              "-DCMAKE_C_FLAGS_DEBUG=-O0 -g -DDEBUG -fno-omit-frame-pointer -fno-limit-debug-info",
+                              "-DCMAKE_CXX_FLAGS_DEBUG=-O0 -g -DDEBUG -fno-omit-frame-pointer -fno-limit-debug-info"
+                }
+            }
         }
     }
 
