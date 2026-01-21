@@ -1629,7 +1629,7 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
 
             // Configure the quad layer
             quadLayer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-            quadLayer.space = xrStageSpace;  // Use stage space so it's fixed relative to world
+            quadLayer.space = xrLocalSpace;  // Use local space to match tracking orientation
             quadLayer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;  // Show to both eyes
 
             // Use eye 0's swapchain for the menu content
@@ -1647,7 +1647,7 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             // Position: player's snap position + forward offset based on snap yaw
             XrVector3f pos = {
                 stdVR_clientInfo.screenLayerSnapPos.x - std::sin(yawRad) * distance,
-                1.2f,  // Fixed height (comfortable viewing height)
+                0.f,  // Fixed height (comfortable viewing height)
                 stdVR_clientInfo.screenLayerSnapPos.z - std::cos(yawRad) * distance
             };
             quadLayer.pose.position = pos;

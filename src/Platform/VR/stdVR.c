@@ -1379,7 +1379,7 @@ int stdVR_UseScreenLayer(void)
     // Detect transition INTO screen layer mode - snap position/orientation
     // Only log transitions, not every frame
     static int f = 0;
-    if (f++ < 240 || (shouldUseScreenLayer && !stdVR_prevScreenLayerState)) {
+    if (f++ < 120 || (shouldUseScreenLayer && !stdVR_prevScreenLayerState)) {
         stdVR_UpdateScreenLayerSnap();
         VR_Log("stdVR: Entering screen layer mode\n");
     }
