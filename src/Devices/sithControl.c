@@ -1612,11 +1612,14 @@ void sithControl_PlayerMovement(sithThing *player)
                 float moveX = 0.0f, moveY = 0.0f;
                 stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
-                rdVector2 move;
-                move.x = -sinf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveY + cosf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveX;
-                move.y = sinf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveX + cosf(stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f)) * moveY;
+                // Transform movement by HMD yaw so forward = where you're looking
+                float hmdYawRad = stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f);
+                float cosYaw = cosf(hmdYawRad);
+                float sinYaw = sinf(hmdYawRad);
+                float worldMoveX = cosYaw * moveX - sinYaw * moveY;
+                float worldMoveY = sinYaw * moveX + cosYaw * moveY;
 
-                // Handle VR turning first (so movement uses updated direction)
+                // Handle VR turning (snap or smooth)
                 int snapAngle = stdVR_Input_GetSnapTurnAngle();
                 if (snapAngle != 0) {
                     // Apply snap turn to player orientation
@@ -1628,12 +1631,11 @@ void sithControl_PlayerMovement(sithThing *player)
                     player->physicsParams.angVel.y = stdVR_Input_GetSmoothTurnSpeed();
                 }
 
-                // Movement is relative to player's facing direction (includes snap turns)
-                // Forward on stick = forward in game (where player body faces)
+                // Apply movement in world space (transformed by HMD yaw)
                 flex_t thrust = player->actorParams.maxThrust + player->actorParams.extraSpeed;
                 flex_t walk = stdVR_Input_IsWalkMode() ? 0.6f : 1.1f;
-                player->physicsParams.acceleration.x = move.y * thrust * walk;           // Forward/back (up stick = forward)
-                player->physicsParams.acceleration.y = -move.x * thrust * walk;   // Strafe (right stick = right)
+                player->physicsParams.acceleration.x = worldMoveY * thrust * walk;   // Forward/back
+                player->physicsParams.acceleration.y = -worldMoveX * thrust * walk;  // Strafe
             } else
 #endif // PLATFORM_VR
             {
