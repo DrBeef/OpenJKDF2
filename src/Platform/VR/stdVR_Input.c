@@ -15,6 +15,7 @@
 #include "Main/jkHud.h"
 #include "Main/jkMain.h"
 #include "Main/jkSmack.h"
+#include "Main/jkDev.h"
 
 #include <math.h>
 
@@ -39,6 +40,13 @@ static int stdVR_prevWeaponTriggered = 0;
 // Deadzone for thumbsticks
 #define STDVR_THUMBSTICK_DEADZONE 0.2f
 #define STDVR_SNAP_TURN_THRESHOLD 0.7f
+
+// VR Cheat combo state (both grips + both triggers held)
+static int stdVR_cheatComboHeld = 0;
+static uint32_t stdVR_cheatComboHoldStart = 0;
+static int stdVR_cheatComboActivated = 0;  // Prevents repeated activation
+#define STDVR_CHEAT_COMBO_HOLD_MS 1500     // Hold for 1.5 seconds to activate
+#define STDVR_CHEAT_TRIGGER_THRESHOLD 0.8f // Trigger/grip must be at least 80% pressed
 
 // External: get current time in ms
 extern uint32_t stdPlatform_GetTimeMsec(void);
@@ -210,6 +218,44 @@ void stdVR_Input_MapToGame(void)
 
     // Simulate a controller escape key press on short menu release (one-frame pulse)
     stdControl_bControllerEscapeKey = stdVR_menuTriggeredThisFrame ? 1 : 0;
+
+    // VR Cheat combo: Hold both grips + both triggers for 1.5 seconds
+    // This gives all weapons and force powers
+    {
+        int bothTriggersHeld = (stdVR_clientInfo.triggerLeft >= STDVR_CHEAT_TRIGGER_THRESHOLD) &&
+                               (stdVR_clientInfo.triggerRight >= STDVR_CHEAT_TRIGGER_THRESHOLD);
+        int bothGripsHeld = (stdVR_clientInfo.gripLeft >= STDVR_CHEAT_TRIGGER_THRESHOLD) &&
+                            (stdVR_clientInfo.gripRight >= STDVR_CHEAT_TRIGGER_THRESHOLD);
+        int cheatComboDown = bothTriggersHeld && bothGripsHeld;
+
+        if (cheatComboDown) {
+            if (!stdVR_cheatComboHeld) {
+                // Combo just started
+                stdVR_cheatComboHeld = 1;
+                stdVR_cheatComboHoldStart = stdPlatform_GetTimeMsec();
+                stdVR_cheatComboActivated = 0;
+            } else if (!stdVR_cheatComboActivated) {
+                // Check for long press (cheat activation)
+                uint32_t holdTime = stdPlatform_GetTimeMsec() - stdVR_cheatComboHoldStart;
+                if (holdTime >= STDVR_CHEAT_COMBO_HOLD_MS) {
+                    // Activate cheats!
+                    jkDev_CmdAllWeapons(NULL, NULL);  // Give all weapons
+                    jkDev_CmdUberJedi(NULL, NULL);    // Give all force powers maxed
+                    jkDev_CmdHeal(NULL, NULL);        // Full health and shields
+
+                    // Strong haptic feedback on both controllers
+                    stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 1.0f, 0.3f, 250.0f);
+                    stdVR_TriggerHaptic(STDVR_CONTROLLER_RIGHT, 1.0f, 0.3f, 250.0f);
+
+                    stdVR_cheatComboActivated = 1;  // Prevent repeated activation
+                }
+            }
+        } else {
+            // Combo released
+            stdVR_cheatComboHeld = 0;
+            stdVR_cheatComboActivated = 0;
+        }
+    }
 
     // Map buttons to game actions using stdControl functions
     // Note: We don't call stdControl_SetKey directly here because

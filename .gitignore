@@ -1,12 +1,9 @@
 *.o
-*.gob
-*.GOB
 moc*.cpp
 *.EXE
 *.exe
 MOVIE
 Movie
-episode
 DroidWorks.*
 .qmake.stash
 player
