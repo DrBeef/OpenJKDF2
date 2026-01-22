@@ -1250,6 +1250,14 @@ void stdVR_DrawDebugControllerAxes(int hand)
     float uz = ctrlWorld.uvec.z * axisLen;
 
     // Draw axes using deprecated immediate mode (simple debug viz)
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+    // Skip debug axis rendering on native GLES (uses legacy GL immediate mode)
+    // Native GLES3 doesn't support glBegin/glEnd - would need shader-based line drawing
+    (void)px; (void)py; (void)pz;
+    (void)rx; (void)ry; (void)rz;
+    (void)fx; (void)fy; (void)fz;
+    (void)ux; (void)uy; (void)uz;
+#else
     // gl4es translates these to GLES on Android
     glBegin(GL_LINES);
     // X axis - Red
@@ -1265,6 +1273,7 @@ void stdVR_DrawDebugControllerAxes(int hand)
     glVertex3f(px, py, pz);
     glVertex3f(px + ux, py + uy, pz + uz);
     glEnd();
+#endif
 
     // Restore GL state
     if (oldDepthTest) glEnable(GL_DEPTH_TEST);

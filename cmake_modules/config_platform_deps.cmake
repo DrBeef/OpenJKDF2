@@ -61,9 +61,13 @@ endif()
 
 set(GLEW_USE_STATIC_LIBS TRUE)
 if(TARGET_ANDROID)
-    # Android uses gl4es to translate OpenGL calls to OpenGL ES
-    message(STATUS "Going to build "gl4es" for OpenGL ES translation")
-    include(build_gl4es)
+    if(NOT TARGET_USE_VR)
+        # Standard Android uses gl4es for OpenGL translation
+        message(STATUS "Going to build "gl4es" for OpenGL ES translation")
+        include(build_gl4es)
+    else()
+        message(STATUS "Quest VR: Using native OpenGL ES 3 (no gl4es)")
+    endif()
 else()
     if(NOT CMAKE_CROSSCOMPILING)
         find_package(GLEW 2.2.0)

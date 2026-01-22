@@ -20,12 +20,17 @@ macro(plat_initialize)
     set(TARGET_ANDROID TRUE)
     set(TARGET_ANDROID_ARM64 TRUE)
 
-    # gl4es provides OpenGL to OpenGL ES translation
-    # Include paths will be set up by build_gl4es.cmake
+    # gl4es provides OpenGL to OpenGL ES translation for standard Android builds
+    # Quest VR uses native OpenGL ES 3 directly for better performance
     include_directories(${PROJECT_SOURCE_DIR}/lib/freeglut/include)
 
-    # Define GL4ES to enable gl4es-specific code paths if needed
-    add_definitions(-DGL4ES)
+    if(TARGET_USE_VR)
+        # Native GLES3 for Quest VR - no GL4ES translation layer
+        add_definitions(-DTARGET_ANDROID_NATIVE_GLES)
+    else()
+        # GL4ES for standard Android builds
+        add_definitions(-DGL4ES)
+    endif()
 
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g -std=c11 -fshort-wchar -Werror=implicit-function-declaration -Wno-unused-variable -Wno-parentheses")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fshort-wchar")
@@ -33,10 +38,14 @@ macro(plat_initialize)
 endmacro()
 
 macro(plat_specific_deps)
-    #set(SDL2_COMMON_LIBS SDL2main SDL::SDL)
-    set(SDL2_COMMON_LIBS SDL2main SDL::SDL ${SDL_MIXER_DEPS} SDL::Mixer OpenAL::OpenAL gl4es::gl4es)
-
-    # Add gl4es include directory for GL headers
-    include_directories(${GL4ES_INCLUDE_DIRS})
+    if(TARGET_USE_VR)
+        # Quest VR: Native GLES3, no gl4es dependency
+        set(SDL2_COMMON_LIBS SDL2main SDL::SDL ${SDL_MIXER_DEPS} SDL::Mixer OpenAL::OpenAL)
+    else()
+        # Standard Android: Use gl4es for OpenGL translation
+        set(SDL2_COMMON_LIBS SDL2main SDL::SDL ${SDL_MIXER_DEPS} SDL::Mixer OpenAL::OpenAL gl4es::gl4es)
+        # Add gl4es include directory for GL headers
+        include_directories(${GL4ES_INCLUDE_DIRS})
+    endif()
 endmacro()
 

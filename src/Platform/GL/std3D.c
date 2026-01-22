@@ -685,8 +685,20 @@ int init_resources()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    
+
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+    // GLES3 doesn't support GL_RGB32F in core, use RGBA32F with padded data
+    float tiledrand_rgba[4 * 4 * 4];
+    for (int i = 0; i < 4*4; i++) {
+        tiledrand_rgba[i*4 + 0] = tiledrand_data[i].x;
+        tiledrand_rgba[i*4 + 1] = tiledrand_data[i].y;
+        tiledrand_rgba[i*4 + 2] = tiledrand_data[i].z;
+        tiledrand_rgba[i*4 + 3] = 1.0f;
+    }
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 4, 0, GL_RGBA, GL_FLOAT, tiledrand_rgba);
+#else
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, 4, 4, 0, GL_RGB, GL_FLOAT, tiledrand_data);
+#endif
 
     unsigned int vao;
     glGenVertexArrays( 1, &vao );

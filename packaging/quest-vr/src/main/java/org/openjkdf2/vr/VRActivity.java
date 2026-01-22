@@ -20,9 +20,10 @@ public class VRActivity extends SDLActivity {
 
     @Override
     protected String[] getLibraries() {
+        // Note: No libGL.so needed - using native OpenGL ES 3 directly
+        // The GLES libraries are system-provided on Quest
         return new String[] {
             "openxr_loader",  // OpenXR loader
-            "GL",             // gl4es - OpenGL to GLES translation
             "SDL2",
             "SDL2_mixer",
             "openal",

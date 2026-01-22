@@ -24,19 +24,16 @@ extern "C" {
 #ifdef __ANDROID__
 #include <EGL/egl.h>
 #include <unistd.h>  // For usleep
+
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+// Native GLES3 for Quest VR - no gl4es translation layer
+#include <GLES3/gl3.h>
+#include <GLES3/gl3ext.h>
+#include <GLES2/gl2ext.h>
+#else
 // Use gl4es which provides standard GL headers translating to GLES
 #include <GL/gl.h>
 #include <GL/glext.h>
-// Ensure GL defines are available
-#ifndef GL_RGBA8
-#define GL_RGBA8 0x8058
-#endif
-#ifndef GL_SRGB8_ALPHA8
-#define GL_SRGB8_ALPHA8 0x8C43
-#endif
-#ifndef GL_DEPTH_COMPONENT24
-#define GL_DEPTH_COMPONENT24 0x81A6
-#endif
 // gl4es exports these functions but doesn't declare them in headers
 extern "C" {
 extern void glGenFramebuffers(GLsizei n, GLuint *framebuffers);
@@ -90,6 +87,19 @@ extern void glGenerateMipmap(GLenum target);
 extern void glBlendFuncSeparate(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha);
 extern void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
 }
+#endif // TARGET_ANDROID_NATIVE_GLES
+
+// Ensure GL defines are available
+#ifndef GL_RGBA8
+#define GL_RGBA8 0x8058
+#endif
+#ifndef GL_SRGB8_ALPHA8
+#define GL_SRGB8_ALPHA8 0x8C43
+#endif
+#ifndef GL_DEPTH_COMPONENT24
+#define GL_DEPTH_COMPONENT24 0x81A6
+#endif
+
 #else
 #include <GL/glew.h>
 #ifdef _WIN32
@@ -1163,8 +1173,14 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+            // GLES3 doesn't have GL_DEPTH_COMPONENT32, use GL_DEPTH_COMPONENT32F
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+                width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+#else
             glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32,
                 width, height, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+#endif
             glBindTexture(GL_TEXTURE_2D, 0);
 
             // Bind FBO and attach depth permanently (color is swapped per-frame)

@@ -36,9 +36,6 @@ extern "C" {
 #endif
 #elif defined(TARGET_ANDROID)
 #include <SDL.h>
-// gl4es provides standard GL headers that translate to GLES
-#include <GL/gl.h>
-#include <GL/glext.h>
 #include <SDL_main.h>
 #include <android/log.h>
 
@@ -48,6 +45,32 @@ extern "C" {
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,     TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,     TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG,    TAG, __VA_ARGS__)
+
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+// Native GLES3 for Quest VR - no gl4es translation layer
+#include <GLES3/gl3.h>
+#include <GLES3/gl3ext.h>
+#include <GLES2/gl2ext.h>
+
+// Compatibility defines for formats not in GLES
+#ifndef GL_BGRA
+#define GL_BGRA 0x80E1
+#endif
+#ifndef GL_BGR
+#define GL_BGR 0x80E0
+#endif
+#ifndef GL_UNSIGNED_SHORT_5_6_5_REV
+#define GL_UNSIGNED_SHORT_5_6_5_REV       0x8364
+#endif
+#ifndef GL_UNSIGNED_SHORT_1_5_5_5_REV
+#define GL_UNSIGNED_SHORT_1_5_5_5_REV     0x8366
+#endif
+
+#else // GL4ES for standard Android
+
+// gl4es provides standard GL headers that translate to GLES
+#include <GL/gl.h>
+#include <GL/glext.h>
 
 // gl4es exports these functions but doesn't declare them in headers
 // Framebuffer object functions
@@ -124,6 +147,8 @@ extern void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
 #ifndef GL_UNSIGNED_SHORT_1_5_5_5_REV
 #define GL_UNSIGNED_SHORT_1_5_5_5_REV     0x8366
 #endif
+
+#endif // TARGET_ANDROID_NATIVE_GLES
 
 #else
 #include <GL/glew.h>
