@@ -109,6 +109,7 @@ static int std3D_vrTargetActive = 0;
 static int std3D_vrTargetSizeActive = 0;
 static int std3D_vrTargetWidth = 0;
 static int std3D_vrTargetHeight = 0;
+static int std3D_multiViewActive = 0;  // Added: When true, skip internal FBO and render directly to MultiView FBO
 int g_vrOpSequence = 0;  // Global sequence counter for debugging VR operations
 
 static void std3D_ApplyWindowInfo(std3DFramebuffer* pFb, GLint fbo, int width, int height)
@@ -154,6 +155,10 @@ GLint uniform_mvp, uniform_tex, uniform_texEmiss, uniform_displacement_map, unif
 GLint uniform_tint, uniform_filter, uniform_fade, uniform_add, uniform_emissiveFactor, uniform_albedoFactor;
 GLint uniform_light_mult, uniform_displacement_factor, uniform_iResolution;
 GLint uniform_vr_debug_mode; // VR debug mode uniform
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+GLint uniform_eyeOffsets;  // MultiView per-eye horizontal offsets
+float std3D_eyeOffsets[2] = { 0.0f, 0.0f };  // [0]=left, [1]=right
+#endif
 
 GLint programMenu_attribute_coord3d, programMenu_attribute_v_color, programMenu_attribute_v_uv, programMenu_attribute_v_norm;
 GLint programMenu_uniform_mvp, programMenu_uniform_tex, programMenu_uniform_displayPalette;
@@ -210,6 +215,13 @@ D3DVERTEX* menu_data_all = NULL;
 GLushort* menu_data_elements = NULL;
 GLuint menu_vbo_all;
 GLuint menu_ibo_triangle;
+
+// MultiView UBOs for single-pass stereo rendering (Quest VR)
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+static GLuint std3D_viewMatricesUBO = 0;
+static GLuint std3D_projMatricesUBO = 0;
+static int std3D_multiViewUBOInitted = 0;
+#endif
 
 extern int jkGuiBuildMulti_bRendering;
 
@@ -565,6 +577,9 @@ int init_resources()
     uniform_displacement_factor = std3D_tryFindUniform(programDefault, "displacement_factor");
     uniform_iResolution = std3D_tryFindUniform(programDefault, "iResolution");
     uniform_vr_debug_mode = std3D_tryFindUniform(programDefault, "vr_debug_mode");
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    uniform_eyeOffsets = std3D_tryFindUniform(programDefault, "u_eyeOffsets");
+#endif
 
     programMenu_attribute_coord3d = std3D_tryFindAttribute(programMenu, "coord3d");
     programMenu_attribute_v_color = std3D_tryFindAttribute(programMenu, "v_color");
@@ -715,6 +730,26 @@ int init_resources()
 
     glGenBuffers(1, &menu_vbo_all);
     glGenBuffers(1, &menu_ibo_triangle);
+
+    // Initialize MultiView UBOs for Quest VR (if supported)
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    if (!std3D_multiViewUBOInitted) {
+        // View matrices UBO (2 x mat4 = 128 bytes, std140 layout)
+        glGenBuffers(1, &std3D_viewMatricesUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, std3D_viewMatricesUBO);
+        glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+
+        // Projection matrices UBO (2 x mat4 = 128 bytes, std140 layout)
+        glGenBuffers(1, &std3D_projMatricesUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, std3D_projMatricesUBO);
+        glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+        std3D_multiViewUBOInitted = 1;
+        stdPlatform_Printf("std3D: MultiView UBOs created (view=%u, proj=%u)\n",
+            std3D_viewMatricesUBO, std3D_projMatricesUBO);
+    }
+#endif
 
     has_initted = true;
     return true;
@@ -2396,6 +2431,13 @@ void std3D_DrawSceneFbo()
 {
     //printf("Draw scene FBO\n");
 
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    // MultiView: scene already rendered directly to target FBO, skip blit
+    if (std3D_multiViewActive) {
+        return;
+    }
+#endif
+
 #ifdef PLATFORM_VR
     // Get current eye and VR FBO target
     extern int stdVR_OpenXR_GetCurrentEyeFBO(int eye);
@@ -2649,11 +2691,33 @@ void std3D_DrawRenderList()
     if (Main_bHeadless) return;
 
     //printf("Draw render list\n");
-    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    // MultiView: render directly to the MultiView FBO (already bound), skip internal FBO
+    if (!std3D_multiViewActive)
+#endif
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+    }
     glUseProgram(programDefault);
 
-    GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
-    glDrawBuffers(4, bufs);
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    // Bind MultiView UBOs for stereo rendering
+    std3D_BindMultiViewUBOs(programDefault);
+
+    // Set per-eye offsets for stereo parallax
+    if (std3D_multiViewActive && uniform_eyeOffsets >= 0) {
+        glUniform2fv(uniform_eyeOffsets, 1, std3D_eyeOffsets);
+    }
+#endif
+
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    // MultiView FBO only has 1 color attachment, skip multiple draw buffers
+    if (!std3D_multiViewActive)
+#endif
+    {
+        GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
+        glDrawBuffers(4, bufs);
+    }
     
     last_tex = NULL;
 
@@ -3112,7 +3176,13 @@ void std3D_AddRenderListUITris(rdUITri *tris, unsigned int num_tris)
 int std3D_ClearZBuffer()
 {
     glDepthMask(GL_TRUE);
-    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    // MultiView: clear Z buffer of currently bound FBO (the MultiView FBO)
+    if (!std3D_multiViewActive)
+#endif
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+    }
     glClear(GL_DEPTH_BUFFER_BIT);
     return 1;
 }
@@ -3121,10 +3191,17 @@ int std3D_ClearMainFbo()
 {
     if (Main_bHeadless) return 1;
 
-    glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    // MultiView: scene renders directly to MultiView FBO, skip internal FBO binding
+    // but still do GL state resets below
+    if (!std3D_multiViewActive)
+#endif
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, std3D_pFb->fbo);
 
-    GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
-    glDrawBuffers(4, bufs);
+        GLenum bufs[4] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
+        glDrawBuffers(4, bufs);
+    }
 
     // CRITICAL: Enable depth writes before clearing! If depthMask is GL_FALSE
     // (left over from previous rendering), the depth clear will have no effect
@@ -4558,4 +4635,98 @@ void std3D_ClearVRTargetFBO(void)
         }
     }
 }
+
+// Added: MultiView direct rendering mode (skip internal FBO)
+void std3D_SetMultiViewActive(int active)
+{
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    extern void VR_Log(const char* fmt, ...);
+    static int setMVActiveCount = 0;
+    setMVActiveCount++;
+    if (setMVActiveCount <= 60 || setMVActiveCount % 600 == 0) {
+        VR_Log("std3D_SetMultiViewActive #%d: %d -> %d\n", setMVActiveCount, std3D_multiViewActive, active);
+    }
+    std3D_multiViewActive = active;
+#endif
+}
+
+void std3D_ClearMultiViewActive(void)
+{
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    extern void VR_Log(const char* fmt, ...);
+    static int clearMVActiveCount = 0;
+    clearMVActiveCount++;
+    if (clearMVActiveCount <= 60 || clearMVActiveCount % 600 == 0) {
+        VR_Log("std3D_ClearMultiViewActive #%d: %d -> 0\n", clearMVActiveCount, std3D_multiViewActive);
+    }
+    std3D_multiViewActive = 0;
+#endif
+}
+
+// Set per-eye horizontal offsets for MultiView stereo parallax
+void std3D_SetEyeOffsets(float leftOffset, float rightOffset)
+{
+#if defined(TARGET_ANDROID_NATIVE_GLES) && defined(PLATFORM_VR)
+    std3D_eyeOffsets[0] = leftOffset;
+    std3D_eyeOffsets[1] = rightOffset;
+#endif
+}
+
+// ============================================================================
+// MultiView Matrix Update for Single-Pass Stereo Rendering
+// ============================================================================
+
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices)
+{
+    if (!std3D_multiViewUBOInitted) {
+        stdPlatform_Printf("std3D_UpdateMultiViewMatrices: UBOs not initialized\n");
+        return;
+    }
+
+    // Update view matrices UBO (2 x mat4 = 128 bytes)
+    glBindBuffer(GL_UNIFORM_BUFFER, std3D_viewMatricesUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, 2 * 16 * sizeof(float), viewMatrices);
+
+    // Update projection matrices UBO (2 x mat4 = 128 bytes)
+    glBindBuffer(GL_UNIFORM_BUFFER, std3D_projMatricesUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, 2 * 16 * sizeof(float), projMatrices);
+
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
+void std3D_BindMultiViewUBOs(GLuint program)
+{
+    if (!std3D_multiViewUBOInitted) {
+        return;
+    }
+
+    // Get uniform block indices
+    GLuint viewBlockIndex = glGetUniformBlockIndex(program, "ViewMatrices");
+    GLuint projBlockIndex = glGetUniformBlockIndex(program, "ProjectionMatrices");
+
+    if (viewBlockIndex != GL_INVALID_INDEX) {
+        glUniformBlockBinding(program, viewBlockIndex, 0);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 0, std3D_viewMatricesUBO);
+    }
+
+    if (projBlockIndex != GL_INVALID_INDEX) {
+        glUniformBlockBinding(program, projBlockIndex, 1);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 1, std3D_projMatricesUBO);
+    }
+}
+#else
+// Stub for non-Quest platforms
+void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices)
+{
+    (void)viewMatrices;
+    (void)projMatrices;
+}
+
+void std3D_BindMultiViewUBOs(GLuint program)
+{
+    (void)program;
+}
+#endif // TARGET_ANDROID_NATIVE_GLES
+
 #endif // PLATFORM_VR

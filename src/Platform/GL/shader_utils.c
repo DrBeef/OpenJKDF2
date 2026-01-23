@@ -119,8 +119,14 @@ GLuint create_shader(const char* shader, GLenum type) {
 
 #if defined(TARGET_ANDROID)
     version = "#version 300 es\n";
+#if defined(PLATFORM_VR)
+    // MultiView requires the extension declaration BEFORE any other code
+    extensions = "#extension GL_OVR_multiview2 : enable\n";
+    defines = "#define CAN_BILINEAR_FILTER\n#define MULTIVIEW_ENABLED\n";
+#else
     extensions = "\n";
     defines = "#define CAN_BILINEAR_FILTER\n";
+#endif
 #endif
 
 	// GLES2 precision specifiers

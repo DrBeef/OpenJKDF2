@@ -3,6 +3,8 @@
 
 #ifdef PLATFORM_VR
 
+#define MULTIVIEW_ENABLED
+
 // Include game headers first (they have correct Windows include order)
 extern "C" {
 #include "stdPlatform.h"
@@ -240,6 +242,27 @@ static int vrHudHeight = 768;
 static bool vrHudEnabled = true;
 static bool vrHudRenderActive = false;
 static bool vrHudFrameStarted = false;
+
+// MultiView state (GL_OVR_multiview2 for single-pass stereo rendering)
+static bool vrMultiViewSupported = false;
+static bool vrMultiViewEnabled = false;
+static XrSwapchain xrMultiViewSwapchain = XR_NULL_HANDLE;
+static std::vector<XrSwapchainImageGL> xrMultiViewSwapchainImages;
+static uint32_t xrMultiViewSwapchainImageIndex = 0;
+static GLuint vrMultiViewFBO = 0;
+static GLuint vrMultiViewDepthTexArray = 0;  // GL_TEXTURE_2D_ARRAY with 2 layers
+static bool vrMultiViewFBOValidated = false;
+static bool vrMultiViewRenderActive = false;
+
+// MultiView function pointers (loaded dynamically)
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+typedef void (GL_APIENTRY *PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC)(GLenum target, GLenum attachment,
+    GLuint texture, GLint level, GLint baseViewIndex, GLsizei numViews);
+typedef void (GL_APIENTRY *PFNGLFRAMEBUFFERTEXTUREMULTISAMPLEMULTIVIEWOVRPROC)(GLenum target, GLenum attachment,
+    GLuint texture, GLint level, GLsizei samples, GLint baseViewIndex, GLsizei numViews);
+static PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC glFramebufferTextureMultiviewOVR = nullptr;
+static PFNGLFRAMEBUFFERTEXTUREMULTISAMPLEMULTIVIEWOVRPROC glFramebufferTextureMultisampleMultiviewOVR = nullptr;
+#endif
 
 static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* label, int eye)
 {
@@ -1060,6 +1083,10 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
     // From here on, if anything fails we need to clean up the session
     XrResult result;
 
+    // Store selected format for MultiView swapchain creation later
+    // (declared here to avoid goto jumping over initialization)
+    int64_t selectedFormat = GL_RGBA8;  // Fallback
+
     // Create reference spaces
     XrReferenceSpaceCreateInfo spaceInfo = { XR_TYPE_REFERENCE_SPACE_CREATE_INFO };
     spaceInfo.poseInReferenceSpace.orientation.w = 1.0f;
@@ -1090,9 +1117,6 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         xrEnumerateSwapchainFormats(xrSession, 0, &formatCount, nullptr);
         std::vector<int64_t> formats(formatCount);
         xrEnumerateSwapchainFormats(xrSession, formatCount, &formatCount, formats.data());
-
-        // Find the best format - prefer sRGB
-        int64_t selectedFormat = GL_RGBA8;  // Fallback
         VR_Log("stdVR_OpenXR: Available swapchain formats:\n");
         for (uint32_t i = 0; i < formatCount; i++) {
             VR_Log("  - 0x%llX\n", (long long)formats[i]);
@@ -1245,6 +1269,89 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         }
     }
 
+    // Check for MultiView extension support (Quest VR optimization)
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+
+#if defined(MULTIVIEW_ENABLED)
+    {
+        const char* extensions = (const char*)glGetString(GL_EXTENSIONS);
+        bool hasMultiView2 = extensions && strstr(extensions, "GL_OVR_multiview2") != nullptr;
+        bool hasMultiViewMSAA = extensions && strstr(extensions, "GL_OVR_multiview_multisampled_render_to_texture") != nullptr;
+
+        VR_Log("stdVR_OpenXR: MultiView extension check:\n");
+        VR_Log("  GL_OVR_multiview2: %s\n", hasMultiView2 ? "YES" : "NO");
+        VR_Log("  GL_OVR_multiview_multisampled_render_to_texture: %s\n", hasMultiViewMSAA ? "YES" : "NO");
+
+        if (hasMultiView2) {
+            // Load MultiView function pointers
+            glFramebufferTextureMultiviewOVR = (PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC)
+                eglGetProcAddress("glFramebufferTextureMultiviewOVR");
+            glFramebufferTextureMultisampleMultiviewOVR = (PFNGLFRAMEBUFFERTEXTUREMULTISAMPLEMULTIVIEWOVRPROC)
+                eglGetProcAddress("glFramebufferTextureMultisampleMultiviewOVR");
+
+            if (glFramebufferTextureMultiviewOVR) {
+                vrMultiViewSupported = true;
+                VR_Log("stdVR_OpenXR: MultiView supported and function pointers loaded\n");
+            } else {
+                VR_Log("stdVR_OpenXR: MultiView extension present but function pointer load failed\n");
+            }
+        }
+    }
+#endif
+
+    // Create MultiView swapchain if supported (single swapchain with arraySize=2 for both eyes)
+    if (vrMultiViewSupported) {
+        const int mvWidth = xrConfigViews[0].recommendedImageRectWidth;
+        const int mvHeight = xrConfigViews[0].recommendedImageRectHeight;
+
+        XrSwapchainCreateInfo mvSwapchainInfo = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
+        mvSwapchainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        mvSwapchainInfo.format = selectedFormat;
+        mvSwapchainInfo.sampleCount = 1;
+        mvSwapchainInfo.width = mvWidth;
+        mvSwapchainInfo.height = mvHeight;
+        mvSwapchainInfo.faceCount = 1;
+        mvSwapchainInfo.arraySize = 2;  // Two layers for stereo
+        mvSwapchainInfo.mipCount = 1;
+
+        result = xrCreateSwapchain(xrSession, &mvSwapchainInfo, &xrMultiViewSwapchain);
+        if (XR_FAILED(result)) {
+            VR_Log("stdVR_OpenXR: WARNING - MultiView swapchain creation failed (%d), falling back to per-eye\n", result);
+            vrMultiViewSupported = false;
+        } else {
+            // Get swapchain images
+            uint32_t mvImageCount = 0;
+            xrEnumerateSwapchainImages(xrMultiViewSwapchain, 0, &mvImageCount, nullptr);
+            xrMultiViewSwapchainImages.resize(mvImageCount, { XR_TYPE_SWAPCHAIN_IMAGE_GL });
+            xrEnumerateSwapchainImages(xrMultiViewSwapchain, mvImageCount, &mvImageCount,
+                (XrSwapchainImageBaseHeader*)xrMultiViewSwapchainImages.data());
+
+            // Create MultiView FBO
+            glGenFramebuffers(1, &vrMultiViewFBO);
+
+            // Create depth texture array (2D array with 2 layers)
+            glGenTextures(1, &vrMultiViewDepthTexArray);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, vrMultiViewDepthTexArray);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH_COMPONENT32F, mvWidth, mvHeight, 2);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+            // Set up FBO with MultiView attachments (depth only - color attached per frame)
+            glBindFramebuffer(GL_FRAMEBUFFER, vrMultiViewFBO);
+            glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                vrMultiViewDepthTexArray, 0, 0, 2);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            vrMultiViewEnabled = true;
+            VR_Log("stdVR_OpenXR: MultiView swapchain created - %dx%d, arraySize=2, %u images, FBO=%u, depthArray=%u\n",
+                mvWidth, mvHeight, mvImageCount, vrMultiViewFBO, vrMultiViewDepthTexArray);
+        }
+    }
+#endif // TARGET_ANDROID_NATIVE_GLES
+
     // Create action set
     if (!CreateActionSet()) {
         VR_Log("stdVR_OpenXR: Failed to create action set\n");
@@ -1369,6 +1476,26 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
     vrHudEnabled = false;
     vrHudRenderActive = false;
     vrHudFrameStarted = false;
+
+    // Destroy MultiView resources
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+    if (vrMultiViewFBO != 0) {
+        glDeleteFramebuffers(1, &vrMultiViewFBO);
+        vrMultiViewFBO = 0;
+    }
+    if (vrMultiViewDepthTexArray != 0) {
+        glDeleteTextures(1, &vrMultiViewDepthTexArray);
+        vrMultiViewDepthTexArray = 0;
+    }
+    if (xrMultiViewSwapchain != XR_NULL_HANDLE) {
+        xrDestroySwapchain(xrMultiViewSwapchain);
+        xrMultiViewSwapchain = XR_NULL_HANDLE;
+    }
+    xrMultiViewSwapchainImages.clear();
+    vrMultiViewEnabled = false;
+    vrMultiViewRenderActive = false;
+    vrMultiViewFBOValidated = false;
+#endif
 
     if (xrStageSpace != XR_NULL_HANDLE && xrStageSpace != xrLocalSpace) {
         xrDestroySpace(xrStageSpace);
@@ -1683,19 +1810,44 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             layers.push_back((XrCompositionLayerBaseHeader*)&quadLayer);
         } else {
             // Normal stereo projection mode for 3D gameplay
-            for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
-                // Ensure proper initialization
-                projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
-                projectionViews[eye].next = nullptr;
-                projectionViews[eye].pose = xrViews[eye].pose;
-                projectionViews[eye].fov = xrViews[eye].fov;
-                projectionViews[eye].subImage.swapchain = xrSwapchains[eye];
-                projectionViews[eye].subImage.imageRect.offset = { 0, 0 };
-                projectionViews[eye].subImage.imageRect.extent = {
-                    (int32_t)xrConfigViews[eye].recommendedImageRectWidth,
-                    (int32_t)xrConfigViews[eye].recommendedImageRectHeight
-                };
-                projectionViews[eye].subImage.imageArrayIndex = 0;
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+            // Use MultiView swapchain if available and render was done via MultiView
+            if (vrMultiViewEnabled && xrMultiViewSwapchain != XR_NULL_HANDLE) {
+                // MultiView: single swapchain with array layers
+                // Use LEFT eye FOV for BOTH eyes since we render same content
+                // The rendered content matches left eye's projection
+
+                for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
+                    projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+                    projectionViews[eye].next = nullptr;
+                    projectionViews[eye].pose = xrViews[eye].pose;  // Per-eye pose for position
+                    projectionViews[eye].fov = xrViews[0].fov;      // LEFT eye FOV for BOTH
+                    projectionViews[eye].subImage.swapchain = xrMultiViewSwapchain;
+                    projectionViews[eye].subImage.imageRect.offset = { 0, 0 };
+                    projectionViews[eye].subImage.imageRect.extent = {
+                        (int32_t)xrConfigViews[eye].recommendedImageRectWidth,
+                        (int32_t)xrConfigViews[eye].recommendedImageRectHeight
+                    };
+                    projectionViews[eye].subImage.imageArrayIndex = eye;  // 0 for left, 1 for right
+                }
+            } else
+#endif
+            {
+                // Per-eye swapchains (fallback path)
+                for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
+                    // Ensure proper initialization
+                    projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+                    projectionViews[eye].next = nullptr;
+                    projectionViews[eye].pose = xrViews[eye].pose;
+                    projectionViews[eye].fov = xrViews[eye].fov;
+                    projectionViews[eye].subImage.swapchain = xrSwapchains[eye];
+                    projectionViews[eye].subImage.imageRect.offset = { 0, 0 };
+                    projectionViews[eye].subImage.imageRect.extent = {
+                        (int32_t)xrConfigViews[eye].recommendedImageRectWidth,
+                        (int32_t)xrConfigViews[eye].recommendedImageRectHeight
+                    };
+                    projectionViews[eye].subImage.imageArrayIndex = 0;
+                }
             }
 
             projectionLayer.space = xrLocalSpace;
@@ -2047,6 +2199,206 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
 
     return 1;
 }
+
+// ============================================================================
+// MultiView Buffer Functions - Single-pass stereo rendering for Quest VR
+// ============================================================================
+
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+extern "C" int stdVR_OpenXR_IsMultiViewSupported(void)
+{
+    return vrMultiViewSupported && vrMultiViewEnabled ? 1 : 0;
+}
+
+extern "C" int stdVR_OpenXR_PrepareMultiViewBuffer(void)
+{
+    static int mvPrepareCount = 0;
+    mvPrepareCount++;
+
+    if (!xrSessionRunning || !vrMultiViewEnabled || xrMultiViewSwapchain == XR_NULL_HANDLE) {
+        if (mvPrepareCount <= 10) {
+            VR_Log("stdVR_OpenXR_PrepareMultiViewBuffer: early exit (running=%d, enabled=%d)\n",
+                xrSessionRunning, vrMultiViewEnabled);
+        }
+        return 0;
+    }
+
+    // Acquire swapchain image (single image for both eyes)
+    XrSwapchainImageAcquireInfo acquireInfo = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
+    XrResult result = xrAcquireSwapchainImage(xrMultiViewSwapchain, &acquireInfo, &xrMultiViewSwapchainImageIndex);
+    if (XR_FAILED(result)) {
+        VR_Log("stdVR_OpenXR: xrAcquireSwapchainImage(MultiView) failed: error %d\n", result);
+        return 0;
+    }
+
+    // Wait for the image to be available
+    if (!stdVR_OpenXR_WaitSwapchainImage(xrMultiViewSwapchain, "MultiView", -1)) {
+        XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+        xrReleaseSwapchainImage(xrMultiViewSwapchain, &releaseInfo);
+        return 0;
+    }
+
+    // Initialize state tracking if needed
+    if (!stateTrackingActive) {
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &trackedFBO);
+        glGetIntegerv(GL_VIEWPORT, trackedViewport);
+        stateTrackingActive = true;
+    }
+    previousFBO = trackedFBO;
+    memcpy(previousViewport, trackedViewport, sizeof(previousViewport));
+
+    // Get the swapchain texture array
+    if (xrMultiViewSwapchainImageIndex >= xrMultiViewSwapchainImages.size()) {
+        VR_Log("stdVR_OpenXR: MultiView image index out of range: %u\n", xrMultiViewSwapchainImageIndex);
+        XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+        xrReleaseSwapchainImage(xrMultiViewSwapchain, &releaseInfo);
+        return 0;
+    }
+    GLuint textureArray = xrMultiViewSwapchainImages[xrMultiViewSwapchainImageIndex].image;
+
+    // Bind MultiView FBO
+    glBindFramebuffer(GL_FRAMEBUFFER, vrMultiViewFBO);
+
+    // Attach color texture array with MultiView (both eyes in one attachment)
+    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        textureArray, 0, 0, 2);
+
+    // Re-attach depth texture array (ensure it's in sync with color)
+    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        vrMultiViewDepthTexArray, 0, 0, 2);
+
+    // Validate FBO on first use
+    if (!vrMultiViewFBOValidated) {
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            VR_Log("stdVR_OpenXR: MultiView FBO incomplete, status 0x%x\n", status);
+            glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
+            XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+            xrReleaseSwapchainImage(xrMultiViewSwapchain, &releaseInfo);
+            return 0;
+        }
+        vrMultiViewFBOValidated = true;
+        VR_Log("stdVR_OpenXR: MultiView FBO validated successfully\n");
+    }
+
+    // Set viewport to VR render target size
+    int width = xrConfigViews[0].recommendedImageRectWidth;
+    int height = xrConfigViews[0].recommendedImageRectHeight;
+    glViewport(0, 0, width, height);
+
+    // Update tracked state
+    trackedFBO = vrMultiViewFBO;
+    trackedViewport[0] = 0;
+    trackedViewport[1] = 0;
+    trackedViewport[2] = width;
+    trackedViewport[3] = height;
+
+    // Tell std3D to route rendering to MultiView FBO
+    std3D_SetVRTargetFBO(vrMultiViewFBO, width, height);
+
+    // Enable MultiView direct rendering mode (skip internal FBO)
+    std3D_SetMultiViewActive(1);
+
+    // Clear the buffer
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    vrMultiViewRenderActive = true;
+
+    if (mvPrepareCount <= 10 || mvPrepareCount % 100 == 0) {
+        VR_Log("stdVR_OpenXR_PrepareMultiViewBuffer #%d: texArray=%u fbo=%u %dx%d\n",
+            mvPrepareCount, textureArray, vrMultiViewFBO, width, height);
+    }
+
+    return 1;
+}
+
+extern "C" int stdVR_OpenXR_FinishMultiViewBuffer(void)
+{
+    if (!vrMultiViewRenderActive) {
+        return 0;
+    }
+
+    // Clear alpha channel to 1.0 (some runtimes treat alpha=0 as discard)
+    glBindFramebuffer(GL_FRAMEBUFFER, vrMultiViewFBO);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    // Restore std3D's window FBO routing
+    std3D_ClearVRTargetFBO();
+
+    // Disable MultiView direct rendering mode
+    std3D_ClearMultiViewActive();
+
+    // Detach color texture array from FBO
+    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0, 2);
+
+    // Restore previous FBO and viewport
+    glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
+    glViewport(previousViewport[0], previousViewport[1], previousViewport[2], previousViewport[3]);
+    trackedFBO = previousFBO;
+    memcpy(trackedViewport, previousViewport, sizeof(trackedViewport));
+
+    // Release the swapchain image
+    XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
+    XrResult result = xrReleaseSwapchainImage(xrMultiViewSwapchain, &releaseInfo);
+    if (XR_FAILED(result)) {
+        VR_Log("stdVR_OpenXR: xrReleaseSwapchainImage(MultiView) failed: error %d\n", result);
+    }
+
+    vrMultiViewRenderActive = false;
+    return 1;
+}
+
+extern "C" int stdVR_OpenXR_GetMultiViewFBO(void)
+{
+    return vrMultiViewRenderActive ? (int)vrMultiViewFBO : 0;
+}
+
+// Get stereo eye offsets for MultiView rendering
+// Returns the horizontal offset in clip space for each eye
+extern "C" void stdVR_OpenXR_GetStereoOffsets(float* leftOffset, float* rightOffset)
+{
+    if (!leftOffset || !rightOffset) return;
+
+    // Calculate IPD from eye positions
+    // Left eye is typically at negative X, right eye at positive X
+    float leftEyeX = xrViews[0].pose.position.x;
+    float rightEyeX = xrViews[1].pose.position.x;
+    float ipd = rightEyeX - leftEyeX;  // Inter-pupillary distance in meters
+
+    // Get average horizontal FOV tangent for scale factor
+    // fov.angleLeft is negative, fov.angleRight is positive
+    float avgFovTan = (tanf(xrViews[0].fov.angleRight) - tanf(xrViews[0].fov.angleLeft)) * 0.5f;
+
+    // Calculate offset in NDC
+    // When camera moves left by IPD/2, objects shift right in the image
+    // So for left eye (at -IPD/2), content needs positive X shift
+    // For right eye (at +IPD/2), content needs negative X shift
+    float offsetScale = 1.0f / avgFovTan;  // Convert meters to NDC at unit depth
+
+    // Amplify the stereo effect (tune this value for comfort)
+    float stereoStrength = 4.0f;
+
+    *leftOffset = (ipd * 0.5f) * offsetScale * stereoStrength;   // Left eye: shift right
+    *rightOffset = -(ipd * 0.5f) * offsetScale * stereoStrength; // Right eye: shift left
+
+    static int logCount = 0;
+    if (++logCount <= 10 || logCount % 600 == 0) {
+        VR_Log("StereoOffsets: IPD=%.4f avgFovTan=%.4f leftOff=%.4f rightOff=%.4f\n",
+            ipd, avgFovTan, *leftOffset, *rightOffset);
+    }
+}
+#else
+// Stubs for non-Quest platforms
+extern "C" int stdVR_OpenXR_IsMultiViewSupported(void) { return 0; }
+extern "C" int stdVR_OpenXR_PrepareMultiViewBuffer(void) { return 0; }
+extern "C" int stdVR_OpenXR_FinishMultiViewBuffer(void) { return 0; }
+extern "C" int stdVR_OpenXR_GetMultiViewFBO(void) { return 0; }
+extern "C" void stdVR_OpenXR_GetStereoOffsets(float* leftOffset, float* rightOffset) { if (leftOffset) *leftOffset = 0; if (rightOffset) *rightOffset = 0; }
+#endif
 
 extern "C" int stdVR_OpenXR_GetCurrentEyeFBO(int eye)
 {

@@ -961,5 +961,46 @@ void sithCamera_SetVRView(int eye)
 
     rdCamera_SetVRProjection(proj);
 }
+
+// Set up camera for MultiView rendering (both eyes rendered in single pass)
+void sithCamera_SetVRViewMultiView(void)
+{
+    if (!sithCamera_currentCamera || !rdCamera_pCurCamera) {
+        return;
+    }
+
+    // For MultiView, we use the center/head view (no IPD offset)
+    // The shader will apply per-eye transforms via gl_ViewID_OVR
+    rdMatrix34 centerView;
+    stdVR_CombineCameraWithCenter(&sithCamera_currentCamera->viewMat, &centerView);
+
+    // Store for weapon rendering (center position)
+    stdVR_SetCurrentEyeViewMatrix(&centerView);
+
+    // Invert for camera view matrix
+    rdMatrix34 invertedView;
+    rdMatrix_InvertOrtho34(&invertedView, &centerView);
+    rdMatrix_Copy34(&rdCamera_pCurCamera->view_matrix, &invertedView);
+
+    // Update global camera matrix
+    rdCamera_UpdateCamMatrix(&centerView);
+
+    // Set up VR projection using eye 0's FOV (both eyes have similar FOV)
+    // This is needed for CPU projection to work correctly
+    stdVR_EyeView* pEye = &stdVR_clientInfo.eyes[0];
+
+    // Set frustum tangents for CPU clipping
+    rdCamera_SetVRTangents(pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
+
+    // Set VR render dimensions
+    rdCamera_SetVRRenderDimensions(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
+
+    // Set VR projection matrix (use eye 0's projection as base)
+    float proj[16];
+    stdVR_GetEyeProjectionMatrix44(0, proj,
+        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zNear : 0.01f,
+        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zFar : 1000.0f);
+    rdCamera_SetVRProjection(proj);
+}
 #endif // PLATFORM_VR
 

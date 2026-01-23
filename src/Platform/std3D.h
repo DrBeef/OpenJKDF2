@@ -129,6 +129,11 @@ void std3D_Screenshot(const char* pFpath);
 void std3D_SetVRTargetSize(int width, int height);
 void std3D_SetVRTargetFBO(int fbo, int width, int height);
 void std3D_ClearVRTargetFBO(void);
+// MultiView direct rendering mode (skip internal FBO for single-pass stereo)
+void std3D_SetMultiViewActive(int active);
+void std3D_ClearMultiViewActive(void);
+// Per-eye offsets for stereo parallax in MultiView
+void std3D_SetEyeOffsets(float leftOffset, float rightOffset);
 // VR debug helpers
 void std3D_DebugLogGLState(const char* tag, int eye, int frame);
 void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame);
@@ -138,6 +143,9 @@ void std3D_DebugSaveInternalFbo(const char* filename);
 void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight);
 // VR HUD rendering - draws UI render list to currently bound FBO with specified dimensions
 void std3D_DrawUIRenderListToCurrentFBO(int width, int height);
+// MultiView UBO functions for single-pass stereo rendering
+void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices);
+void std3D_BindMultiViewUBOs(unsigned int program);
 #endif
 
 void std3D_ResetUIRenderList();

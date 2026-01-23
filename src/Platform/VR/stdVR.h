@@ -44,6 +44,13 @@ int stdVR_FinishEyeBuffer(int eye);     // Release eye swapchain image
 int stdVR_GetCurrentEyeFBO(int eye);    // Get the FBO for the current eye (0 if not active)
 int stdVR_GetCurrentEye(void);          // Get which eye is currently being rendered (-1 if none)
 
+// MultiView rendering (single-pass stereo for Quest VR)
+int stdVR_IsMultiViewSupported(void);   // Check if MultiView is available and enabled
+int stdVR_PrepareMultiViewBuffer(void); // Acquire and bind MultiView swapchain (both eyes)
+int stdVR_FinishMultiViewBuffer(void);  // Release MultiView swapchain
+int stdVR_GetMultiViewFBO(void);        // Get the MultiView FBO (0 if not active)
+void stdVR_SetMultiViewMatrices(float zNear, float zFar);  // Upload both eye view/proj matrices to UBOs
+
 // HUD rendering (dedicated quad layer for in-game HUD)
 int stdVR_PrepareHudBuffer(void);       // Acquire HUD swapchain and bind FBO
 int stdVR_FinishHudBuffer(void);        // Release HUD swapchain image
@@ -90,6 +97,9 @@ int stdVR_GetMenuTriggerReleased(void); // Was trigger released this frame
 // Helper function to combine game camera with VR eye offset
 void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix34* pOut);
 
+// Helper function to combine game camera with HMD center pose (for MultiView)
+void stdVR_CombineCameraWithCenter(const rdMatrix34* pGameCamera, rdMatrix34* pOut);
+
 // Added: Get/set current eye view matrix (for weapon rendering in VR)
 void stdVR_SetCurrentEyeViewMatrix(const rdMatrix34* pMat);
 int stdVR_GetCurrentEyeViewMatrix(rdMatrix34* pOut);
@@ -133,6 +143,11 @@ static inline int stdVR_PrepareEyeBuffer(int eye) { (void)eye; return 0; }
 static inline int stdVR_FinishEyeBuffer(int eye) { (void)eye; return 0; }
 static inline int stdVR_GetCurrentEyeFBO(int eye) { (void)eye; return 0; }
 static inline int stdVR_GetCurrentEye(void) { return -1; }
+static inline int stdVR_IsMultiViewSupported(void) { return 0; }
+static inline int stdVR_PrepareMultiViewBuffer(void) { return 0; }
+static inline int stdVR_FinishMultiViewBuffer(void) { return 0; }
+static inline int stdVR_GetMultiViewFBO(void) { return 0; }
+static inline void stdVR_SetMultiViewMatrices(float zNear, float zFar) { (void)zNear; (void)zFar; }
 static inline int stdVR_PrepareHudBuffer(void) { return 0; }
 static inline int stdVR_FinishHudBuffer(void) { return 0; }
 static inline int stdVR_GetHudFBO(void) { return 0; }

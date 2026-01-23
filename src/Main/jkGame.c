@@ -371,64 +371,104 @@ int jkGame_Update()
             rdAdvanceFrame();  // This calls std3D_StartScene via rdCache_AdvanceFrame
             sithCamera_PrepareFrameVR();  // Updates camera position, sets rdCamera
 
-            // Render each eye
-            for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
-                if (!stdVR_PrepareEyeBuffer(eye)) {
-                    continue;
+#if defined(TARGET_ANDROID_NATIVE_GLES)  // MultiView for Quest VR
+            // === MultiView Path (single-pass stereo rendering) ===
+            // Uses GL_OVR_multiview2 to render both eyes in a single draw call.
+            // Since engine uses CPU projection, shader applies IPD offset in screen-space.
+            if (stdVR_IsMultiViewSupported()) {
+                if (stdVR_PrepareMultiViewBuffer()) {
+                    // Clear internal render target
+                    std3D_ClearMainFbo();
+
+                    // Upload both eye view/projection matrices to UBOs
+                    // The shader will use gl_ViewID_OVR to select the correct matrices
+                    stdVR_SetMultiViewMatrices(0.01f, 1000.0f);  // zNear, zFar
+
+                    // Set up center camera (MultiView handles eye separation in shader)
+                    sithCamera_SetVRViewMultiView();
+
+                    // Advance render tick
+                    sithMain_sub_4C4D80();
+
+                    // Render scene once - GPU renders to both eye layers
+                    sithRender_Draw();
+                    jkPlayer_DrawPov();
+
+                    // Flush render cache
+                    rdCache_Flush();
+
+                    // Resolve to VR swapchain (both eyes)
+                    std3D_DrawSceneFbo();
+
+                    // Reset render lists
+                    rdCache_ResetRenderList();
+
+                    // Release MultiView buffer
+                    stdVR_FinishMultiViewBuffer();
                 }
-
-                // Clear internal render target per-eye to avoid depth/color leakage
-                std3D_ClearMainFbo();
-
-                // Set up VR view for this eye (applies eye offset and projection)
-                sithCamera_SetVRView(eye);
-
-                // Advance render tick for each eye so sectors don't get skipped
-                // The render system uses sithRender_lastRenderTick to mark sectors as "already rendered"
-                // Without this, the second eye would skip all sectors because they were rendered for the first eye
-                sithMain_sub_4C4D80();
-
-                // Render scene for this eye
-                sithRender_Draw();
-                jkPlayer_DrawPov();
-
-                // Flush render cache per-eye so triangles are actually drawn to internal FBO
-                // before we blit to VR swapchain. Without this, both eyes get empty content.
-                rdCache_Flush();
-
-                // Save screenshot for VR auto-test mode
-                {
-                    extern int32_t Main_bVRTest;
-                    extern int32_t Main_vrTestFrameTarget;
-                    extern int32_t Main_vrTestState;
-
-                    static int screenshotSaved[2] = {0, 0};
-                    int targetFrame = Main_bVRTest ? Main_vrTestFrameTarget : 30;
-
-                    // Mark that we're in gameplay for VR test
-                    if (Main_bVRTest && Main_vrTestState == 0) {
-                        Main_vrTestState = 1;
-                        VR_Log("=== VR AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n", targetFrame);
+            } else
+#endif
+            {
+                // === Per-Eye Path (fallback, always used for now) ===
+                // Render each eye separately
+                for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
+                    if (!stdVR_PrepareEyeBuffer(eye)) {
+                        continue;
                     }
 
-                    if (vrRenderCount == targetFrame && eye >= 0 && eye < 2 && !screenshotSaved[eye]) {
-                        screenshotSaved[eye] = 1;
-                        char filename[256];
-                        snprintf(filename, sizeof(filename), "vrtest_eye%d.ppm", eye);
-                        std3D_DebugSaveInternalFbo(filename);
-                        VR_Log("=== VR AUTO-TEST: Saved %s ===\n", filename);
+                    // Clear internal render target per-eye to avoid depth/color leakage
+                    std3D_ClearMainFbo();
+
+                    // Set up VR view for this eye (applies eye offset and projection)
+                    sithCamera_SetVRView(eye);
+
+                    // Advance render tick for each eye so sectors don't get skipped
+                    // The render system uses sithRender_lastRenderTick to mark sectors as "already rendered"
+                    // Without this, the second eye would skip all sectors because they were rendered for the first eye
+                    sithMain_sub_4C4D80();
+
+                    // Render scene for this eye
+                    sithRender_Draw();
+                    jkPlayer_DrawPov();
+
+                    // Flush render cache per-eye so triangles are actually drawn to internal FBO
+                    // before we blit to VR swapchain. Without this, both eyes get empty content.
+                    rdCache_Flush();
+
+                    // Save screenshot for VR auto-test mode
+                    {
+                        extern int32_t Main_bVRTest;
+                        extern int32_t Main_vrTestFrameTarget;
+                        extern int32_t Main_vrTestState;
+
+                        static int screenshotSaved[2] = {0, 0};
+                        int targetFrame = Main_bVRTest ? Main_vrTestFrameTarget : 30;
+
+                        // Mark that we're in gameplay for VR test
+                        if (Main_bVRTest && Main_vrTestState == 0) {
+                            Main_vrTestState = 1;
+                            VR_Log("=== VR AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n", targetFrame);
+                        }
+
+                        if (vrRenderCount == targetFrame && eye >= 0 && eye < 2 && !screenshotSaved[eye]) {
+                            screenshotSaved[eye] = 1;
+                            char filename[256];
+                            snprintf(filename, sizeof(filename), "vrtest_eye%d.ppm", eye);
+                            std3D_DebugSaveInternalFbo(filename);
+                            VR_Log("=== VR AUTO-TEST: Saved %s ===\n", filename);
+                        }
                     }
+
+                    // Resolve internal FBO to VR swapchain
+                    std3D_DrawSceneFbo();
+
+                    // Reset render lists per-eye; otherwise GL_tmpVertices accumulates and
+                    // the second eye can exceed STD3D_MAX_VERTICES and render nothing.
+                    rdCache_ResetRenderList();
+
+                    // Release eye buffer
+                    stdVR_FinishEyeBuffer(eye);
                 }
-
-                // Resolve internal FBO to VR swapchain
-                std3D_DrawSceneFbo();
-
-                // Reset render lists per-eye; otherwise GL_tmpVertices accumulates and
-                // the second eye can exceed STD3D_MAX_VERTICES and render nothing.
-                rdCache_ResetRenderList();
-
-                // Release eye buffer
-                stdVR_FinishEyeBuffer(eye);
             }
         }
 

@@ -119,3 +119,5 @@ build_openjkdf2_venv/*
 /build
 /build_quest_vr
 /build_pcvr
+/build_vr
+/build_vr_test

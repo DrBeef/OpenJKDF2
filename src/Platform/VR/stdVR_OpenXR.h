@@ -32,6 +32,13 @@ int stdVR_OpenXR_FinishEyeBuffer(int eye);
 int stdVR_OpenXR_GetCurrentEyeFBO(int eye);
 int stdVR_OpenXR_GetCurrentEye(void);
 
+// MultiView rendering (single-pass stereo for Quest VR)
+int stdVR_OpenXR_IsMultiViewSupported(void);
+int stdVR_OpenXR_PrepareMultiViewBuffer(void);
+int stdVR_OpenXR_FinishMultiViewBuffer(void);
+int stdVR_OpenXR_GetMultiViewFBO(void);
+void stdVR_OpenXR_GetStereoOffsets(float* leftOffset, float* rightOffset);
+
 // HUD buffer (dedicated quad layer for in-game HUD)
 int stdVR_OpenXR_PrepareHudBuffer(void);
 int stdVR_OpenXR_FinishHudBuffer(void);

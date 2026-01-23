@@ -426,6 +426,112 @@ int stdVR_GetCurrentEye(void)
 }
 
 // ============================================================================
+// MultiView Buffer Functions - Single-pass stereo rendering for Quest VR
+// ============================================================================
+
+int stdVR_IsMultiViewSupported(void)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return 0;
+    }
+    return stdVR_OpenXR_IsMultiViewSupported();
+}
+
+int stdVR_PrepareMultiViewBuffer(void)
+{
+    static int mvPrepareWrapperCount = 0;
+    mvPrepareWrapperCount++;
+
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        if (mvPrepareWrapperCount == 1) {
+            VR_Log("stdVR_PrepareMultiViewBuffer BLOCKED: enabled=%d, running=%d\n",
+                stdVR_bEnabled, stdVR_clientInfo.bSessionRunning);
+        }
+        return 0;
+    }
+
+    if (mvPrepareWrapperCount <= 5 || mvPrepareWrapperCount % 100 == 0) {
+        VR_Log("stdVR_PrepareMultiViewBuffer #%d\n", mvPrepareWrapperCount);
+    }
+    return stdVR_OpenXR_PrepareMultiViewBuffer();
+}
+
+int stdVR_FinishMultiViewBuffer(void)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return 0;
+    }
+    return stdVR_OpenXR_FinishMultiViewBuffer();
+}
+
+int stdVR_GetMultiViewFBO(void)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return 0;
+    }
+    return stdVR_OpenXR_GetMultiViewFBO();
+}
+
+// Compute and upload both eye view/projection matrices for MultiView rendering
+// Uses symmetric IPD offset for proper stereo
+void stdVR_SetMultiViewMatrices(float zNear, float zFar)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return;
+    }
+
+    float viewMatrices[32];  // 2 x 4x4 matrices (column-major)
+    float projMatrices[32];  // 2 x 4x4 matrices (column-major)
+
+    float worldScale = stdVR_config.worldScale;
+    if (worldScale <= 0.0f) {
+        worldScale = 1.0f;
+    }
+
+    // Calculate IPD from eye positions (distance between eyes)
+    float leftEyeX = stdVR_clientInfo.eyes[0].viewMatrix.scale.x;
+    float rightEyeX = stdVR_clientInfo.eyes[1].viewMatrix.scale.x;
+    float ipd = rightEyeX - leftEyeX;  // IPD in meters (typically ~0.063)
+
+    // For clip-space offset, we need to scale IPD appropriately
+    // The 0.1 hardcoded value worked, IPD/2 is ~0.0315, so scale factor ~3
+    const float stereoStrength = 117.6f;
+    float halfIpd = (ipd * 0.5f) * (stereoStrength * worldScale);
+
+    // Symmetric IPD offset for stereo separation
+    // Left eye (eye=0): positive offset (camera moved left, image shifts right)
+    // Right eye (eye=1): negative offset (camera moved right, image shifts left)
+    for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
+        float xOffset = (eye == 0) ? halfIpd : -halfIpd;
+
+        float* viewDst = &viewMatrices[eye * 16];
+        // Identity matrix with X translation only (column-major)
+        viewDst[0]  = 1.0f;  viewDst[4]  = 0.0f;  viewDst[8]  = 0.0f;  viewDst[12] = xOffset;
+        viewDst[1]  = 0.0f;  viewDst[5]  = 1.0f;  viewDst[9]  = 0.0f;  viewDst[13] = 0.0f;
+        viewDst[2]  = 0.0f;  viewDst[6]  = 0.0f;  viewDst[10] = 1.0f;  viewDst[14] = 0.0f;
+        viewDst[3]  = 0.0f;  viewDst[7]  = 0.0f;  viewDst[11] = 0.0f;  viewDst[15] = 1.0f;
+
+        // Get projection matrix
+        stdVR_GetEyeProjectionMatrix44(eye, &projMatrices[eye * 16], zNear, zFar);
+    }
+
+    static int logCount = 0;
+    if (++logCount <= 5 || logCount % 300 == 0) {
+        extern void VR_Log(const char* fmt, ...);
+        VR_Log("MultiView: IPD=%.4f halfIpd=%.4f L_x=%.4f R_x=%.4f\n",
+            ipd, halfIpd, viewMatrices[12], viewMatrices[28]);
+    }
+
+    // Upload to std3D UBOs
+    extern void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices);
+    std3D_UpdateMultiViewMatrices(viewMatrices, projMatrices);
+
+    // Also set per-eye offsets for any other systems that need them
+    extern void std3D_SetEyeOffsets(float leftOffset, float rightOffset);
+    std3D_SetEyeOffsets(viewMatrices[12], viewMatrices[28]);
+}
+
+// ============================================================================
 // HUD Buffer Functions - Wrapper for dedicated HUD quad layer
 // ============================================================================
 
@@ -737,6 +843,51 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
         VR_Log("  ipdOffset (scaled)=(%.5f, %.5f, %.5f)\n", ipdOffset.x, ipdOffset.y, ipdOffset.z);
         VR_Log("  final pos=(%.3f, %.3f, %.3f)\n", combined.scale.x, combined.scale.y, combined.scale.z);
     }
+
+    rdMatrix_Copy34(pOut, &combined);
+}
+
+// Combine game camera with HMD center pose (no eye offset, for MultiView center)
+void stdVR_CombineCameraWithCenter(const rdMatrix34* pGameCamera, rdMatrix34* pOut)
+{
+    if (!pGameCamera || !pOut) return;
+
+    // Store game camera for controller matrix calculations
+    rdMatrix_Copy34(&stdVR_currentGameCamera, pGameCamera);
+    stdVR_currentGameCameraValid = 1;
+
+    float worldScale = stdVR_config.worldScale;
+    if (worldScale <= 0.0f) {
+        worldScale = 1.0f;
+    }
+
+    // Get HMD center pose (no IPD offset)
+    rdMatrix34 hmdPose;
+    rdMatrix_Copy34(&hmdPose, &stdVR_clientInfo.hmdPoseMatrix);
+
+    // Multiply: gameCamera * hmdPose (head rotation without eye separation)
+    rdMatrix34 combined;
+    rdMatrix_Multiply34(&combined, pGameCamera, &hmdPose);
+
+    // Apply world scale to HMD offset
+    rdVector3 hmdOffset;
+    hmdOffset.x = hmdPose.scale.x * worldScale;
+    hmdOffset.y = hmdPose.scale.y * worldScale;
+    hmdOffset.z = hmdPose.scale.z * worldScale;
+
+    // Apply height offset if configured
+    if (stdVR_config.heightOffset != 0.0f) {
+        hmdOffset.z += stdVR_config.heightOffset * worldScale;
+    }
+
+    // Transform by game camera orientation
+    rdVector3 hmdOffsetWorld;
+    rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
+
+    // Final position = game position + HMD offset (no IPD)
+    combined.scale.x = pGameCamera->scale.x + hmdOffsetWorld.x;
+    combined.scale.y = pGameCamera->scale.y + hmdOffsetWorld.y;
+    combined.scale.z = pGameCamera->scale.z + hmdOffsetWorld.z;
 
     rdMatrix_Copy34(pOut, &combined);
 }
