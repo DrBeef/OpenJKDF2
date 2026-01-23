@@ -1817,10 +1817,10 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
 
                 //Calculate an average FOV used for both eyes
                 XrFovf fov;
-                fov.angleLeft = (xrViews[0].fov.angleLeft + xrViews[1].fov.angleLeft) / 2.f;
-                fov.angleRight = (xrViews[0].fov.angleRight + xrViews[1].fov.angleRight) / 2.f;
-                fov.angleUp = (xrViews[0].fov.angleUp + xrViews[1].fov.angleUp) / 2.f;
-                fov.angleDown = (xrViews[0].fov.angleDown + xrViews[1].fov.angleDown) / 2.f;
+                fov.angleLeft = xrViews[0].fov.angleLeft;
+                fov.angleRight = xrViews[1].fov.angleRight;
+                fov.angleUp = xrViews[0].fov.angleUp;
+                fov.angleDown = xrViews[0].fov.angleDown;
 
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;

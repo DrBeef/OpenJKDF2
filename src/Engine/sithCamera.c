@@ -987,10 +987,10 @@ void sithCamera_SetVRViewMultiView(void)
 
     // Set up VR projection using center eye's FOV (both eyes have similar FOV)
     // This is needed for CPU projection to work correctly
-    float fovLeft = (stdVR_clientInfo.eyes[0].fovLeft + stdVR_clientInfo.eyes[1].fovLeft) / 2.f;
-    float fovRight = (stdVR_clientInfo.eyes[0].fovRight + stdVR_clientInfo.eyes[1].fovRight) / 2.f;
-    float fovUp = (stdVR_clientInfo.eyes[0].fovUp + stdVR_clientInfo.eyes[1].fovUp) / 2.f;
-    float fovDown = (stdVR_clientInfo.eyes[0].fovDown + stdVR_clientInfo.eyes[1].fovDown) / 2.f;
+    float fovLeft = stdVR_clientInfo.eyes[0].fovLeft;
+    float fovRight = stdVR_clientInfo.eyes[1].fovRight;
+    float fovUp = stdVR_clientInfo.eyes[0].fovUp;
+    float fovDown = stdVR_clientInfo.eyes[0].fovDown;
 
     // Set frustum tangents for CPU clipping
     rdCamera_SetVRTangents(fovLeft, fovRight, fovUp, fovDown);
