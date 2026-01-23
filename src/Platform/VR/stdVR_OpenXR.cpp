@@ -1814,14 +1814,19 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             // Use MultiView swapchain if available and render was done via MultiView
             if (vrMultiViewEnabled && xrMultiViewSwapchain != XR_NULL_HANDLE) {
                 // MultiView: single swapchain with array layers
-                // Use LEFT eye FOV for BOTH eyes since we render same content
-                // The rendered content matches left eye's projection
+
+                //Calculate an average FOV used for both eyes
+                XrFovf fov;
+                fov.angleLeft = (xrViews[0].fov.angleLeft + xrViews[1].fov.angleLeft) / 2.f;
+                fov.angleRight = (xrViews[0].fov.angleRight + xrViews[1].fov.angleRight) / 2.f;
+                fov.angleUp = (xrViews[0].fov.angleUp + xrViews[1].fov.angleUp) / 2.f;
+                fov.angleDown = (xrViews[0].fov.angleDown + xrViews[1].fov.angleDown) / 2.f;
 
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
                     projectionViews[eye].next = nullptr;
                     projectionViews[eye].pose = xrViews[eye].pose;  // Per-eye pose for position
-                    projectionViews[eye].fov = xrViews[0].fov;      // LEFT eye FOV for BOTH
+                    projectionViews[eye].fov = fov;
                     projectionViews[eye].subImage.swapchain = xrMultiViewSwapchain;
                     projectionViews[eye].subImage.imageRect.offset = { 0, 0 };
                     projectionViews[eye].subImage.imageRect.extent = {

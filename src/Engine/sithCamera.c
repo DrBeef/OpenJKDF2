@@ -985,22 +985,19 @@ void sithCamera_SetVRViewMultiView(void)
     // Update global camera matrix
     rdCamera_UpdateCamMatrix(&centerView);
 
-    // Set up VR projection using eye 0's FOV (both eyes have similar FOV)
+    // Set up VR projection using center eye's FOV (both eyes have similar FOV)
     // This is needed for CPU projection to work correctly
-    stdVR_EyeView* pEye = &stdVR_clientInfo.eyes[0];
+    float fovLeft = (stdVR_clientInfo.eyes[0].fovLeft + stdVR_clientInfo.eyes[1].fovLeft) / 2.f;
+    float fovRight = (stdVR_clientInfo.eyes[0].fovRight + stdVR_clientInfo.eyes[1].fovRight) / 2.f;
+    float fovUp = (stdVR_clientInfo.eyes[0].fovUp + stdVR_clientInfo.eyes[1].fovUp) / 2.f;
+    float fovDown = (stdVR_clientInfo.eyes[0].fovDown + stdVR_clientInfo.eyes[1].fovDown) / 2.f;
 
     // Set frustum tangents for CPU clipping
-    rdCamera_SetVRTangents(pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
+    rdCamera_SetVRTangents(fovLeft, fovRight, fovUp, fovDown);
 
     // Set VR render dimensions
     rdCamera_SetVRRenderDimensions(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
 
-    // Set VR projection matrix (use eye 0's projection as base)
-    float proj[16];
-    stdVR_GetEyeProjectionMatrix44(0, proj,
-        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zNear : 0.01f,
-        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zFar : 1000.0f);
-    rdCamera_SetVRProjection(proj);
 }
 #endif // PLATFORM_VR
 
