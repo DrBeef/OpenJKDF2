@@ -494,9 +494,8 @@ void stdVR_SetMultiViewMatrices(float zNear, float zFar)
     float ipd = rightEyeX - leftEyeX;  // IPD in meters (typically ~0.063)
 
     // For clip-space offset, we need to scale IPD appropriately
-    // The 0.1 hardcoded value worked, IPD/2 is ~0.0315, so scale factor ~3
-    const float stereoStrength = 117.6f;
-    float halfIpd = (ipd * 0.5f) * (stereoStrength * worldScale);
+    const float CLIP_SPACE_MAGIC_NUMBER = 7.f;
+    float halfIpd = (worldScale * 0.5f) * CLIP_SPACE_MAGIC_NUMBER;
 
     // Symmetric IPD offset for stereo separation
     // Left eye (eye=0): positive offset (camera moved left, image shifts right)
