@@ -24,8 +24,18 @@ extern "C" {
 #endif
 #include "smacker.h"
 #include "smush.h"
+#ifdef USE_FFMPEG_VIDEO
+#include "mp4_player.h"
+#endif
 #ifdef __cplusplus
 }
+#endif
+
+// Windows compatibility for strcasecmp
+#ifdef _WIN32
+#ifndef strcasecmp
+#define strcasecmp _stricmp
+#endif
 #endif
 
 #include "../jk.h"
@@ -40,6 +50,9 @@ extern "C" {
 static smush_ctx* jkCutscene_pSmush;
 static smk jkCutscene_smk;
 static int jkCutscene_bSmkValid = 0;
+#ifdef USE_FFMPEG_VIDEO
+static mp4_ctx* jkCutscene_pMp4 = NULL;
+#endif
 static flex64_t jkCutscene_smk_usf;
 static uint32_t jkCutscene_smk_w, jkCutscene_smk_h, jkCutscene_smk_frames;
 static stdVBuffer* jkCutscene_frameBuf = NULL;
@@ -115,6 +128,27 @@ void smack_audio_callback(const uint8_t* data, size_t len)
     jkCutscene_audio_queue_write_idx = jkCutscene_audio_queue_write_idx % AUDIO_QUEUE_DEPTH;
 }
 
+#ifdef USE_FFMPEG_VIDEO
+// Added: MP4 audio callback - same pattern as smack
+void mp4_audio_callback_func(const uint8_t* data, size_t len)
+{
+    if (jkCutscene_audio_queue[jkCutscene_audio_queue_write_idx]) {
+        free((void*)jkCutscene_audio_queue[jkCutscene_audio_queue_write_idx]);
+        jkCutscene_audio_queue[jkCutscene_audio_queue_write_idx] = NULL;
+    }
+
+    void* queueAlloc = malloc(len);
+    if (!queueAlloc) {
+        return;
+    }
+    memcpy(queueAlloc, data, len);
+
+    jkCutscene_audio_queue[jkCutscene_audio_queue_write_idx] = (const uint8_t*)queueAlloc;
+    jkCutscene_audio_queue_lens[jkCutscene_audio_queue_write_idx++] = len;
+    jkCutscene_audio_queue_write_idx = jkCutscene_audio_queue_write_idx % AUDIO_QUEUE_DEPTH;
+}
+#endif
+
 // Added
 void jkCutscene_CleanReset()
 {
@@ -145,6 +179,14 @@ void jkCutscene_CleanReset()
         smk_close(jkCutscene_smk);
         jkCutscene_bSmkValid = 0;
     }
+#ifdef USE_FFMPEG_VIDEO
+    if (jkCutscene_pMp4) {
+        mp4_destroy(jkCutscene_pMp4);
+        jkCutscene_pMp4 = NULL;
+    }
+    // Added: Clean up RGB video texture
+    std3D_DestroyVideoRGBTexture();
+#endif
 
     if (jkCutscene_frameBuf) {
         stdDisplay_VBufferFree(jkCutscene_frameBuf);
@@ -303,6 +345,143 @@ int jkCutscene_sub_421310(char* fpath)
 #ifdef TARGET_TWL
     pHS->suggestHeap(HEAP_FAST);
 #endif
+
+    // Added: Try MP4 version first - check for SMK/SAN and substitute extension
+#ifdef USE_FFMPEG_VIDEO
+    char mp4_path[512];
+    const char* ext = strrchr(tmp, '.');
+    stdPlatform_Printf("DEBUG MP4: Checking file '%s', extension='%s'\n", tmp, ext ? ext : "(none)");
+
+    // If requesting .smk or .san, try .mp4 first
+    int try_mp4 = 0;
+    if (ext && (strcasecmp(ext, ".smk") == 0 || strcasecmp(ext, ".san") == 0)) {
+        // Build MP4 path by replacing extension
+        size_t base_len = ext - tmp;
+        if (base_len < sizeof(mp4_path) - 5) {
+            memcpy(mp4_path, tmp, base_len);
+            strcpy(mp4_path + base_len, ".mp4");
+            stdPlatform_Printf("DEBUG MP4: Looking for MP4 substitute: %s\n", mp4_path);
+            try_mp4 = 1;
+        }
+    } else if (ext && (strcasecmp(ext, ".mp4") == 0 ||
+                strcasecmp(ext, ".mkv") == 0 ||
+                strcasecmp(ext, ".webm") == 0 ||
+                strcasecmp(ext, ".avi") == 0 ||
+                strcasecmp(ext, ".mov") == 0)) {
+        // Already MP4 format
+        strncpy(mp4_path, tmp, sizeof(mp4_path)-1);
+        mp4_path[sizeof(mp4_path)-1] = 0;
+        try_mp4 = 1;
+    }
+
+    if (try_mp4) {
+        stdPlatform_Printf("DEBUG MP4: Attempting to open: %s\n", mp4_path);
+        jkCutscene_pMp4 = mp4_open_file(mp4_path);
+        if (jkCutscene_pMp4) {
+            stdPlatform_Printf("DEBUG MP4: Successfully opened MP4 file!\n");
+#ifdef TARGET_TWL
+            pHS->suggestHeap(HEAP_ANY);
+#endif
+            // Clear audio queue
+            if (jkCutscene_audio_buf) {
+                free((void*)jkCutscene_audio_buf);
+            }
+            jkCutscene_audio_buf = NULL;
+            jkCutscene_audio_pos = NULL;
+            jkCutscene_audio_len = 0;
+
+            jkCutscene_audio_queue_read_idx = 0;
+            jkCutscene_audio_queue_write_idx = 0;
+
+            for (int32_t i = 0; i < AUDIO_QUEUE_DEPTH; i++) {
+                if (jkCutscene_audio_queue[i]) {
+                    free((void*)jkCutscene_audio_queue[i]);
+                }
+                jkCutscene_audio_queue[i] = NULL;
+                jkCutscene_audio_queue_lens[i] = 0;
+            }
+
+            // Setup MP4 playback
+            jkCutscene_smk_w = mp4_video_width(jkCutscene_pMp4);
+            jkCutscene_smk_h = mp4_video_height(jkCutscene_pMp4);
+            jkCutscene_smk_frames = mp4_num_frames(jkCutscene_pMp4);
+            jkCutscene_smk_usf = 1000000.0 / mp4_video_fps(jkCutscene_pMp4);
+
+            stdPlatform_Printf("DEBUG MP4: ========================================\n");
+            stdPlatform_Printf("DEBUG MP4: Opened file %s as MP4\n", tmp);
+            stdPlatform_Printf("DEBUG MP4: Width: %lu, Height: %lu\n", jkCutscene_smk_w, jkCutscene_smk_h);
+            stdPlatform_Printf("DEBUG MP4: Frames: %lu, FPS: %f\n", jkCutscene_smk_frames, mp4_video_fps(jkCutscene_pMp4));
+            stdPlatform_Printf("DEBUG MP4: ========================================\n");
+
+            // Create VBuffer for video frames (8-bit palette indexed for subtitle overlay)
+            stdVBufferTexFmt texFmt;
+            memset(&texFmt, 0, sizeof(texFmt));
+            texFmt.width = jkCutscene_smk_w;
+            texFmt.height = jkCutscene_smk_h;
+            texFmt.format.bpp = 8;
+            jkCutscene_frameBuf = stdDisplay_VBufferNew(&texFmt, 1, 0, (void*)1);
+            stdDisplay_VBufferFill(jkCutscene_frameBuf, 0, NULL);
+
+            // Added: Create RGB texture for full color video playback
+            std3D_CreateVideoRGBTexture(jkCutscene_smk_w, jkCutscene_smk_h);
+            stdPlatform_Printf("DEBUG MP4: Created RGB texture for full color playback\n");
+
+            // Setup audio buffers
+            int mp4_channels = mp4_audio_channels(jkCutscene_pMp4);
+            int mp4_sample_rate = mp4_audio_sample_rate(jkCutscene_pMp4);
+            int mp4_bits = mp4_audio_bits_per_sample(jkCutscene_pMp4);
+
+            stdPlatform_Printf("DEBUG MP4 AUDIO: channels=%d, sample_rate=%d, bits=%d\n",
+                mp4_channels, mp4_sample_rate, mp4_bits);
+
+            if (mp4_channels > 0 && mp4_sample_rate > 0) {
+                int32_t bufLen;
+                uint8_t* stream;
+
+                for (int i = 0; i < AUDIO_NUM_STDBUFS; i++) {
+                    jkCutscene_audio[i] = stdSound_BufferCreate(mp4_channels == 2, mp4_sample_rate, mp4_bits, AUDIO_BUFS_DEPTH);
+                    stdSound_BufferSetVolume(jkCutscene_audio[i], jkGuiSound_cutsceneVolume);
+                    stream = (uint8_t*)stdSound_BufferSetData(jkCutscene_audio[i], AUDIO_BUFS_DEPTH, &bufLen);
+                    memset(stream, 0, bufLen);
+                    stdSound_BufferUnlock(jkCutscene_audio[i], stream, bufLen);
+                    stdSound_BufferReset(jkCutscene_audio[i]);
+                }
+
+                mp4_set_audio_callback(jkCutscene_pMp4, mp4_audio_callback_func);
+            }
+
+            // Use actual sample rate for audio depth calculation
+            int actual_sample_rate = (mp4_sample_rate > 0) ? mp4_sample_rate : 22050;
+            int bytes_per_sample = (mp4_channels > 0 ? mp4_channels : 1) * ((mp4_bits > 0 ? mp4_bits : 16) / 8);
+            flex64_t audio_depth_us = ((flex64_t)(AUDIO_BUFS_DEPTH / bytes_per_sample) / (flex64_t)actual_sample_rate) * 1000000.0;
+            stdPlatform_Printf("DEBUG MP4 AUDIO: buffer depth = %.1f ms\n", audio_depth_us / 1000.0);
+            jkCutscene_audio_us = 0.0;
+            jkCutscene_audio_us_slop = audio_depth_us / 4.0;
+
+            // Set palette from first frame decode
+            mp4_frame(jkCutscene_pMp4);
+            jkGui_SetModeMenu(mp4_get_palette(jkCutscene_pMp4));
+
+            // Setup playback state
+            jkCutscene_55AA54 = 0;
+            jkCutscene_audioFlip = 0;
+            last_displayFrame = 0;
+            last_audioUs = 0;
+            extraUs = 0;
+            last_audioUs = Linux_TimeUs();
+
+            stdDisplay_VBufferFill(Video_pMenuBuffer, 0, NULL);
+
+            stdDisplay_VBufferLock(Video_pMenuBuffer);
+            stdDisplay_VBufferCopy(Video_pMenuBuffer, jkCutscene_frameBuf, 0, 0, NULL, 0);
+            stdDisplay_VBufferUnlock(Video_pMenuBuffer);
+
+            Window_AddMsgHandler(jkCutscene_Handler);
+            jkCutscene_isRendering = 1;
+            return 1;
+        }
+    }
+#endif // USE_FFMPEG_VIDEO
 
     jkCutscene_pSmush = smush_from_fpath(tmp);
     if (!jkCutscene_pSmush)
@@ -517,11 +696,20 @@ int jkCutscene_sub_421410()
         smush_destroy(jkCutscene_pSmush);
         jkCutscene_pSmush = NULL;
     }
-    
+
     if (jkCutscene_bSmkValid) {
         smk_close(jkCutscene_smk);
     }
     jkCutscene_bSmkValid = 0;
+
+#ifdef USE_FFMPEG_VIDEO
+    if (jkCutscene_pMp4) {
+        mp4_destroy(jkCutscene_pMp4);
+        jkCutscene_pMp4 = NULL;
+        // Added: Clean up RGB video texture
+        std3D_DestroyVideoRGBTexture();
+    }
+#endif
 
     if (jkCutscene_frameBuf) {
         stdDisplay_VBufferFree(jkCutscene_frameBuf);
@@ -562,13 +750,19 @@ int jkCutscene_smack_related_loops()
         else
             smack_finished = 1;
 #else
+#ifdef USE_FFMPEG_VIDEO
+        if (jkCutscene_pMp4) {
+            smack_finished = jkCutscene_mp4_process();
+        }
+        else
+#endif
         if (!jkCutscene_pSmush) {
             smack_finished = jkCutscene_smacker_process();
         }
         else {
             smack_finished = jkCutscene_smusher_process();
         }
-        
+
 #endif
         if ( smack_finished )
         {
@@ -1034,4 +1228,110 @@ int jkCutscene_smusher_process()
 
     return 0;
 }
+
+#ifdef USE_FFMPEG_VIDEO
+// Added: MP4 video processing function with full color depth support
+static int jkCutscene_mp4_frameCount = 0;
+
+int jkCutscene_mp4_process()
+{
+    if (!jkCutscene_isRendering)
+        return 0;
+    if (!std3D_IsReady()) {
+        return 0;
+    }
+
+    flex64_t cur_displayFrame = (flex64_t)Linux_TimeUs();
+    flex64_t usPerFrame = jkCutscene_smk_usf;
+    flex64_t delta = cur_displayFrame - last_displayFrame;
+
+    // Process audio queue
+    jkCutscene_smacker_smusher_audio_queue();
+
+    if (delta <= usPerFrame) return 0;
+
+    if (last_displayFrame)
+        extraUs += (delta - usPerFrame);
+
+    last_displayFrame = cur_displayFrame;
+
+    // If the CPU is lagging, try and catch up by skipping video frames
+    int skipped = 0;
+    while (extraUs > usPerFrame) {
+        int res = mp4_frame(jkCutscene_pMp4);
+        // IMPORTANT: Must flush audio even for skipped frames to keep sync
+        mp4_audio_flush(jkCutscene_pMp4);
+        if (res == MP4_DONE) {
+            stdPlatform_Printf("DEBUG MP4: Playback complete (skipping frames)\n");
+            last_displayFrame = 0;
+            extraUs = 0;
+            return 1;
+        }
+        extraUs -= usPerFrame;
+        skipped++;
+    }
+    if (skipped > 0) {
+        stdPlatform_Printf("DEBUG MP4 SYNC: Skipped %d frames to catch up\n", skipped);
+    }
+
+    // Get the video to catch up, if it misses frames
+    last_displayFrame -= extraUs;
+    extraUs = 0.0;
+
+    // Decode the next frame
+    int mp4_res = mp4_frame(jkCutscene_pMp4);
+    if (mp4_res == MP4_DONE) {
+        stdPlatform_Printf("DEBUG MP4: Playback complete after %d frames\n", jkCutscene_mp4_frameCount);
+        last_displayFrame = 0;
+        last_audioUs = 0;
+        extraUs = 0;
+        jkCutscene_mp4_frameCount = 0;
+        return 1;
+    }
+
+    jkCutscene_mp4_frameCount++;
+
+    // Flush audio for current frame
+    mp4_audio_flush(jkCutscene_pMp4);
+
+    // Debug output every 60 frames (~2 seconds at 30fps)
+    static int audioQueueDebugCounter = 0;
+    if (++audioQueueDebugCounter % 60 == 0) {
+        int queued = (jkCutscene_audio_queue_write_idx - jkCutscene_audio_queue_read_idx + AUDIO_QUEUE_DEPTH) % AUDIO_QUEUE_DEPTH;
+        stdPlatform_Printf("DEBUG MP4 SYNC: Frame %d, audio queue: %d buffers, extraUs=%.1f\n",
+            jkCutscene_mp4_frameCount, queued, extraUs);
+    }
+
+    // Get video data - use full color RGB for high quality playback
+    const uint8_t* rgbFrame = mp4_get_video_rgb(jkCutscene_pMp4);
+    const uint8_t* videoFrame = mp4_get_video_indexed(jkCutscene_pMp4);
+    const uint8_t* palette = mp4_get_palette(jkCutscene_pMp4);
+
+    if (rgbFrame) {
+        // Full color RGB rendering path - upload RGB directly to GPU
+        std3D_UpdateVideoRGBTexture(rgbFrame, jkCutscene_smk_w, jkCutscene_smk_h);
+        std3D_SetVideoRGBMode(1);
+
+        // Still need indexed data for subtitle overlay rendering
+        if (palette) {
+            _memcpy(stdDisplay_masterPalette, palette, 0x300);
+        }
+
+        // Update the VBuffer with indexed data for subtitle overlay (rect1 area)
+        if (videoFrame && jkCutscene_frameBuf) {
+            stdDisplay_VBufferLock(jkCutscene_frameBuf);
+            _memcpy(jkCutscene_frameBuf->surface_lock_alloc, videoFrame, jkCutscene_smk_w * jkCutscene_smk_h);
+            stdDisplay_VBufferUnlock(jkCutscene_frameBuf);
+
+            // Copy subtitle overlay to screen (Video_otherBuf has subtitle text)
+            stdDisplay_VBufferLock(Video_pMenuBuffer);
+            stdDisplay_VBufferFill(Video_pMenuBuffer, 0, &jkCutscene_rect1);
+            stdDisplay_VBufferCopy(Video_pMenuBuffer, &Video_otherBuf, jkCutscene_rect1.x, jkCutscene_rect1.y, &jkCutscene_rect1, 0);
+            stdDisplay_VBufferUnlock(Video_pMenuBuffer);
+        }
+    }
+
+    return 0;
+}
+#endif // USE_FFMPEG_VIDEO
 #endif

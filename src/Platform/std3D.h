@@ -148,6 +148,12 @@ void std3D_DrawUIClearedRect(uint8_t palIdx, rdRect* dstRect);
 void std3D_DrawUIClearedRectRGBA(uint8_t color_r, uint8_t color_g, uint8_t color_b, uint8_t color_a, rdRect* dstRect);
 int std3D_IsReady();
 
+// Added: RGB video texture functions for full color video playback
+void std3D_SetVideoRGBMode(int enabled);
+void std3D_CreateVideoRGBTexture(uint32_t width, uint32_t height);
+void std3D_UpdateVideoRGBTexture(const uint8_t* rgbData, uint32_t width, uint32_t height);
+void std3D_DestroyVideoRGBTexture(void);
+
 #ifdef __cplusplus
 }
 #endif

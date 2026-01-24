@@ -156,7 +156,13 @@ GLint uniform_light_mult, uniform_displacement_factor, uniform_iResolution;
 GLint uniform_vr_debug_mode; // VR debug mode uniform
 
 GLint programMenu_attribute_coord3d, programMenu_attribute_v_color, programMenu_attribute_v_uv, programMenu_attribute_v_norm;
-GLint programMenu_uniform_mvp, programMenu_uniform_tex, programMenu_uniform_displayPalette;
+GLint programMenu_uniform_mvp, programMenu_uniform_tex, programMenu_uniform_displayPalette, programMenu_uniform_rgb_mode;
+
+// Added: RGB video texture for full color video playback
+uint32_t Video_videoRGBTexId = 0;
+int std3D_bVideoRGBMode = 0;
+uint32_t std3D_videoRGBWidth = 0;
+uint32_t std3D_videoRGBHeight = 0;
 
 std3DSimpleTexStage std3D_uiProgram;
 std3DSimpleTexStage std3D_texFboStage;
@@ -560,7 +566,8 @@ int init_resources()
     programMenu_uniform_mvp = std3D_tryFindUniform(programMenu, "mvp");
     programMenu_uniform_tex = std3D_tryFindUniform(programMenu, "tex");
     programMenu_uniform_displayPalette = std3D_tryFindUniform(programMenu, "displayPalette");
-    
+    programMenu_uniform_rgb_mode = std3D_tryFindUniform(programMenu, "rgb_mode"); // Added: for full color video
+
     // Blank texture
     glGenTextures(1, &blank_tex);
     blank_data = jkgm_alloc_aligned(0x400);
@@ -1230,22 +1237,47 @@ void std3D_DrawMenu()
         }
     }
     else if (jkCutscene_isRendering) {
-        bFixHudScale = 1;
+        // Added: For RGB video mode, fill the window with proper aspect ratio
+        if (std3D_bVideoRGBMode && Video_videoRGBTexId && std3D_videoRGBWidth > 0 && std3D_videoRGBHeight > 0) {
+            bFixHudScale = 0;  // Use simple quad rendering
 
-        //menu_w = 640.0;
-        //menu_h = 480.0;
+            float videoW = (float)std3D_videoRGBWidth;
+            float videoH = (float)std3D_videoRGBHeight;
+            float videoAspect = videoW / videoH;
+            float windowAspect = (float)targetWidth / (float)targetHeight;
 
-        menu_w = Video_menuBuffer.format.width;
-        menu_h = Video_menuBuffer.format.height;
+            // Fit video to window maintaining aspect ratio
+            if (videoAspect > windowAspect) {
+                // Video is wider than window - fit by width, letterbox top/bottom
+                menu_w = (float)targetWidth;
+                menu_h = menu_w / videoAspect;
+                menu_x = 0.0f;
+                menu_y = ((float)targetHeight - menu_h) / 2.0f;
+            } else {
+                // Video is taller than window - fit by height, pillarbox sides
+                menu_h = (float)targetHeight;
+                menu_w = menu_h * videoAspect;
+                menu_x = ((float)targetWidth - menu_w) / 2.0f;
+                menu_y = 0.0f;
+            }
+            // Full UV range for RGB texture
+            menu_u = 1.0f;
+            menu_v = 1.0f;
+        } else {
+            // Original indexed palette mode
+            bFixHudScale = 1;
 
-        // For ultrawide screens, limit the width to 16:9
-        if (Window_xSize > Window_ySize && ((double)Window_xSize / (double)Window_ySize) > (Main_bMotsCompat ? (16.0/9.0) : (21.0/9.0))) {
-            fake_windowW = fake_windowH * (16.0/9.0);
+            menu_w = Video_menuBuffer.format.width;
+            menu_h = Video_menuBuffer.format.height;
+
+            // For ultrawide screens, limit the width to 16:9
+            if (Window_xSize > Window_ySize && ((double)Window_xSize / (double)Window_ySize) > (Main_bMotsCompat ? (16.0/9.0) : (21.0/9.0))) {
+                fake_windowW = fake_windowH * (16.0/9.0);
+            }
+
+            // Keep 4:3 aspect
+            menu_x = (menu_w - (menu_h * (640.0 / 480.0))) / 2.0;
         }
-
-        // Keep 4:3 aspect
-        menu_x = (menu_w - (menu_h * (640.0 / 480.0))) / 2.0;
-
     }
     else if (jkGuiBuildMulti_bRendering)
     {
@@ -1276,8 +1308,35 @@ void std3D_DrawMenu()
     {
         bFixHudScale = 0;
 
-        menu_w = Video_menuBuffer.format.width;
-        menu_h = Video_menuBuffer.format.height;
+        // Added: For RGB video mode, use video dimensions with proper aspect ratio
+        if (std3D_bVideoRGBMode && Video_videoRGBTexId && std3D_videoRGBWidth > 0 && std3D_videoRGBHeight > 0) {
+            // Video dimensions
+            float videoW = (float)std3D_videoRGBWidth;
+            float videoH = (float)std3D_videoRGBHeight;
+            float videoAspect = videoW / videoH;
+            float targetAspect = (float)targetWidth / (float)targetHeight;
+
+            // Fit video to screen maintaining aspect ratio
+            if (videoAspect > targetAspect) {
+                // Video is wider - fit by width
+                menu_w = (float)targetWidth;
+                menu_h = menu_w / videoAspect;
+                menu_x = 0.0f;
+                menu_y = ((float)targetHeight - menu_h) / 2.0f;
+            } else {
+                // Video is taller - fit by height
+                menu_h = (float)targetHeight;
+                menu_w = menu_h * videoAspect;
+                menu_x = ((float)targetWidth - menu_w) / 2.0f;
+                menu_y = 0.0f;
+            }
+            // RGB texture uses full UV range
+            menu_u = 1.0f;
+            menu_v = 1.0f;
+        } else {
+            menu_w = Video_menuBuffer.format.width;
+            menu_h = Video_menuBuffer.format.height;
+        }
     }
 
     if (!bFixHudScale)
@@ -1452,8 +1511,15 @@ void std3D_DrawMenu()
     glBindTexture(GL_TEXTURE_2D, blank_tex);
     
     glActiveTexture(GL_TEXTURE0 + 0);
-    glBindTexture(GL_TEXTURE_2D, Video_menuTexId);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Video_menuBuffer.format.width, Video_menuBuffer.format.height, GL_RED, GL_UNSIGNED_BYTE, Video_menuBuffer.sdlSurface->pixels);
+    // Added: Support RGB video mode for full color playback
+    if (std3D_bVideoRGBMode && Video_videoRGBTexId) {
+        glBindTexture(GL_TEXTURE_2D, Video_videoRGBTexId);
+        glUniform1i(programMenu_uniform_rgb_mode, 1);
+    } else {
+        glBindTexture(GL_TEXTURE_2D, Video_menuTexId);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, Video_menuBuffer.format.width, Video_menuBuffer.format.height, GL_RED, GL_UNSIGNED_BYTE, Video_menuBuffer.sdlSurface->pixels);
+        glUniform1i(programMenu_uniform_rgb_mode, 0);
+    }
 
     //GLushort data_elements[32 * 3];
     glActiveTexture(GL_TEXTURE0 + 1);
@@ -4443,6 +4509,61 @@ int std3D_CreateExecuteBuffer()
 int std3D_IsReady()
 {
     return has_initted;
+}
+
+// Added: RGB video texture functions for full color video playback
+void std3D_SetVideoRGBMode(int enabled)
+{
+    static int lastMode = -1;
+    if (lastMode != enabled) {
+        jk_printf("std3D: RGB video mode %s (texId=%u, w=%u, h=%u)\n",
+            enabled ? "ENABLED" : "DISABLED", Video_videoRGBTexId, std3D_videoRGBWidth, std3D_videoRGBHeight);
+        lastMode = enabled;
+    }
+    std3D_bVideoRGBMode = enabled;
+}
+
+void std3D_CreateVideoRGBTexture(uint32_t width, uint32_t height)
+{
+    jk_printf("std3D_CreateVideoRGBTexture: %ux%u (existing texId=%u)\n", width, height, Video_videoRGBTexId);
+
+    // Delete existing texture if size changed
+    if (Video_videoRGBTexId && (std3D_videoRGBWidth != width || std3D_videoRGBHeight != height)) {
+        glDeleteTextures(1, &Video_videoRGBTexId);
+        Video_videoRGBTexId = 0;
+    }
+
+    if (!Video_videoRGBTexId) {
+        glGenTextures(1, &Video_videoRGBTexId);
+        glBindTexture(GL_TEXTURE_2D, Video_videoRGBTexId);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+        std3D_videoRGBWidth = width;
+        std3D_videoRGBHeight = height;
+        jk_printf("std3D_CreateVideoRGBTexture: Created texture id=%u\n", Video_videoRGBTexId);
+    }
+}
+
+void std3D_UpdateVideoRGBTexture(const uint8_t* rgbData, uint32_t width, uint32_t height)
+{
+    if (!Video_videoRGBTexId || !rgbData) return;
+
+    glBindTexture(GL_TEXTURE_2D, Video_videoRGBTexId);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, rgbData);
+}
+
+void std3D_DestroyVideoRGBTexture(void)
+{
+    if (Video_videoRGBTexId) {
+        glDeleteTextures(1, &Video_videoRGBTexId);
+        Video_videoRGBTexId = 0;
+        std3D_videoRGBWidth = 0;
+        std3D_videoRGBHeight = 0;
+    }
+    std3D_bVideoRGBMode = 0;
 }
 
 // Added: VR FBO override functions
