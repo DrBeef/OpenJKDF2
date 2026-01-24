@@ -2,13 +2,16 @@ package org.openjkdf2.vr;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.WindowManager;
+import android.Manifest;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -25,6 +28,7 @@ public class LauncherActivity extends Activity {
 
     private static final String TAG = "OpenJKDF2";
     private static final int REQUEST_MANAGE_ALL_FILES = 2296;
+    private static final int REQUEST_STORAGE_PERMISSION = 2297;
     private static final String GAME_FOLDER = "/sdcard/OpenJKDF2";
 
     @Override
@@ -39,16 +43,30 @@ public class LauncherActivity extends Activity {
     }
 
     private void checkPermissionAndLaunch() {
-        if (!Environment.isExternalStorageManager()) {
-            Log.v(TAG, "Requesting MANAGE_EXTERNAL_STORAGE permission...");
-            // Request for the permission
-            Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-            Uri uri = Uri.fromParts("package", getPackageName(), null);
-            intent.setData(uri);
-            startActivityForResult(intent, REQUEST_MANAGE_ALL_FILES);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Android 11+ uses MANAGE_EXTERNAL_STORAGE
+            if (!Environment.isExternalStorageManager()) {
+                Log.v(TAG, "Requesting MANAGE_EXTERNAL_STORAGE permission (Android 11+)...");
+                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                Uri uri = Uri.fromParts("package", getPackageName(), null);
+                intent.setData(uri);
+                startActivityForResult(intent, REQUEST_MANAGE_ALL_FILES);
+            } else {
+                Log.v(TAG, "Storage permission granted, launching VR activity...");
+                launchVRActivity();
+            }
         } else {
-            Log.v(TAG, "Storage permission granted, launching VR activity...");
-            launchVRActivity();
+            // Android 10 and below use legacy storage permissions
+            if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                Log.v(TAG, "Requesting WRITE_EXTERNAL_STORAGE permission (Android 10)...");
+                requestPermissions(new String[]{
+                    Manifest.permission.READ_EXTERNAL_STORAGE,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                }, REQUEST_STORAGE_PERMISSION);
+            } else {
+                Log.v(TAG, "Storage permission granted, launching VR activity...");
+                launchVRActivity();
+            }
         }
     }
 
@@ -146,12 +164,30 @@ public class LauncherActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_MANAGE_ALL_FILES) {
-            Log.v(TAG, "Returned from permission screen, permission granted: " + Environment.isExternalStorageManager());
-            if (Environment.isExternalStorageManager()) {
+            // Android 11+ MANAGE_EXTERNAL_STORAGE permission result
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                boolean granted = Environment.isExternalStorageManager();
+                Log.v(TAG, "Returned from permission screen, permission granted: " + granted);
+                if (granted) {
+                    launchVRActivity();
+                } else {
+                    Log.v(TAG, "Permission not granted, exiting...");
+                    finishAffinity();
+                }
+            }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_STORAGE_PERMISSION) {
+            // Android 10 and below storage permission result
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.v(TAG, "Storage permission granted, launching VR activity...");
                 launchVRActivity();
             } else {
-                // Permission not granted, exit
-                Log.v(TAG, "Permission not granted, exiting...");
+                Log.v(TAG, "Storage permission denied, exiting...");
                 finishAffinity();
             }
         }

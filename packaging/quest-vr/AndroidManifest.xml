@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- OpenJKDF2 VR - Quest 3 AndroidManifest -->
+<!-- OpenJKDF2 VR - Android VR Manifest (Meta Quest + Pico 4/Neo3) -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.openjkdf2.vr"
     android:versionCode="1"
@@ -43,8 +43,11 @@
         <!-- Allocate more CPU power (game is CPU-bound) -->
         <meta-data android:name="com.oculus.trade_cpu_for_gpu_amount" android:value="-1"/>
 
-        <!-- Pico XR support -->
+        <!-- Pico XR support (Pico 4, Pico 4 Ultra, Pico Neo3) -->
         <meta-data android:name="pvr.app.type" android:value="vr"/>
+        <meta-data android:name="pvr.display.orientation" android:value="180"/>
+        <!-- Enable controller tracking -->
+        <meta-data android:name="pxr.controller" android:value="1"/>
 
         <!-- Samsung GearVR/Oculus Go support (legacy) -->
         <meta-data android:name="com.samsung.android.vr.application.mode" android:value="vr_only"/>
@@ -64,6 +67,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <!-- Mark as VR app for Quest launcher -->
                 <category android:name="com.oculus.intent.category.VR" />
+                <!-- Mark as VR app for Pico launcher -->
+                <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
             </intent-filter>
         </activity>
 

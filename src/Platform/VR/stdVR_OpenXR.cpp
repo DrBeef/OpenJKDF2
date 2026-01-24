@@ -669,10 +669,26 @@ extern "C" int stdVR_OpenXR_Init(void)
         return 0;
     }
 
+#ifdef __ANDROID__
+    // Check for Android create instance extension (required for Pico and other Android runtimes)
+    bool hasAndroidCreateInstance = false;
+    for (const auto& ext : extensions) {
+        if (strcmp(ext.extensionName, XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME) == 0) {
+            hasAndroidCreateInstance = true;
+            break;
+        }
+    }
+    VR_Log("stdVR_OpenXR: XR_KHR_android_create_instance: %s\n", hasAndroidCreateInstance ? "YES" : "NO");
+#endif
+
     // Create instance
-    const char* enabledExtensions[] = {
-        requiredGfxExtension
-    };
+    std::vector<const char*> enabledExtensions;
+    enabledExtensions.push_back(requiredGfxExtension);
+#ifdef __ANDROID__
+    if (hasAndroidCreateInstance) {
+        enabledExtensions.push_back(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME);
+    }
+#endif
 
     XrInstanceCreateInfo createInfo = { XR_TYPE_INSTANCE_CREATE_INFO };
     strcpy(createInfo.applicationInfo.applicationName, "OpenJKDF2");
@@ -680,8 +696,26 @@ extern "C" int stdVR_OpenXR_Init(void)
     strcpy(createInfo.applicationInfo.engineName, "OpenJKDF2");
     createInfo.applicationInfo.engineVersion = 1;
     createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
-    createInfo.enabledExtensionCount = 1;
-    createInfo.enabledExtensionNames = enabledExtensions;
+    createInfo.enabledExtensionCount = (uint32_t)enabledExtensions.size();
+    createInfo.enabledExtensionNames = enabledExtensions.data();
+
+#ifdef __ANDROID__
+    // On Android, chain the Android create instance info (required for Pico and other runtimes)
+    XrInstanceCreateInfoAndroidKHR androidCreateInfo = { XR_TYPE_INSTANCE_CREATE_INFO_ANDROID_KHR };
+    if (hasAndroidCreateInstance) {
+        JNIEnv* env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+        JavaVM* javaVM = nullptr;
+        if (env != nullptr) {
+            env->GetJavaVM(&javaVM);
+        }
+        jobject activity = (jobject)SDL_AndroidGetActivity();
+
+        androidCreateInfo.applicationVM = javaVM;
+        androidCreateInfo.applicationActivity = activity;
+        createInfo.next = &androidCreateInfo;
+        VR_Log("stdVR_OpenXR: Chaining XrInstanceCreateInfoAndroidKHR (VM=%p, Activity=%p)\n", javaVM, activity);
+    }
+#endif
 
     XrResult result = xrCreateInstance(&createInfo, &xrInstance);
     if (XR_FAILED(result)) {
@@ -962,6 +996,113 @@ static int CreateActionSet(void)
         xrSuggestInteractionProfileBindings(xrInstance, &suggestedBindings);
     }
 
+    // Pico 4 controller bindings (ByteDance/Pico)
+    // Pico 4 controllers have same layout as Oculus Touch (A/B/X/Y, triggers, grips, thumbsticks)
+    XrPath pico4Path;
+    if (XR_SUCCEEDED(xrStringToPath(xrInstance, "/interaction_profiles/bytedance/pico4_controller", &pico4Path))) {
+        bindings.clear();
+
+        // Left controller
+        xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
+        bindings.push_back({ xrPoseAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/trigger/value", &path);
+        bindings.push_back({ xrTriggerAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/squeeze/value", &path);
+        bindings.push_back({ xrGripAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/thumbstick", &path);
+        bindings.push_back({ xrThumbstickAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/x/click", &path);
+        bindings.push_back({ xrButtonXAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/y/click", &path);
+        bindings.push_back({ xrButtonYAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/menu/click", &path);
+        bindings.push_back({ xrMenuAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/thumbstick/click", &path);
+        bindings.push_back({ xrThumbstickClickLAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/output/haptic", &path);
+        bindings.push_back({ xrHapticAction, path });
+
+        // Right controller
+        xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
+        bindings.push_back({ xrPoseAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/trigger/value", &path);
+        bindings.push_back({ xrTriggerAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/squeeze/value", &path);
+        bindings.push_back({ xrGripAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/thumbstick", &path);
+        bindings.push_back({ xrThumbstickAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/a/click", &path);
+        bindings.push_back({ xrButtonAAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/b/click", &path);
+        bindings.push_back({ xrButtonBAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/thumbstick/click", &path);
+        bindings.push_back({ xrThumbstickClickRAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/output/haptic", &path);
+        bindings.push_back({ xrHapticAction, path });
+
+        suggestedBindings.interactionProfile = pico4Path;
+        suggestedBindings.suggestedBindings = bindings.data();
+        suggestedBindings.countSuggestedBindings = (uint32_t)bindings.size();
+        XrResult pico4Result = xrSuggestInteractionProfileBindings(xrInstance, &suggestedBindings);
+        if (XR_SUCCEEDED(pico4Result)) {
+            VR_Log("stdVR_OpenXR: Pico 4 controller bindings registered\n");
+        }
+        // XR_ERROR_PATH_UNSUPPORTED is expected on non-Pico devices
+    }
+
+    // Pico Neo3 controller bindings (for older Pico devices)
+    XrPath picoNeo3Path;
+    if (XR_SUCCEEDED(xrStringToPath(xrInstance, "/interaction_profiles/bytedance/pico_neo3_controller", &picoNeo3Path))) {
+        bindings.clear();
+
+        // Left controller
+        xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
+        bindings.push_back({ xrPoseAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/trigger/value", &path);
+        bindings.push_back({ xrTriggerAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/squeeze/value", &path);
+        bindings.push_back({ xrGripAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/thumbstick", &path);
+        bindings.push_back({ xrThumbstickAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/x/click", &path);
+        bindings.push_back({ xrButtonXAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/y/click", &path);
+        bindings.push_back({ xrButtonYAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/menu/click", &path);
+        bindings.push_back({ xrMenuAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/input/thumbstick/click", &path);
+        bindings.push_back({ xrThumbstickClickLAction, path });
+        xrStringToPath(xrInstance, "/user/hand/left/output/haptic", &path);
+        bindings.push_back({ xrHapticAction, path });
+
+        // Right controller
+        xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
+        bindings.push_back({ xrPoseAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/trigger/value", &path);
+        bindings.push_back({ xrTriggerAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/squeeze/value", &path);
+        bindings.push_back({ xrGripAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/thumbstick", &path);
+        bindings.push_back({ xrThumbstickAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/a/click", &path);
+        bindings.push_back({ xrButtonAAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/b/click", &path);
+        bindings.push_back({ xrButtonBAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/input/thumbstick/click", &path);
+        bindings.push_back({ xrThumbstickClickRAction, path });
+        xrStringToPath(xrInstance, "/user/hand/right/output/haptic", &path);
+        bindings.push_back({ xrHapticAction, path });
+
+        suggestedBindings.interactionProfile = picoNeo3Path;
+        suggestedBindings.suggestedBindings = bindings.data();
+        suggestedBindings.countSuggestedBindings = (uint32_t)bindings.size();
+        XrResult neo3Result = xrSuggestInteractionProfileBindings(xrInstance, &suggestedBindings);
+        if (XR_SUCCEEDED(neo3Result)) {
+            VR_Log("stdVR_OpenXR: Pico Neo3 controller bindings registered\n");
+        }
+        // XR_ERROR_PATH_UNSUPPORTED is expected on non-Pico devices
+    }
+
     // Simple controller fallback (Khronos simple controller)
     XrPath simplePath;
     if (XR_SUCCEEDED(xrStringToPath(xrInstance, "/interaction_profiles/khr/simple_controller", &simplePath))) {
@@ -993,7 +1134,7 @@ static int CreateActionSet(void)
         xrSuggestInteractionProfileBindings(xrInstance, &suggestedBindings);
     }
 
-    VR_Log("stdVR_OpenXR: Controller bindings configured for Oculus Touch, Valve Index, HTC Vive, and simple controllers\n");
+    VR_Log("stdVR_OpenXR: Controller bindings configured for Oculus Touch, Pico 4/Neo3, Valve Index, HTC Vive, and simple controllers\n");
     return 1;
 }
 
@@ -1269,7 +1410,8 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         }
     }
 
-    // Check for MultiView extension support (Quest VR optimization)
+    // Check for MultiView extension support (single-pass stereo rendering)
+    // Supported on: Meta Quest (Adreno 650/740), Pico 4/Neo3 (Adreno 650), and other XR2-based devices
 #if defined(TARGET_ANDROID_NATIVE_GLES)
 
 #if defined(MULTIVIEW_ENABLED)

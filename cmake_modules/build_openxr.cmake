@@ -5,7 +5,7 @@ include(FetchContent)
 FetchContent_Declare(
     openxr_loader
     GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
-    GIT_TAG release-1.0.34
+    GIT_TAG release-1.1.54
     GIT_SHALLOW TRUE
 )
 
@@ -32,6 +32,12 @@ FetchContent_GetProperties(openxr_loader)
 if(NOT openxr_loader_POPULATED)
     FetchContent_Populate(openxr_loader)
     add_subdirectory(${openxr_loader_SOURCE_DIR} ${openxr_loader_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
+
+# Disable tautological comparison warning for Android builds with short wchar_t
+# The jnipp.cpp file compares wchar_t > 0xFFFF which is always false when wchar_t is 16-bit
+if(TARGET_ANDROID AND TARGET openxr_loader)
+    target_compile_options(openxr_loader PRIVATE -Wno-tautological-type-limit-compare)
 endif()
 
 set(OPENXR_INCLUDE_DIR ${openxr_loader_SOURCE_DIR}/include)
