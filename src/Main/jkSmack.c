@@ -45,8 +45,13 @@ int jkSmack_GetCurrentGuiState()
 
 int jkSmack_SmackPlay(const char *fname)
 {
-#ifndef ARCH_WASM
+#ifdef VR_QUICKSTART_MODE
+    // Skip intro videos in quickstart mode
+    if (1)
+#elif !defined(ARCH_WASM)
     if ( stdComm_EarlyInit() || jkPlayer_setDisableCutscenes )
+#else
+    if (0)
 #endif
     {
         if ( jkGuiRend_thing_five )

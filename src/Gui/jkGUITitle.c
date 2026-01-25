@@ -359,7 +359,9 @@ void jkGuiTitle_ShowLoading(char *a1, wchar_t *a2)
 void jkGuiTitle_LoadingFinalize()
 {
 #ifdef QOL_IMPROVEMENTS
-#ifdef PLATFORM_VR
+#if defined(VR_QUICKSTART_MODE)
+    int shouldSkip = 1;  // Always skip in quickstart mode
+#elif defined(PLATFORM_VR)
     extern int32_t Main_bVRTest;
     int shouldSkip = jkPlayer_bFastMissionText || sithNet_isMulti || !sithWorld_pCurrentWorld || Main_bVRTest;
 #else

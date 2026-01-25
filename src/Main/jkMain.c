@@ -937,6 +937,61 @@ void jkMain_TitleTick(int a1)
     }
 #endif
 
+#ifdef VR_QUICKSTART_MODE
+    // Quick-start mode: skip main menu and go directly to gameplay
+    // Follows the pattern from jkMain_LoadLevelSingleplayer
+    {
+        stdPlatform_Printf("\n\n========================================\n");
+        stdPlatform_Printf("=== VR QUICKSTART MODE ACTIVE ===\n");
+        stdPlatform_Printf("=== Loading %s/%s ===\n", VR_QUICKSTART_EPISODE, VR_QUICKSTART_MAP);
+        stdPlatform_Printf("========================================\n\n");
+
+        // Set up for singleplayer level load
+        jkSmack_gameMode = 0;  // New game mode
+
+        // Build full level filename
+        char levelFile[256];
+        snprintf(levelFile, sizeof(levelFile), "%s.jkl", VR_QUICKSTART_MAP);
+        _strncpy(jkMain_aLevelJklFname, levelFile, 127);
+        jkMain_aLevelJklFname[127] = 0;
+
+        // Load the episode GOB (jkRes_LoadGob adds .gob extension internally)
+        stdPlatform_Printf("VR QUICKSTART: Loading GOB...\n");
+        jkRes_LoadGob(VR_QUICKSTART_EPISODE);
+
+        // Free old episode data if present
+        if (jkEpisode_mLoad.paEntries) {
+            stdPlatform_Printf("VR QUICKSTART: Freeing old episode data...\n");
+            pHS->free(jkEpisode_mLoad.paEntries);
+            jkEpisode_mLoad.paEntries = NULL;
+            jkMain_pEpisodeEnt = NULL;
+            jkMain_pEpisodeEnt2 = NULL;
+        }
+
+        // Load episode info into jkEpisode_mLoad structure
+        stdPlatform_Printf("VR QUICKSTART: Calling jkEpisode_Load...\n");
+        int loadResult = jkEpisode_Load(&jkEpisode_mLoad);
+        stdPlatform_Printf("VR QUICKSTART: jkEpisode_Load returned %d\n", loadResult);
+        if (!loadResult) {
+            stdPlatform_Printf("=== VR QUICKSTART: FAILED to load episode %s ===\n", VR_QUICKSTART_EPISODE);
+            jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
+            return;
+        }
+
+        // Set up the specific level within the episode
+        stdPlatform_Printf("VR QUICKSTART: Calling jkEpisode_idk4 for level %s...\n", VR_QUICKSTART_MAP);
+        jkEpisode_idk4(&jkEpisode_mLoad, VR_QUICKSTART_MAP);
+
+        stdPlatform_Printf("VR QUICKSTART: SUCCESS - Episode loaded, going to gameplay!\n");
+        jkPlayer_bLoadingSomething = 1;
+        if (jkGuiRend_thing_five)
+            jkGuiRend_thing_four = 1;
+        jkSmack_stopTick = 1;
+        jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY;
+        return;
+    }
+#endif
+
     jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
 }
 
