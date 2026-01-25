@@ -1412,7 +1412,7 @@ sithThing* sithWeapon_FireProjectile(sithThing *sender, sithThing *projectileTem
             // stdVR_ControllerToWorld already includes weapon offsets (weaponOffsetX/Y/Z)
             // which position the fire origin at the weapon's muzzle location.
             rdVector3 controllerWorldPos;
-            stdVR_ControllerToWorld(stdVR_GetDominantHand(), &controllerWorldPos);
+            stdVR_ControllerToWorld(stdVR_GetDominantHand(), &controllerWorldPos, 0);
 
             // Debug: Log fire position and direction from controller
             extern void VR_Log(const char* fmt, ...);

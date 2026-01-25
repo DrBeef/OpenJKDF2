@@ -5,6 +5,8 @@
 
 #include "types.h"
 #include "Platform/VR/stdVR_Types.h"
+#include "Platform/VR/stdVR_WeaponOffsets.h"
+#include "Platform/VR/stdVR_AlignmentTool.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -110,7 +112,7 @@ int stdVR_GetDominantHand(void);
 stdVR_ControllerState* stdVR_GetController(int hand);
 stdVR_ControllerState* stdVR_GetDominantController(void);
 stdVR_ControllerState* stdVR_GetOffhandController(void);
-void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos);
+void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets);
 void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection);
 void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix);
 int stdVR_IsSwingTriggered(void);

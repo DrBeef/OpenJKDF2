@@ -386,6 +386,12 @@ int stdVR_Input_IsNextWeaponTriggered(void)
     if (!stdVR_bEnabled) {
         return 0;
     }
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    // Disable weapon switching while alignment tool is active
+    if (stdVR_AlignmentTool_IsActive()) {
+        return 0;
+    }
+#endif
     return stdVR_nextWeaponTriggered;
 }
 
@@ -395,6 +401,12 @@ int stdVR_Input_IsPrevWeaponTriggered(void)
     if (!stdVR_bEnabled) {
         return 0;
     }
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    // Disable weapon switching while alignment tool is active
+    if (stdVR_AlignmentTool_IsActive()) {
+        return 0;
+    }
+#endif
     return stdVR_prevWeaponTriggered;
 }
 

@@ -1002,7 +1002,9 @@ void jkPlayer_DrawPov()
                 playerThings[playerThingIdx].povModel.frameTrue = 0;
 
                 // Apply weapon model scale for VR (makes weapon appear larger)
-                float weaponScale = stdVR_motionConfig.weaponModelScale;
+                // Use per-weapon scale if available, otherwise fall back to global config
+                stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
+                float weaponScale = pWeaponOffset ? pWeaponOffset->modelScale : stdVR_motionConfig.weaponModelScale;
                 if (weaponScale > 0.0f && weaponScale != 1.0f) {
                     viewMat.rvec.x *= weaponScale;
                     viewMat.rvec.y *= weaponScale;

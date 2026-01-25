@@ -30,6 +30,7 @@ public class LauncherActivity extends Activity {
     private static final int REQUEST_MANAGE_ALL_FILES = 2296;
     private static final int REQUEST_STORAGE_PERMISSION = 2297;
     private static final String GAME_FOLDER = "/sdcard/OpenJKDF2";
+    private static final String VR_WEAPON_OFFSETS_FILE = "openjkdf2_vr_weapons.json";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -96,6 +97,7 @@ public class LauncherActivity extends Activity {
         copyAssetFolderIfNeeded("shaders", GAME_FOLDER + "/shaders");
         copyAssetFolderIfNeeded("resource", GAME_FOLDER + "/resource");
         copyAssetFolderIfNeeded("episode", GAME_FOLDER + "/episode");
+        copyAssetFile(VR_WEAPON_OFFSETS_FILE, GAME_FOLDER + "/" + VR_WEAPON_OFFSETS_FILE);
     }
 
     private void copyAssetFolderIfNeeded(String assetFolder, String destPath) {

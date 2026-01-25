@@ -6,6 +6,8 @@
 
 #include "Platform/VR/stdVR_OpenXR.h"
 #include "Platform/VR/stdVR_Input.h"
+#include "Platform/VR/stdVR_WeaponOffsets.h"
+#include "Platform/VR/stdVR_AlignmentTool.h"
 #include "Primitives/rdVector.h"
 #include "Primitives/rdMatrix.h"
 #include "Main/jkMain.h"
@@ -102,6 +104,14 @@ int stdVR_Startup(void)
     // Sync settings from jkPlayer (except enabled state - we handle that separately)
     stdVR_SyncConfigFromJkPlayer();
 
+    // Initialize per-weapon offset system
+    stdVR_WeaponOffsets_Startup();
+
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    // Initialize alignment tool
+    stdVR_AlignmentTool_Startup();
+#endif
+
     // VR should be enabled by default when OpenXR initializes successfully
     // Only disable if the user explicitly set jkPlayer_vrEnabled = 0 in config
     // For now, always enable since we successfully initialized
@@ -121,6 +131,9 @@ void stdVR_Shutdown(void)
     }
 
     stdPlatform_Printf("stdVR: Shutting down VR subsystem...\n");
+
+    // Shutdown per-weapon offset system
+    stdVR_WeaponOffsets_Shutdown();
 
     stdVR_DestroySession();
     stdVR_OpenXR_Shutdown();
@@ -959,7 +972,7 @@ stdVR_ControllerState* stdVR_GetOffhandController(void)
 // Takes controller position (in VR tracking space) and outputs world position
 // This must match the position calculation in stdVR_GetControllerViewMatrix for
 // the fire position to align with the rendered weapon.
-void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
+void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
 {
     static int debugCounter = 0;
     debugCounter++;
@@ -1006,10 +1019,14 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
     offset.z = ctrlPos.z - hmdPos.z;
 
     // Apply pitch adjustment to match weapon visual (same as GetControllerViewMatrix)
+    // Use per-weapon pitch adjust if available, otherwise fall back to global config
+    stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
+    float pitchAdjust = pWeaponOffset ? pWeaponOffset->pitchAdjust : stdVR_motionConfig.weaponAimPitchAdjust;
+
     rdMatrix34 adjustedPose;
-    if (stdVR_motionConfig.weaponAimPitchAdjust != 0.0f) {
+    if (pitchAdjust != 0.0f) {
         rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { stdVR_motionConfig.weaponAimPitchAdjust, 0.0f, 0.0f };
+        rdVector3 pitchAngles = { pitchAdjust, 0.0f, 0.0f };
         rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
         rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
     } else {
@@ -1017,13 +1034,16 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos)
     }
 
     // Apply weapon position offset in controller local space (for fire position)
-    if (stdVR_motionConfig.weaponOffsetX != 0.0f ||
-        stdVR_motionConfig.weaponOffsetY != 0.0f ||
-        stdVR_motionConfig.weaponOffsetZ != 0.0f) {
+    // Use per-weapon offsets if available, otherwise fall back to global config
+    float weapOffX = useOffsets && pWeaponOffset ? pWeaponOffset->offsetX : stdVR_motionConfig.weaponOffsetX;
+    float weapOffY = useOffsets && pWeaponOffset ? pWeaponOffset->offsetY : stdVR_motionConfig.weaponOffsetY;
+    float weapOffZ = useOffsets && pWeaponOffset ? pWeaponOffset->offsetZ : stdVR_motionConfig.weaponOffsetZ;
+
+    if (weapOffX != 0.0f || weapOffY != 0.0f || weapOffZ != 0.0f) {
         rdVector3 localOffset;
-        localOffset.x = stdVR_motionConfig.weaponOffsetX;
-        localOffset.y = stdVR_motionConfig.weaponOffsetY;
-        localOffset.z = stdVR_motionConfig.weaponOffsetZ;
+        localOffset.x = weapOffX;
+        localOffset.y = weapOffY;
+        localOffset.z = weapOffZ;
 
         // Transform local offset by ADJUSTED controller orientation (matches weapon visual)
         rdVector3 transformedOffset;
@@ -1126,10 +1146,14 @@ void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection)
     ctrlForward.z = pCtrl->poseMatrix.lvec.z;
 
     // Apply ergonomic pitch adjustment if configured
-    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+    // Use per-weapon pitch adjust if available, otherwise fall back to global config
+    stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
+    float pitchAdjust = pWeaponOffset ? pWeaponOffset->pitchAdjust : stdVR_motionConfig.weaponPitchAdjust;
+
+    if (pitchAdjust != 0.0f) {
         // Rotate around controller's right vector by pitch adjustment
         rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdVector3 pitchAngles = { pitchAdjust, 0.0f, 0.0f };
         rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
         rdMatrix_TransformVector34(&ctrlForward, &ctrlForward, &pitchRot);
     }
@@ -1178,7 +1202,7 @@ void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix)
 
     // Set position
     rdVector3 worldPos;
-    stdVR_ControllerToWorld(hand, &worldPos);
+    stdVR_ControllerToWorld(hand, &worldPos, 1);
     pMatrix->scale.x = worldPos.x;
     pMatrix->scale.y = worldPos.y;
     pMatrix->scale.z = worldPos.z;
@@ -1253,12 +1277,16 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
     // This makes the weapon point where the controller points, but rotated
     // into game world space by the body direction.
 
+    // Use per-weapon offsets if available, otherwise fall back to global config
+    stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
+    float pitchAdjust = pWeaponOffset ? pWeaponOffset->pitchAdjust : stdVR_motionConfig.weaponPitchAdjust;
+
     // First apply pitch adjustment to controller pose if configured
     rdMatrix34 adjustedPose;
-    if (stdVR_motionConfig.weaponPitchAdjust != 0.0f) {
+    if (pitchAdjust != 0.0f) {
         // Build pitch rotation matrix
         rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+        rdVector3 pitchAngles = { pitchAdjust, 0.0f, 0.0f };
         rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
 
         // Apply pitch adjustment: adjustedPose = controllerPose * pitchRot
@@ -1287,13 +1315,15 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
 
     // Apply weapon position offset in controller local space
     // Transform the offset by controller orientation before adding
-    if (stdVR_motionConfig.weaponOffsetX != 0.0f ||
-        stdVR_motionConfig.weaponOffsetY != 0.0f ||
-        stdVR_motionConfig.weaponOffsetZ != 0.0f) {
+    float weapOffX = pWeaponOffset ? pWeaponOffset->offsetX : stdVR_motionConfig.weaponOffsetX;
+    float weapOffY = pWeaponOffset ? pWeaponOffset->offsetY : stdVR_motionConfig.weaponOffsetY;
+    float weapOffZ = pWeaponOffset ? pWeaponOffset->offsetZ : stdVR_motionConfig.weaponOffsetZ;
+
+    if (weapOffX != 0.0f || weapOffY != 0.0f || weapOffZ != 0.0f) {
         rdVector3 localOffset;
-        localOffset.x = stdVR_motionConfig.weaponOffsetX;
-        localOffset.y = stdVR_motionConfig.weaponOffsetY;
-        localOffset.z = stdVR_motionConfig.weaponOffsetZ;
+        localOffset.x = weapOffX;
+        localOffset.y = weapOffY;
+        localOffset.z = weapOffZ;
 
         // Transform local offset by controller orientation
         rdVector3 transformedOffset;

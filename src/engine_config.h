@@ -468,10 +468,16 @@ extern FAST_FUNC void* __aeabi_memcpy8(void* dst, const void* src, size_t len);*
 // VR Quick-start mode - skips menus and loads directly into gameplay
 // Uncomment to enable for testing builds
 // =============================================================================
-// #define VR_QUICKSTART_MODE
+//#define VR_QUICKSTART_MODE
 #ifdef VR_QUICKSTART_MODE
 #define VR_QUICKSTART_EPISODE "jk1"           // Episode GOB name (without .gob)
 #define VR_QUICKSTART_MAP     "01narshadda"   // Level filename (without .jkl)
 #endif
+
+// =============================================================================
+// VR Weapon Alignment Tool - Real-time weapon position adjustment
+// Uncomment to enable for VR development/testing builds ONLY
+// =============================================================================
+//#define VR_WEAPON_ALIGNMENT_TOOL
 
 #endif // _OPENJKDF2_ENGINE_CONFIG_H

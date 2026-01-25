@@ -36,8 +36,10 @@
 #include "World/sithWeapon.h"
 #include "World/sithTemplate.h"
 #include "World/sithThing.h"
+#include "Gameplay/sithTime.h"
 #include "SDL2_helper.h"
 extern sithThing* sithPlayer_pLocalPlayerThing;
+extern flex_t sithTime_deltaSeconds;
 #endif
 
 int jkGame_Startup()
@@ -201,6 +203,13 @@ int jkGame_Update()
     // Forward declarations for VR logging and state
     extern void VR_Log(const char* fmt, ...);
     extern int stdVR_currentEye;
+
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    // Update the weapon alignment tool (processes controller input for adjustment)
+    if (stdVR_bEnabled) {
+        stdVR_AlignmentTool_Update(sithTime_deltaSeconds);
+    }
+#endif
 
     // Check for VR test without headset mode
     extern int32_t Main_bVRTest;
@@ -510,6 +519,13 @@ int jkGame_Update()
                     }
                 }
                 jkHudInv_Draw();
+
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+                // Draw alignment tool overlay if active
+                if (stdVR_AlignmentTool_IsActive()) {
+                    stdVR_AlignmentTool_DrawOverlay();
+                }
+#endif
 
                 // Flush the UI render list to the VR HUD FBO
                 // HUD elements are queued via std3D_DrawUIBitmap and need to be flushed
