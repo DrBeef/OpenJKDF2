@@ -20,6 +20,18 @@ macro(plat_initialize)
     set(TARGET_ANDROID TRUE)
     set(TARGET_ANDROID_ARM64 TRUE)
 
+    # FFmpeg support for Android
+    if(TARGET_USE_FFMPEG)
+        include(cmake_modules/build_ffmpeg_android.cmake)
+        if(FFMPEG_ANDROID_FOUND)
+            add_definitions(-DUSE_FFMPEG_VIDEO)
+            message(STATUS "FFmpeg MP4 video support enabled for Android")
+        else()
+            message(WARNING "FFmpeg not available for Android - disabling MP4 video support")
+            set(TARGET_USE_FFMPEG FALSE)
+        endif()
+    endif()
+
     # gl4es provides OpenGL to OpenGL ES translation for standard Android builds
     # Quest VR uses native OpenGL ES 3 directly for better performance
     include_directories(${PROJECT_SOURCE_DIR}/lib/freeglut/include)

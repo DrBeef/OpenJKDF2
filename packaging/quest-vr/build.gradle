@@ -45,6 +45,7 @@ android {
             cmake {
                 arguments "-DPLAT_ANDROID_ARM64=TRUE",
                           "-DTARGET_USE_VR=TRUE",
+                          "-DTARGET_USE_FFMPEG=TRUE",
                           "-DANDROID_STL=c++_shared",
                           "-DANDROID_PLATFORM=android-29"
                 cppFlags "-std=c++17 -fexceptions"

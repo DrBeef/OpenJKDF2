@@ -43,7 +43,7 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Android" AND ${CMAKE_SYSTEM_PROCESSOR} MATCHES 
 endif()
 
 # Added: FFmpeg MP4 video support option
-set(TARGET_USE_FFMPEG FALSE CACHE BOOL "Enable FFmpeg for MP4 video playback")
+set(TARGET_USE_FFMPEG TRUE CACHE BOOL "Enable FFmpeg for MP4 video playback")
 
 # Set PLAT_AUTO if a platform isn't specifically selected
 if(NOT PLAT_LINUX_32 AND NOT PLAT_LINUX_64 AND NOT PLAT_MACOS AND NOT PLAT_MACOS_X86_64 AND NOT PLAT_MINGW_X86_64 AND NOT PLAT_WASM AND NOT PLAT_HOOKS AND NOT PLAT_TWL AND NOT PLAT_ANDROID_ARM64)
@@ -179,71 +179,78 @@ endif()
 
 # Added: FFmpeg MP4 video support
 if(TARGET_USE_FFMPEG)
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        pkg_check_modules(FFMPEG QUIET libavcodec libavformat libavutil libswscale libswresample)
-    endif()
-
-    if(NOT FFMPEG_FOUND)
-        # Try to find FFmpeg manually (for MSVC/Windows)
-        find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h
-            PATHS
-            $ENV{FFMPEG_DIR}/include
-            ${CMAKE_SOURCE_DIR}/lib/ffmpeg/include
-            "C:/ffmpeg/include"
-            NO_DEFAULT_PATH
-        )
-        find_library(AVCODEC_LIBRARY NAMES avcodec avcodec.lib libavcodec
-            PATHS
-            $ENV{FFMPEG_DIR}/lib
-            ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
-            "C:/ffmpeg/lib"
-            NO_DEFAULT_PATH
-        )
-        find_library(AVFORMAT_LIBRARY NAMES avformat avformat.lib libavformat
-            PATHS
-            $ENV{FFMPEG_DIR}/lib
-            ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
-            "C:/ffmpeg/lib"
-            NO_DEFAULT_PATH
-        )
-        find_library(AVUTIL_LIBRARY NAMES avutil avutil.lib libavutil
-            PATHS
-            $ENV{FFMPEG_DIR}/lib
-            ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
-            "C:/ffmpeg/lib"
-            NO_DEFAULT_PATH
-        )
-        find_library(SWSCALE_LIBRARY NAMES swscale swscale.lib libswscale
-            PATHS
-            $ENV{FFMPEG_DIR}/lib
-            ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
-            "C:/ffmpeg/lib"
-            NO_DEFAULT_PATH
-        )
-        find_library(SWRESAMPLE_LIBRARY NAMES swresample swresample.lib libswresample
-            PATHS
-            $ENV{FFMPEG_DIR}/lib
-            ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
-            "C:/ffmpeg/lib"
-            NO_DEFAULT_PATH
-        )
-
-        if(FFMPEG_INCLUDE_DIR AND AVCODEC_LIBRARY AND AVFORMAT_LIBRARY AND AVUTIL_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY)
-            set(FFMPEG_FOUND TRUE)
-            set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIR})
-            set(FFMPEG_LIBRARIES ${AVCODEC_LIBRARY} ${AVFORMAT_LIBRARY} ${AVUTIL_LIBRARY} ${SWSCALE_LIBRARY} ${SWRESAMPLE_LIBRARY})
-            message(STATUS "Found FFmpeg: ${FFMPEG_INCLUDE_DIRS}")
+    # Android handles FFmpeg differently - define is set in plat_android_arm64.cmake
+    # and libraries are linked via external prebuilt or FetchContent
+    if(NOT TARGET_ANDROID)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(FFMPEG QUIET libavcodec libavformat libavutil libswscale libswresample)
         endif()
-    endif()
 
-    if(FFMPEG_FOUND)
-        add_compile_definitions(USE_FFMPEG_VIDEO)
-        include_directories(${FFMPEG_INCLUDE_DIRS})
-        message(STATUS "FFmpeg MP4 video support enabled")
+        if(NOT FFMPEG_FOUND)
+            # Try to find FFmpeg manually (for MSVC/Windows)
+            find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h
+                PATHS
+                $ENV{FFMPEG_DIR}/include
+                ${CMAKE_SOURCE_DIR}/lib/ffmpeg/include
+                "C:/ffmpeg/include"
+                NO_DEFAULT_PATH
+            )
+            find_library(AVCODEC_LIBRARY NAMES avcodec avcodec.lib libavcodec
+                PATHS
+                $ENV{FFMPEG_DIR}/lib
+                ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
+                "C:/ffmpeg/lib"
+                NO_DEFAULT_PATH
+            )
+            find_library(AVFORMAT_LIBRARY NAMES avformat avformat.lib libavformat
+                PATHS
+                $ENV{FFMPEG_DIR}/lib
+                ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
+                "C:/ffmpeg/lib"
+                NO_DEFAULT_PATH
+            )
+            find_library(AVUTIL_LIBRARY NAMES avutil avutil.lib libavutil
+                PATHS
+                $ENV{FFMPEG_DIR}/lib
+                ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
+                "C:/ffmpeg/lib"
+                NO_DEFAULT_PATH
+            )
+            find_library(SWSCALE_LIBRARY NAMES swscale swscale.lib libswscale
+                PATHS
+                $ENV{FFMPEG_DIR}/lib
+                ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
+                "C:/ffmpeg/lib"
+                NO_DEFAULT_PATH
+            )
+            find_library(SWRESAMPLE_LIBRARY NAMES swresample swresample.lib libswresample
+                PATHS
+                $ENV{FFMPEG_DIR}/lib
+                ${CMAKE_SOURCE_DIR}/lib/ffmpeg/lib
+                "C:/ffmpeg/lib"
+                NO_DEFAULT_PATH
+            )
+
+            if(FFMPEG_INCLUDE_DIR AND AVCODEC_LIBRARY AND AVFORMAT_LIBRARY AND AVUTIL_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY)
+                set(FFMPEG_FOUND TRUE)
+                set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIR})
+                set(FFMPEG_LIBRARIES ${AVCODEC_LIBRARY} ${AVFORMAT_LIBRARY} ${AVUTIL_LIBRARY} ${SWSCALE_LIBRARY} ${SWRESAMPLE_LIBRARY})
+                message(STATUS "Found FFmpeg: ${FFMPEG_INCLUDE_DIRS}")
+            endif()
+        endif()
+
+        if(FFMPEG_FOUND)
+            add_compile_definitions(USE_FFMPEG_VIDEO)
+            include_directories(${FFMPEG_INCLUDE_DIRS})
+            message(STATUS "FFmpeg MP4 video support enabled")
+        else()
+            message(WARNING "FFmpeg not found - MP4 video support will be disabled")
+            set(TARGET_USE_FFMPEG FALSE)
+        endif()
     else()
-        message(WARNING "FFmpeg not found - MP4 video support will be disabled")
-        set(TARGET_USE_FFMPEG FALSE)
+        # Android: FFmpeg detection handled in platform cmake, just log status
+        message(STATUS "FFmpeg MP4 video support enabled for Android (libraries linked externally)")
     endif()
 endif()
 
