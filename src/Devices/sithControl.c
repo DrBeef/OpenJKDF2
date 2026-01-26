@@ -714,35 +714,45 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
 // Added: VR controller input mapping
 #ifdef PLATFORM_VR
     if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+        int dominantLeft = (stdVR_config.dominantHand == STDVR_CONTROLLER_LEFT);
+        uint32_t btnFire1 = dominantLeft ? STDVR_BTN_TRIGGER_L : STDVR_BTN_TRIGGER_R;
+        uint32_t btnFire2 = dominantLeft ? STDVR_BTN_GRIP_L : STDVR_BTN_GRIP_R;
+        uint32_t btnUseSkill = dominantLeft ? STDVR_BTN_TRIGGER_R : STDVR_BTN_TRIGGER_L;
+        uint32_t btnUseInv = dominantLeft ? STDVR_BTN_GRIP_R : STDVR_BTN_GRIP_L;
+        uint32_t btnJump = dominantLeft ? STDVR_BTN_X : STDVR_BTN_A;
+        uint32_t btnActivate = dominantLeft ? STDVR_BTN_A : STDVR_BTN_X;
+        uint32_t btnDuck = dominantLeft ? STDVR_BTN_Y : STDVR_BTN_B;
+        uint32_t btnNextWeapon = dominantLeft ? STDVR_BTN_B : STDVR_BTN_Y;
+        uint32_t btnQuickSave = dominantLeft ? STDVR_BTN_THUMBSTICK_R : STDVR_BTN_THUMBSTICK_L;
         int vrInput = 0;
         switch (funcIdx) {
             case INPUT_FUNC_FIRE1:
-                // Right trigger = primary fire
-                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_TRIGGER_R);
+                // Dominant trigger = primary fire
+                vrInput = stdVR_Input_IsButtonDown(btnFire1);
                 break;
             case INPUT_FUNC_FIRE2:
-                // Right grip = secondary fire
-                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_R);
+                // Dominant grip = secondary fire
+                vrInput = stdVR_Input_IsButtonDown(btnFire2);
                 break;
             case INPUT_FUNC_JUMP:
-                // A button = jump
-                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_A);
+                // Dominant face button = jump (A or X)
+                vrInput = stdVR_Input_IsButtonDown(btnJump);
                 break;
             case INPUT_FUNC_ACTIVATE:
-                // X button = activate/use
-                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_X);
+                // Other face button = activate/use (X or A)
+                vrInput = stdVR_Input_IsButtonDown(btnActivate);
                 break;
             case INPUT_FUNC_DUCK:
-                // B button = duck/crouch
-                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_B);
+                // Dominant face button = duck/crouch (B or Y)
+                vrInput = stdVR_Input_IsButtonDown(btnDuck);
                 break;
             case INPUT_FUNC_USESKILL:
-                // Left trigger = use force power
-                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_TRIGGER_L);
+                // Offhand trigger = use force power
+                vrInput = stdVR_Input_IsButtonDown(btnUseSkill);
                 break;
             case INPUT_FUNC_USEINV:
-                // Left grip = use inventory item
-                vrInput = stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_L);
+                // Offhand grip = use inventory item
+                vrInput = stdVR_Input_IsButtonDown(btnUseInv);
                 break;
             case INPUT_FUNC_NEXTWEAPON:
                 // Right thumbstick up flick = next weapon
@@ -1722,46 +1732,92 @@ void sithControl_FreeCam(sithThing *player)
     sithControl_ReadFunctionMap(INPUT_FUNC_SLOW, 0);
     if ( v1->type == SITH_THING_ACTOR || v1->type == SITH_THING_PLAYER )
     {
-        v5 = sithControl_GetAxisTimeCorrected(0);
-        v6 = v1->actorParams.extraSpeed + v1->actorParams.maxThrust;
+        int vrMovementActive = 0;
         v7 = &v1->physicsParams.acceleration;
         v1->physicsParams.acceleration.z = 0.0;
-        v9 = v5 * v6;
-        v1->physicsParams.acceleration.y = v9;
-        if ( (v1->physicsParams.acceleration.x != 0.0 || v1->physicsParams.acceleration.y != 0.0) // TODO verified first comparison?
-          && (v1->actorParams.eyePYR.x != 0.0 || v1->actorParams.eyePYR.y != 0.0 || v1->actorParams.eyePYR.z != 0.0)
-          && v2
-          && (v1->physicsParams.physflags & SITH_PF_WATERSURFACE) == 0 )
-        {
-            rdMatrix_BuildRotate34(&a, &v1->actorParams.eyePYR);
-            rdMatrix_TransformVector34Acc(&v1->physicsParams.acceleration, &a);
+
+// Added: VR movement support for swimming/flying
+#ifdef PLATFORM_VR
+        if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+            vrMovementActive = 1;
+
+            // Get thumbstick input
+            float moveX = 0.0f, moveY = 0.0f;
+            stdVR_Input_GetMovementDirection(&moveX, &moveY);
+
+            // Handle VR turning (snap turn or smooth turn)
+            int snapAngle = stdVR_Input_GetSnapTurnAngle();
+            if (snapAngle != 0) {
+                // Apply snap turn to player orientation
+                rdVector3 rot = { 0.0f, (float)snapAngle, 0.0f };
+                rdMatrix_PostRotate34(&v1->lookOrientation, &rot);
+                v1->physicsParams.angVel.y = 0.0f;
+            } else {
+                // Smooth turn from VR input
+                v1->physicsParams.angVel.y = stdVR_Input_GetSmoothTurnSpeed();
+            }
+
+            // Set movement acceleration
+            // Match PlayerMovement VR axis mapping for consistency
+            flex_t thrust = v1->actorParams.maxThrust + v1->actorParams.extraSpeed;
+            v1->physicsParams.acceleration.x = moveY * thrust;           // Forward/back (up stick = forward)
+            v1->physicsParams.acceleration.y = -moveX * thrust * 0.7f;   // Strafe (right stick = right)
+
+            // Apply eye orientation for swim direction (look where you want to swim)
+            // This transforms movement based on where the player is looking (pitch)
+            if ( (v1->physicsParams.acceleration.x != 0.0 || v1->physicsParams.acceleration.y != 0.0)
+              && (v1->actorParams.eyePYR.x != 0.0 || v1->actorParams.eyePYR.y != 0.0 || v1->actorParams.eyePYR.z != 0.0)
+              && v2
+              && (v1->physicsParams.physflags & SITH_PF_WATERSURFACE) == 0 )
+            {
+                rdMatrix_BuildRotate34(&a, &v1->actorParams.eyePYR);
+                rdMatrix_TransformVector34Acc(&v1->physicsParams.acceleration, &a);
+            }
+        }
+#endif // PLATFORM_VR
+
+        if (!vrMovementActive) {
+            v5 = sithControl_GetAxisTimeCorrected(0);
+            v6 = v1->actorParams.extraSpeed + v1->actorParams.maxThrust;
+            v9 = v5 * v6;
+            v1->physicsParams.acceleration.y = v9;
+            if ( (v1->physicsParams.acceleration.x != 0.0 || v1->physicsParams.acceleration.y != 0.0) // TODO verified first comparison?
+              && (v1->actorParams.eyePYR.x != 0.0 || v1->actorParams.eyePYR.y != 0.0 || v1->actorParams.eyePYR.z != 0.0)
+              && v2
+              && (v1->physicsParams.physflags & SITH_PF_WATERSURFACE) == 0 )
+            {
+                rdMatrix_BuildRotate34(&a, &v1->actorParams.eyePYR);
+                rdMatrix_TransformVector34Acc(&v1->physicsParams.acceleration, &a);
+            }
         }
         if ( sithControl_ReadFunctionMap(INPUT_FUNC_SLIDETOGGLE, &tmp) )
         {
-            v15 = sithControl_GetAxisTimeCorrected(INPUT_FUNC_SLIDE);
+            if (!vrMovementActive) {
+                v15 = sithControl_GetAxisTimeCorrected(INPUT_FUNC_SLIDE);
 
-            // Why did MoTS do this lol
-            if (Main_bMotsCompat)
-                v15 = -v15;
+                // Why did MoTS do this lol
+                if (Main_bMotsCompat)
+                    v15 = -v15;
 
-            v11 = v15 - sithControl_GetAxisTimeCorrected(INPUT_FUNC_TURN);
-            if ( v11 < -1.0 )
-            {
-                v11 = -1.0;
+                v11 = v15 - sithControl_GetAxisTimeCorrected(INPUT_FUNC_TURN);
+                if ( v11 < -1.0 )
+                {
+                    v11 = -1.0;
+                }
+                else if ( v11 > 1.0 )
+                {
+                    v11 = 1.0;
+                }
+                v12 = v1->actorParams.extraSpeed + v1->actorParams.maxThrust;
+                v1->physicsParams.angVel.y = 0.0;
+                v7->x = v12 * v11 * 0.7;
             }
-            else if ( v11 > 1.0 )
-            {
-                v11 = 1.0;
-            }
-            v12 = v1->actorParams.extraSpeed + v1->actorParams.maxThrust;
-            v1->physicsParams.angVel.y = 0.0;
-            v7->x = v12 * v11 * 0.7;
         }
-        else
+        else if (!vrMovementActive)
         {
             // Why did MoTS do this lol
             v7->x = (Main_bMotsCompat ? -1 : 1) * sithControl_GetAxisTimeCorrected(INPUT_FUNC_SLIDE) * (v1->actorParams.extraSpeed + v1->actorParams.maxThrust) * 0.7;
-            
+
 #ifdef QOL_IMPROVEMENTS
             // Scale appropriately to high framerates
             v1->physicsParams.angVel.y = sithControl_GetAxisNonTimeCorrectedRaw(INPUT_FUNC_TURN) * sithTime_TickHz;

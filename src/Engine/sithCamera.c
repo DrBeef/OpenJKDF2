@@ -892,6 +892,37 @@ void sithCamera_UpdateZoom(sithCamera *pCamera)
 // Added: VR view setup
 #ifdef PLATFORM_VR
 
+typedef struct sithCameraVRSavedState
+{
+    int valid;
+    sithSector* sector;
+    rdVector3 vec3_1;
+} sithCameraVRSavedState;
+
+static sithCameraVRSavedState sithCamera_vrSavedState = { 0 };
+
+static void sithCamera_ApplyVREyeState(const rdMatrix34* vrViewMatrix)
+{
+    if (!sithCamera_currentCamera || !vrViewMatrix) {
+        return;
+    }
+
+    if (!sithCamera_vrSavedState.valid) {
+        sithCamera_vrSavedState.valid = 1;
+        sithCamera_vrSavedState.sector = sithCamera_currentCamera->sector;
+        sithCamera_vrSavedState.vec3_1 = sithCamera_currentCamera->vec3_1;
+    }
+
+    rdVector3 basePos = sithCamera_vrSavedState.vec3_1;
+    sithSector* baseSector = sithCamera_vrSavedState.sector;
+
+    sithCamera_currentCamera->vec3_1 = vrViewMatrix->scale;
+    if (baseSector) {
+        sithCamera_currentCamera->sector = sithCollision_GetSectorLookAt(
+            baseSector, &basePos, &vrViewMatrix->scale, 0.02f);
+    }
+}
+
 // Prepare camera for VR rendering (called once per frame, before eye loop)
 // This does all the per-frame camera updates without actually rendering
 void sithCamera_PrepareFrameVR(void)
@@ -903,6 +934,21 @@ void sithCamera_PrepareFrameVR(void)
 
     // Set as current rdCamera (but don't update view matrix yet - that's per-eye)
     rdCamera_SetCurrent(&sithCamera_currentCamera->rdCam);
+
+    // In VR, update camera position/sector to match HMD center for culling/audio
+    if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+        rdMatrix34 hmdView;
+        stdVR_CombineCameraWithHMD(&sithCamera_currentCamera->viewMat, &hmdView);
+
+        rdVector3 basePos = sithCamera_currentCamera->viewMat.scale;
+        sithSector* baseSector = sithCamera_currentCamera->sector;
+
+        sithCamera_currentCamera->vec3_1 = hmdView.scale;
+        if (baseSector) {
+            sithCamera_currentCamera->sector = sithCollision_GetSectorLookAt(
+                baseSector, &basePos, &hmdView.scale, 0.02f);
+        }
+    }
 }
 
 // Set up VR view for a specific eye (called per-eye in the stereo loop)
@@ -921,6 +967,9 @@ void sithCamera_SetVRView(int eye)
 
     // Added: Store the combined matrix for weapon rendering (jkPlayer_DrawPov)
     stdVR_SetCurrentEyeViewMatrix(&vrViewMatrix);
+
+    // Update camera sector/position to match this eye for culling and lighting
+    sithCamera_ApplyVREyeState(&vrViewMatrix);
 
     // Update the rdCamera with the VR view matrix
     rdCamera_SetCurrent(&sithCamera_currentCamera->rdCam);
@@ -962,6 +1011,21 @@ void sithCamera_SetVRView(int eye)
     rdCamera_SetVRProjection(proj);
 }
 
+void sithCamera_RestoreVRView(void)
+{
+    if (!sithCamera_vrSavedState.valid) {
+        return;
+    }
+
+    if (sithCamera_currentCamera) {
+        sithCamera_currentCamera->vec3_1 = sithCamera_vrSavedState.vec3_1;
+        sithCamera_currentCamera->sector = sithCamera_vrSavedState.sector;
+    }
+
+    sithCamera_vrSavedState.valid = 0;
+}
+
+
 // Set up camera for MultiView rendering (both eyes rendered in single pass)
 void sithCamera_SetVRViewMultiView(void)
 {
@@ -997,7 +1061,6 @@ void sithCamera_SetVRViewMultiView(void)
 
     // Set VR render dimensions
     rdCamera_SetVRRenderDimensions(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
-
 }
 #endif // PLATFORM_VR
 

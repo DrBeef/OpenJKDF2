@@ -264,18 +264,26 @@ void stdVR_Input_MapToGame(void)
     // sithControl code when PLATFORM_VR is defined.
 
     // Trigger haptic feedback for fire
-    if (stdVR_clientInfo.buttonPressed & STDVR_BTN_TRIGGER_R) {
-        stdVR_TriggerHaptic(STDVR_CONTROLLER_RIGHT, 0.5f, 0.1f, 100.0f);
-    }
+    {
+        int dominantHand = stdVR_config.dominantHand;
+        int offhand = 1 - dominantHand;
+        uint32_t btnFire = (dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_BTN_TRIGGER_L : STDVR_BTN_TRIGGER_R;
+        uint32_t btnAlt = (dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_BTN_GRIP_L : STDVR_BTN_GRIP_R;
+        uint32_t btnForce = (dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_BTN_TRIGGER_R : STDVR_BTN_TRIGGER_L;
 
-    // Trigger haptic feedback for alt fire (grip)
-    if (stdVR_clientInfo.buttonPressed & STDVR_BTN_GRIP_R) {
-        stdVR_TriggerHaptic(STDVR_CONTROLLER_RIGHT, 0.3f, 0.1f, 50.0f);
-    }
+        if (stdVR_clientInfo.buttonPressed & btnFire) {
+            stdVR_TriggerHaptic(dominantHand, 0.5f, 0.1f, 100.0f);
+        }
 
-    // Trigger haptic feedback for force power
-    if (stdVR_clientInfo.buttonPressed & STDVR_BTN_TRIGGER_L) {
-        stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.4f, 0.15f, 75.0f);
+        // Trigger haptic feedback for alt fire (grip)
+        if (stdVR_clientInfo.buttonPressed & btnAlt) {
+            stdVR_TriggerHaptic(dominantHand, 0.3f, 0.1f, 50.0f);
+        }
+
+        // Trigger haptic feedback for force power
+        if (stdVR_clientInfo.buttonPressed & btnForce) {
+            stdVR_TriggerHaptic(offhand, 0.4f, 0.15f, 75.0f);
+        }
     }
 
     // Left thumbstick click = toggle walk/run mode

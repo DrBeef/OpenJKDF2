@@ -60,6 +60,7 @@ MATH_FUNC void sithCamera_UpdateZoom(sithCamera *pCamera);
 void sithCamera_PrepareFrameVR(void);
 void sithCamera_SetVRView(int eye);
 void sithCamera_SetVRViewMultiView(void);
+void sithCamera_RestoreVRView(void);
 #endif
 
 // Added: Option to disable POV shake

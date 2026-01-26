@@ -298,6 +298,7 @@ int jkGame_Update()
 
                 // Flush all render commands
                 rdCache_Flush();
+                sithCamera_RestoreVRView();
                 glFinish();  // Ensure all GL commands complete
 
                 // Save screenshot immediately (before clearing for next eye)
@@ -405,6 +406,7 @@ int jkGame_Update()
 
                     // Flush render cache
                     rdCache_Flush();
+					sithCamera_RestoreVRView();
 
                     // Resolve to VR swapchain (both eyes)
                     std3D_DrawSceneFbo();
@@ -423,41 +425,40 @@ int jkGame_Update()
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     if (!stdVR_PrepareEyeBuffer(eye)) {
                         continue;
-                    }
 
-                    // Clear internal render target per-eye to avoid depth/color leakage
-                    std3D_ClearMainFbo();
+                // Clear internal render target per-eye to avoid depth/color leakage
+                std3D_ClearMainFbo();
 
-                    // Set up VR view for this eye (applies eye offset and projection)
-                    sithCamera_SetVRView(eye);
+                // Set up VR view for this eye (applies eye offset and projection)
+                sithCamera_SetVRView(eye);
 
-                    // Advance render tick for each eye so sectors don't get skipped
-                    // The render system uses sithRender_lastRenderTick to mark sectors as "already rendered"
-                    // Without this, the second eye would skip all sectors because they were rendered for the first eye
-                    sithMain_sub_4C4D80();
+                // Advance render tick for each eye so sectors don't get skipped
+                // The render system uses sithRender_lastRenderTick to mark sectors as "already rendered"
+                // Without this, the second eye would skip all sectors because they were rendered for the first eye
+                sithMain_sub_4C4D80();
 
-                    // Render scene for this eye
-                    sithRender_Draw();
-                    jkPlayer_DrawPov();
+                // Render scene for this eye
+                sithRender_Draw();
+                jkPlayer_DrawPov();
 
-                    // Flush render cache per-eye so triangles are actually drawn to internal FBO
-                    // before we blit to VR swapchain. Without this, both eyes get empty content.
-                    rdCache_Flush();
+                // Flush render cache per-eye so triangles are actually drawn to internal FBO
+                // before we blit to VR swapchain. Without this, both eyes get empty content.
+                rdCache_Flush();
+                sithCamera_RestoreVRView();
 
-                    // Save screenshot for VR auto-test mode
-                    {
-                        extern int32_t Main_bVRTest;
-                        extern int32_t Main_vrTestFrameTarget;
-                        extern int32_t Main_vrTestState;
+                // Save screenshot for VR auto-test mode
+                {
+                    extern int32_t Main_bVRTest;
+                    extern int32_t Main_vrTestFrameTarget;
+                    extern int32_t Main_vrTestState;
 
-                        static int screenshotSaved[2] = {0, 0};
-                        int targetFrame = Main_bVRTest ? Main_vrTestFrameTarget : 30;
+                    static int screenshotSaved[2] = {0, 0};
+                    int targetFrame = Main_bVRTest ? Main_vrTestFrameTarget : 30;
 
-                        // Mark that we're in gameplay for VR test
-                        if (Main_bVRTest && Main_vrTestState == 0) {
-                            Main_vrTestState = 1;
-                            VR_Log("=== VR AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n", targetFrame);
-                        }
+                    // Mark that we're in gameplay for VR test
+                    if (Main_bVRTest && Main_vrTestState == 0) {
+                        Main_vrTestState = 1;
+                        VR_Log("=== VR AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n", targetFrame);
 
                         if (vrRenderCount == targetFrame && eye >= 0 && eye < 2 && !screenshotSaved[eye]) {
                             screenshotSaved[eye] = 1;
