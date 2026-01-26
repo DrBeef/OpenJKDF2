@@ -289,6 +289,7 @@ int jkGame_Update()
 
                 // Flush all render commands
                 rdCache_Flush();
+                sithCamera_RestoreVRView();
                 glFinish();  // Ensure all GL commands complete
 
                 // Save screenshot immediately (before clearing for next eye)
@@ -395,6 +396,7 @@ int jkGame_Update()
                 // Flush render cache per-eye so triangles are actually drawn to internal FBO
                 // before we blit to VR swapchain. Without this, both eyes get empty content.
                 rdCache_Flush();
+                sithCamera_RestoreVRView();
 
                 // Save screenshot for VR auto-test mode
                 {
