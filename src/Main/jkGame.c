@@ -425,6 +425,8 @@ int jkGame_Update()
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     if (!stdVR_PrepareEyeBuffer(eye)) {
                         continue;
+                    }
+
 
                 // Clear internal render target per-eye to avoid depth/color leakage
                 std3D_ClearMainFbo();
@@ -458,7 +460,9 @@ int jkGame_Update()
                     // Mark that we're in gameplay for VR test
                     if (Main_bVRTest && Main_vrTestState == 0) {
                         Main_vrTestState = 1;
-                        VR_Log("=== VR AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n", targetFrame);
+                        VR_Log("=== VR AUTO-TEST: Gameplay started, will screenshot at frame %d ===\n",
+                               targetFrame);
+                    }
 
                         if (vrRenderCount == targetFrame && eye >= 0 && eye < 2 && !screenshotSaved[eye]) {
                             screenshotSaved[eye] = 1;

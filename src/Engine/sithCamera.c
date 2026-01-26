@@ -938,7 +938,7 @@ void sithCamera_PrepareFrameVR(void)
     // In VR, update camera position/sector to match HMD center for culling/audio
     if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
         rdMatrix34 hmdView;
-        stdVR_CombineCameraWithHMD(&sithCamera_currentCamera->viewMat, &hmdView);
+        stdVR_CombineCameraWithCenter(&sithCamera_currentCamera->viewMat, &hmdView);
 
         rdVector3 basePos = sithCamera_currentCamera->viewMat.scale;
         sithSector* baseSector = sithCamera_currentCamera->sector;
