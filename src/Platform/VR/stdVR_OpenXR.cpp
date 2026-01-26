@@ -2091,7 +2091,9 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
     uint32_t prevButtonState = stdVR_clientInfo.buttonState;
     stdVR_clientInfo.buttonState = 0;
 
-    // Get thumbstick values
+    // Get thumbstick values (swap move/turn hands for left-handed mode)
+    int moveHand = (stdVR_config.dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
+    int turnHand = (moveHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
     for (int hand = 0; hand < STDVR_CONTROLLER_COUNT; hand++) {
         XrActionStateGetInfo getInfo = { XR_TYPE_ACTION_STATE_GET_INFO };
         getInfo.subactionPath = xrHandPaths[hand];
@@ -2101,14 +2103,14 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
         XrActionStateVector2f vec2State = { XR_TYPE_ACTION_STATE_VECTOR2F };
         xrGetActionStateVector2f(xrSession, &getInfo, &vec2State);
         if (vec2State.isActive) {
-            if (hand == STDVR_CONTROLLER_LEFT) {
+            if (hand == moveHand) {
                 // Map thumbstick axes to game movement
                 // Based on user testing: X and Y axes are swapped
                 // Stick left/right (X) -> forward/back
                 // Stick up/down (Y) -> strafe left/right
                 stdVR_clientInfo.analogMove[0] = vec2State.currentState.y;   // Y -> strafe
                 stdVR_clientInfo.analogMove[1] = vec2State.currentState.x;   // X -> forward/back
-            } else {
+            } else if (hand == turnHand) {
                 stdVR_clientInfo.analogTurn[0] = vec2State.currentState.x;
                 stdVR_clientInfo.analogTurn[1] = vec2State.currentState.y;
             }
