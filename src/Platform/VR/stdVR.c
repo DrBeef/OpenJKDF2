@@ -52,7 +52,7 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_config.smoothTurnSpeed = 120.0f;
     stdVR_config.worldScale = 0.09f;  // IPD/roomscale multiplier - reduced for less physical movement
     stdVR_config.heightOffset = 0.0f;
-    stdVR_config.fixedHeightAdjustment = 0.13f;
+    stdVR_config.fixedHeightAdjustment = 0.11f;
     stdVR_config.bComfortVignette = 1;
     stdVR_config.dominantHand = STDVR_CONTROLLER_RIGHT;
     stdVR_config.supersampling = 1.0f;
@@ -1264,9 +1264,9 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
 
     // Apply weapon position offset in controller local space
     // Transform the offset by controller orientation before adding
-    float weapOffX = pWeaponOffset ? pWeaponOffset->offsetX : stdVR_motionConfig.weaponOffsetX;
-    float weapOffY = pWeaponOffset ? pWeaponOffset->offsetY : stdVR_motionConfig.weaponOffsetY;
-    float weapOffZ = pWeaponOffset ? pWeaponOffset->offsetZ : stdVR_motionConfig.weaponOffsetZ;
+    float weapOffX = pWeaponOffset ? pWeaponOffset->offsetX : 0.f;
+    float weapOffY = pWeaponOffset ? pWeaponOffset->offsetY : 0.f;
+    float weapOffZ = pWeaponOffset ? pWeaponOffset->offsetZ : 0.f;
 
     if (weapOffX != 0.0f || weapOffY != 0.0f || weapOffZ != 0.0f) {
         rdVector3 localOffset;
@@ -1307,6 +1307,8 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
     combined.scale.x = pGameCamera->scale.x + hmdOffsetWorld.x + worldOffset.x;
     combined.scale.y = pGameCamera->scale.y + hmdOffsetWorld.y + worldOffset.y;
     combined.scale.z = pGameCamera->scale.z + hmdOffsetWorld.z + worldOffset.z;
+
+    combined.scale.z += stdVR_config.fixedHeightAdjustment * worldScale;
 
     rdMatrix_Copy34(pViewMat, &combined);
 
