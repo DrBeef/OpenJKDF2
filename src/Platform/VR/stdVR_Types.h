@@ -208,6 +208,7 @@ typedef struct stdVR_Config {
     // Scale and comfort
     float worldScale;               // World scale multiplier (default 1.0)
     float heightOffset;             // Player height offset in meters
+    float fixedHeightAdjustment;          // Adjustment to make floor line up
     int bComfortVignette;           // Enable comfort vignette during movement
 
     // Handedness

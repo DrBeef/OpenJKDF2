@@ -50,8 +50,9 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_config.turnMode = STDVR_TURN_SNAP;
     stdVR_config.snapTurnAngle = 45;
     stdVR_config.smoothTurnSpeed = 120.0f;
-    stdVR_config.worldScale = 0.085f;  // IPD/roomscale multiplier - reduced for less physical movement
+    stdVR_config.worldScale = 0.09f;  // IPD/roomscale multiplier - reduced for less physical movement
     stdVR_config.heightOffset = 0.0f;
+    stdVR_config.fixedHeightAdjustment = 0.13f;
     stdVR_config.bComfortVignette = 1;
     stdVR_config.dominantHand = STDVR_CONTROLLER_RIGHT;
     stdVR_config.supersampling = 1.0f;
@@ -891,6 +892,8 @@ void stdVR_CombineCameraWithCenter(const rdMatrix34* pGameCamera, rdMatrix34* pO
         hmdOffset.z += stdVR_config.heightOffset * worldScale;
     }
 
+    hmdOffset.z += stdVR_config.fixedHeightAdjustment * worldScale;
+
     // Transform by game camera orientation
     rdVector3 hmdOffsetWorld;
     rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
@@ -1101,7 +1104,8 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
     }
 
     // Apply height offset
-    pWorldPos->z += stdVR_config.heightOffset;
+    pWorldPos->z += stdVR_config.heightOffset * worldScale;
+    pWorldPos->z += stdVR_config.fixedHeightAdjustment * worldScale;
 
     if (debugCounter % 100 == 0) {
         VR_Log("ControllerToWorld: camera=(%.3f,%.3f,%.3f) hmdOffset=(%.3f,%.3f,%.3f) ctrlOffset=(%.3f,%.3f,%.3f)\n",

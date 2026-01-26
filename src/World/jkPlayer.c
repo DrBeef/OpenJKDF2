@@ -266,7 +266,7 @@ void jkPlayer_ResetVars()
     jkPlayer_vrEnabled = 0;
     jkPlayer_vrSnapTurnAngle = 45;        // 0 = smooth turn
     jkPlayer_vrSmoothTurnSpeed = 120;
-    jkPlayer_vrWeaponPitchAdjust = 0.f;
+    jkPlayer_vrWeaponPitchAdjust = 0;
     jkPlayer_vrHeightOffset = 0.0f;
     jkPlayer_vrComfortVignette = 1;
     jkPlayer_vrDominantHand = 1;
