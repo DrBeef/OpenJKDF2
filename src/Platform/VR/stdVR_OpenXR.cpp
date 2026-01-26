@@ -789,11 +789,11 @@ static int CreateActionSet(void)
 
     // Create pose action
     XrActionCreateInfo actionInfo = { XR_TYPE_ACTION_CREATE_INFO };
-    strcpy(actionInfo.actionName, "hand_pose");
+    strcpy(actionInfo.actionName, "aim_pose");
     actionInfo.actionType = XR_ACTION_TYPE_POSE_INPUT;
     actionInfo.countSubactionPaths = STDVR_CONTROLLER_COUNT;
     actionInfo.subactionPaths = xrHandPaths;
-    strcpy(actionInfo.localizedActionName, "Hand Pose");
+    strcpy(actionInfo.localizedActionName, "Aim Pose");
     XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrPoseAction));
 
     // Create trigger action

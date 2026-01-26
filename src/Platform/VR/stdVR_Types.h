@@ -226,7 +226,6 @@ typedef struct stdVR_MotionConfig {
     float forceDistanceTrigger;     // Distance movement for push/pull (default: 0.3m)
 
     // Ergonomic offsets (degrees)
-    float weaponAimPitchAdjust;        // Controller pitch offset for weapon aim
     float weaponPitchAdjust;        // Controller pitch offset for weapon model
     float saberPitchAdjust;         // Controller pitch offset for saber
 

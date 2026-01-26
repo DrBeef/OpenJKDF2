@@ -64,11 +64,10 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_motionConfig.forceVelocityTrigger = 1.5f;     // m/s for force gesture
     stdVR_motionConfig.forceDistanceTrigger = 0.3f;     // meters for push/pull
     stdVR_motionConfig.weaponPitchAdjust = 0.0f;      // degrees - rotate weapon to point forward
-    stdVR_motionConfig.weaponAimPitchAdjust = -90.0f;      // degrees - rotate weapon to point forward
     stdVR_motionConfig.saberPitchAdjust = 0.0f;       // degrees
     stdVR_motionConfig.weaponOffsetX = -0.3f;            // meters - left/right
-    stdVR_motionConfig.weaponOffsetY = 0.0f;           // meters - forward (negative = back toward player)
-    stdVR_motionConfig.weaponOffsetZ = 0.3f;           // meters - up/down (positive = up)
+    stdVR_motionConfig.weaponOffsetY = 0.1f;           // meters - forward (negative = back toward player)
+    stdVR_motionConfig.weaponOffsetZ = -0.15f;           // meters - up/down (positive = up)
     stdVR_motionConfig.weaponModelScale = 0.8f;         // VR weapon model size multiplier
     stdVR_motionConfig.fireOffsetX = 0.3f;              // meters - fire position right offset (~1 foot)
     stdVR_motionConfig.fireOffsetY = 0.0f;              // meters - fire position forward offset (~1 foot)
@@ -1021,7 +1020,7 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
     // Apply pitch adjustment to match weapon visual (same as GetControllerViewMatrix)
     // Use per-weapon pitch adjust if available, otherwise fall back to global config
     stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
-    float pitchAdjust = pWeaponOffset ? pWeaponOffset->pitchAdjust : stdVR_motionConfig.weaponAimPitchAdjust;
+    float pitchAdjust = (pWeaponOffset ? pWeaponOffset->pitchAdjust : 0.f) + stdVR_motionConfig.weaponPitchAdjust;
 
     rdMatrix34 adjustedPose;
     if (pitchAdjust != 0.0f) {
@@ -1115,56 +1114,6 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
     }
 }
 
-// Get controller aim direction in world space (where controller points)
-void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection)
-{
-    if (!pDirection || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
-        return;
-    }
-
-    stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
-    if (!pCtrl->bTracking) {
-        pDirection->x = 0.0f;
-        pDirection->y = 1.0f;  // Default forward
-        pDirection->z = 0.0f;
-        return;
-    }
-
-    // Get player orientation for combining
-    extern sithThing* sithPlayer_pLocalPlayerThing;
-    if (!sithPlayer_pLocalPlayerThing) {
-        pDirection->x = 0.0f;
-        pDirection->y = 1.0f;
-        pDirection->z = 0.0f;
-        return;
-    }
-
-    // Forward direction from controller pose (lvec = forward in JKDF2)
-    rdVector3 ctrlForward;
-    ctrlForward.x = pCtrl->poseMatrix.lvec.x;
-    ctrlForward.y = pCtrl->poseMatrix.lvec.y;
-    ctrlForward.z = pCtrl->poseMatrix.lvec.z;
-
-    // Apply ergonomic pitch adjustment if configured
-    // Use per-weapon pitch adjust if available, otherwise fall back to global config
-    stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
-    float pitchAdjust = pWeaponOffset ? pWeaponOffset->pitchAdjust : stdVR_motionConfig.weaponPitchAdjust;
-
-    if (pitchAdjust != 0.0f) {
-        // Rotate around controller's right vector by pitch adjustment
-        rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { pitchAdjust, 0.0f, 0.0f };
-        rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
-        rdMatrix_TransformVector34(&ctrlForward, &ctrlForward, &pitchRot);
-    }
-
-    // Transform by player body orientation
-    rdMatrix_TransformVector34(pDirection, &ctrlForward, &sithPlayer_pLocalPlayerThing->lookOrientation);
-
-    // Normalize
-    rdVector_Normalize3Acc(pDirection);
-}
-
 // Get controller world matrix (for weapon rendering)
 void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix)
 {
@@ -1188,14 +1137,10 @@ void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix)
 
     // Apply pitch adjustment to controller pose if configured
     rdMatrix34 adjustedPose;
-    if (stdVR_motionConfig.weaponAimPitchAdjust != 0.0f) {
-        rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { stdVR_motionConfig.weaponAimPitchAdjust, 0.0f, 0.0f };
-        rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
-        rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
-    } else {
-        rdMatrix_Copy34(&adjustedPose, &pCtrl->poseMatrix);
-    }
+    rdMatrix34 pitchRot;
+    rdVector3 pitchAngles = { -90.f + stdVR_motionConfig.weaponPitchAdjust, 0.0f, 0.0f };
+    rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
+    rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
 
     // Combine player body orientation with adjusted controller orientation
     rdMatrix_Multiply34(pMatrix, &player->lookOrientation, &adjustedPose);
@@ -1279,7 +1224,7 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
 
     // Use per-weapon offsets if available, otherwise fall back to global config
     stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
-    float pitchAdjust = pWeaponOffset ? pWeaponOffset->pitchAdjust : stdVR_motionConfig.weaponPitchAdjust;
+    float pitchAdjust = (pWeaponOffset ? pWeaponOffset->pitchAdjust : 0.f) + stdVR_motionConfig.weaponPitchAdjust;
 
     // First apply pitch adjustment to controller pose if configured
     rdMatrix34 adjustedPose;
@@ -1469,6 +1414,7 @@ void stdVR_SyncConfigFromJkPlayer(void)
     extern int jkPlayer_vrSnapTurnAngle;
 
 
+    extern int jkPlayer_vrWeaponPitchAdjust;
     extern int jkPlayer_vrSmoothTurnSpeed;
     extern float jkPlayer_vrWorldScale;
     extern float jkPlayer_vrHeightOffset;
@@ -1506,6 +1452,9 @@ void stdVR_SyncConfigFromJkPlayer(void)
     if (stdVR_config.supersampling <= 0.0f) {
         stdVR_config.supersampling = 1.0f;
     }
+
+    //Motion Config
+    stdVR_motionConfig.weaponPitchAdjust = (float)jkPlayer_vrWeaponPitchAdjust;
 }
 
 // Push stdVR_config settings back to jkPlayer
@@ -1514,6 +1463,7 @@ void stdVR_SyncConfigToJkPlayer(void)
     extern int jkPlayer_vrEnabled;
     extern int jkPlayer_vrSnapTurnAngle;
     extern int jkPlayer_vrSmoothTurnSpeed;
+    extern int jkPlayer_vrWeaponPitchAdjust;
     extern float jkPlayer_vrWorldScale;
     extern float jkPlayer_vrHeightOffset;
     extern int jkPlayer_vrComfortVignette;
@@ -1533,6 +1483,9 @@ void stdVR_SyncConfigToJkPlayer(void)
     jkPlayer_vrComfortVignette = stdVR_config.bComfortVignette;
     jkPlayer_vrDominantHand = stdVR_config.dominantHand;
     jkPlayer_vrSupersampling = stdVR_config.supersampling;
+
+    //Motion Config
+    jkPlayer_vrWeaponPitchAdjust = (int)stdVR_motionConfig.weaponPitchAdjust;
 }
 
 // Screen layer mode functions (for menus/cinematics)
