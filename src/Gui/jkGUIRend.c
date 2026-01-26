@@ -15,6 +15,7 @@
 #include "General/stdString.h"
 #include "Primitives/rdRect.h"
 #include "Gui/jkGUI.h"
+#include "Main/jkStrings.h"
 #include "stdPlatform.h"
 #include "jk.h"
 #include "types.h"
@@ -338,9 +339,13 @@ void jkGuiRend_UpdateDrawMenu(jkGuiMenu *menu)
     {
         jkGuiElement* clickable = menu->lastMouseOverClickable;
         if ( clickable && clickable->hintText && clickable->bIsVisible && !clickable->enableHover )
-            menu->paElements[idx].str = clickable->hintText;
+        {
+            menu->paElements[idx].wstr = jkStrings_GetUniStringWithFallback(clickable->hintText);
+        }
         else
-            menu->paElements[idx].str = 0;
+        {
+            menu->paElements[idx].wstr = 0;
+        }
         jkGuiRend_UpdateAndDrawClickable(&menu->paElements[menu->clickableIdxIdk], menu, 1);
     }
 }
