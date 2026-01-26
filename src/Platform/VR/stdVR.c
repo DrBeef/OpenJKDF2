@@ -731,6 +731,55 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
     rdMatrix_Copy34(pOut, &combined);
 }
 
+void stdVR_CombineCameraWithHMD(const rdMatrix34* pGameCamera, rdMatrix34* pOut)
+{
+    if (!pGameCamera || !pOut) {
+        return;
+    }
+
+    // Store game camera for controller matrix calculations
+    rdMatrix_Copy34(&stdVR_currentGameCamera, pGameCamera);
+    stdVR_currentGameCameraValid = 1;
+
+    float worldScale = stdVR_config.worldScale;
+    if (worldScale <= 0.0f) {
+        worldScale = 1.0f;
+    }
+
+    // Use the HMD center pose directly
+    rdMatrix34 eyePose;
+    rdMatrix_Copy34(&eyePose, &stdVR_clientInfo.hmdPoseMatrix);
+
+    rdMatrix34 hmdPose;
+    rdMatrix_Copy34(&hmdPose, &stdVR_clientInfo.hmdPoseMatrix);
+
+    // Build combined orientation: game camera rotation * HMD rotation
+    rdMatrix34 combined;
+    rdMatrix_Multiply34(&combined, pGameCamera, &eyePose);
+
+    // HMD position offset for 6DOF head movement (roomscale)
+    rdVector3 hmdOffset;
+    hmdOffset.x = hmdPose.scale.x * worldScale;
+    hmdOffset.y = hmdPose.scale.y * worldScale;
+    hmdOffset.z = hmdPose.scale.z * worldScale;
+
+    // Apply height offset if configured (in meters, then scaled)
+    if (stdVR_config.heightOffset != 0.0f) {
+        hmdOffset.z += stdVR_config.heightOffset * worldScale;
+    }
+
+    // Transform HMD offset by game camera orientation (body direction)
+    rdVector3 hmdOffsetWorld;
+    rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
+
+    // Final position = game camera position + HMD offset (in world)
+    combined.scale.x = pGameCamera->scale.x + hmdOffsetWorld.x;
+    combined.scale.y = pGameCamera->scale.y + hmdOffsetWorld.y;
+    combined.scale.z = pGameCamera->scale.z + hmdOffsetWorld.z;
+
+    rdMatrix_Copy34(pOut, &combined);
+}
+
 // Added: Set the current eye view matrix (called from sithCamera_SetVRView)
 void stdVR_SetCurrentEyeViewMatrix(const rdMatrix34* pMat)
 {

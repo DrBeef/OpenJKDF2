@@ -89,6 +89,8 @@ int stdVR_GetMenuTriggerReleased(void); // Was trigger released this frame
 
 // Helper function to combine game camera with VR eye offset
 void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix34* pOut);
+// Helper function to combine game camera with HMD center pose (no IPD)
+void stdVR_CombineCameraWithHMD(const rdMatrix34* pGameCamera, rdMatrix34* pOut);
 
 // Added: Get/set current eye view matrix (for weapon rendering in VR)
 void stdVR_SetCurrentEyeViewMatrix(const rdMatrix34* pMat);
