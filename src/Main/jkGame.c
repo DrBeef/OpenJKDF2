@@ -721,30 +721,36 @@ non_vr_path:
 #endif
 
     // MOTS added: scope/security cam overlays
-    // Note: VR HUD rendering is handled in the VR render path above, not here
-    if (!Main_bMotsCompat) {
-        if ( (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0 ) {
-            jkHud_Draw();
-        }
-    }
-    else {
-        if (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_SCOPEHUD) {
-            jkHudScope_Draw();
-        }
-        if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_80000000) == 0) {
-            if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+    // VR HUD rendering is handled in the VR render path above;
+    // skip here to avoid drawing HUD into the 3D eye buffer.
+#ifdef QOL_IMPROVEMENTS
+    if (!(stdVR_bEnabled && stdVR_IsSessionRunning()))
+#endif
+    {
+        if (!Main_bMotsCompat) {
+            if ( (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0 ) {
                 jkHud_Draw();
             }
         }
         else {
-            jkHudCameraView_Draw();
+            if (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_SCOPEHUD) {
+                jkHudScope_Draw();
+            }
+            if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_80000000) == 0) {
+                if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                    jkHud_Draw();
+                }
+            }
+            else {
+                jkHudCameraView_Draw();
+            }
         }
+
+        jkDev_BlitLogToScreen();
+        jkHudInv_Draw();
     }
 
     jkGame_Update_HudDrawn = stdPlatform_GetTimeMsec();
-
-    jkDev_BlitLogToScreen();
-    jkHudInv_Draw();
 #if !defined(SDL2_RENDER) && !defined(TARGET_TWL)
     if ( Video_modeStruct.b3DAccel )
         std3D_DrawOverlay();
