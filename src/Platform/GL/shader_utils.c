@@ -12,6 +12,7 @@
 #include "SDL2_helper.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "stdPlatform.h"
 
@@ -122,7 +123,16 @@ GLuint create_shader(const char* shader, GLenum type) {
 #if defined(PLATFORM_VR)
     // MultiView requires the extension declaration BEFORE any other code
     extensions = "#extension GL_OVR_multiview2 : enable\n";
-    defines = "#define CAN_BILINEAR_FILTER\n#define MULTIVIEW_ENABLED\n";
+    // Add unique session ID to force shader recompilation (bypasses Pico shader cache bug)
+    static uint32_t shaderSessionId = 0;
+    static char definesBuffer[256];
+    if (shaderSessionId == 0) {
+        shaderSessionId = (uint32_t)time(NULL);
+    }
+    snprintf(definesBuffer, sizeof(definesBuffer),
+        "#define CAN_BILINEAR_FILTER\n#define MULTIVIEW_ENABLED\n#define SHADER_SESSION_ID %u\n",
+        shaderSessionId);
+    defines = definesBuffer;
 #else
     extensions = "\n";
     defines = "#define CAN_BILINEAR_FILTER\n";

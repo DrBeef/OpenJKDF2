@@ -249,9 +249,9 @@ static bool vrMultiViewEnabled = false;
 static XrSwapchain xrMultiViewSwapchain = XR_NULL_HANDLE;
 static std::vector<XrSwapchainImageGL> xrMultiViewSwapchainImages;
 static uint32_t xrMultiViewSwapchainImageIndex = 0;
-static GLuint vrMultiViewFBO = 0;
-static GLuint vrMultiViewDepthTexArray = 0;  // GL_TEXTURE_2D_ARRAY with 2 layers
-static bool vrMultiViewFBOValidated = false;
+// Per-swapchain-image FBOs and depth textures (like RazeXR)
+static std::vector<GLuint> vrMultiViewFBOs;
+static std::vector<GLuint> vrMultiViewDepthTextures;
 static bool vrMultiViewRenderActive = false;
 
 // MultiView function pointers (loaded dynamically)
@@ -1453,7 +1453,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         mvSwapchainInfo.width = mvWidth;
         mvSwapchainInfo.height = mvHeight;
         mvSwapchainInfo.faceCount = 1;
-        mvSwapchainInfo.arraySize = 2;  // Two layers for stereo
+        mvSwapchainInfo.arraySize = 2;  // Standard MultiView: layers 0 and 1 (like RazeXR)
         mvSwapchainInfo.mipCount = 1;
 
         result = xrCreateSwapchain(xrSession, &mvSwapchainInfo, &xrMultiViewSwapchain);
@@ -1468,28 +1468,58 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
             xrEnumerateSwapchainImages(xrMultiViewSwapchain, mvImageCount, &mvImageCount,
                 (XrSwapchainImageBaseHeader*)xrMultiViewSwapchainImages.data());
 
-            // Create MultiView FBO
-            glGenFramebuffers(1, &vrMultiViewFBO);
+            // Create per-swapchain-image FBOs and depth textures (like RazeXR)
+            vrMultiViewFBOs.resize(mvImageCount);
+            vrMultiViewDepthTextures.resize(mvImageCount);
+            glGenFramebuffers(mvImageCount, vrMultiViewFBOs.data());
+            glGenTextures(mvImageCount, vrMultiViewDepthTextures.data());
 
-            // Create depth texture array (2D array with 2 layers)
-            glGenTextures(1, &vrMultiViewDepthTexArray);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, vrMultiViewDepthTexArray);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH_COMPONENT32F, mvWidth, mvHeight, 2);
-            glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+            bool allFBOsComplete = true;
+            for (uint32_t i = 0; i < mvImageCount; i++) {
+                const GLuint colorTexture = xrMultiViewSwapchainImages[i].image;
 
-            // Set up FBO with MultiView attachments (depth only - color attached per frame)
-            glBindFramebuffer(GL_FRAMEBUFFER, vrMultiViewFBO);
-            glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                vrMultiViewDepthTexArray, 0, 0, 2);
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                // Set texture parameters on color texture array (like RazeXR)
+                glBindTexture(GL_TEXTURE_2D_ARRAY, colorTexture);
+                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
-            vrMultiViewEnabled = true;
-            VR_Log("stdVR_OpenXR: MultiView swapchain created - %dx%d, arraySize=2, %u images, FBO=%u, depthArray=%u\n",
-                mvWidth, mvHeight, mvImageCount, vrMultiViewFBO, vrMultiViewDepthTexArray);
+                // Create depth texture array for this swapchain image
+                glBindTexture(GL_TEXTURE_2D_ARRAY, vrMultiViewDepthTextures[i]);
+                glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH_COMPONENT24, mvWidth, mvHeight, 2);
+                glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+
+                // Create FBO with both color and depth permanently attached (like RazeXR)
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, vrMultiViewFBOs[i]);
+                glFramebufferTextureMultiviewOVR(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                    vrMultiViewDepthTextures[i], 0, 0, 2);
+                glFramebufferTextureMultiviewOVR(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                    colorTexture, 0, 0, 2);
+
+                GLenum fboStatus = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+                if (fboStatus != GL_FRAMEBUFFER_COMPLETE) {
+                    VR_Log("stdVR_OpenXR: MultiView FBO[%u] incomplete, status 0x%x\n", i, fboStatus);
+                    allFBOsComplete = false;
+                }
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            }
+
+            if (allFBOsComplete) {
+                vrMultiViewEnabled = true;
+                VR_Log("stdVR_OpenXR: MultiView swapchain created (RazeXR-style) - %dx%d, %u images with per-image FBOs\n",
+                    mvWidth, mvHeight, mvImageCount);
+            } else {
+                VR_Log("stdVR_OpenXR: WARNING - MultiView FBO creation failed, falling back to per-eye\n");
+                glDeleteFramebuffers(mvImageCount, vrMultiViewFBOs.data());
+                glDeleteTextures(mvImageCount, vrMultiViewDepthTextures.data());
+                vrMultiViewFBOs.clear();
+                vrMultiViewDepthTextures.clear();
+                xrDestroySwapchain(xrMultiViewSwapchain);
+                xrMultiViewSwapchain = XR_NULL_HANDLE;
+                vrMultiViewSupported = false;
+            }
         }
     }
 #endif // TARGET_ANDROID_NATIVE_GLES
@@ -1621,13 +1651,13 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
 
     // Destroy MultiView resources
 #if defined(TARGET_ANDROID_NATIVE_GLES)
-    if (vrMultiViewFBO != 0) {
-        glDeleteFramebuffers(1, &vrMultiViewFBO);
-        vrMultiViewFBO = 0;
+    if (!vrMultiViewFBOs.empty()) {
+        glDeleteFramebuffers((GLsizei)vrMultiViewFBOs.size(), vrMultiViewFBOs.data());
+        vrMultiViewFBOs.clear();
     }
-    if (vrMultiViewDepthTexArray != 0) {
-        glDeleteTextures(1, &vrMultiViewDepthTexArray);
-        vrMultiViewDepthTexArray = 0;
+    if (!vrMultiViewDepthTextures.empty()) {
+        glDeleteTextures((GLsizei)vrMultiViewDepthTextures.size(), vrMultiViewDepthTextures.data());
+        vrMultiViewDepthTextures.clear();
     }
     if (xrMultiViewSwapchain != XR_NULL_HANDLE) {
         xrDestroySwapchain(xrMultiViewSwapchain);
@@ -1636,7 +1666,6 @@ extern "C" void stdVR_OpenXR_DestroySession(void)
     xrMultiViewSwapchainImages.clear();
     vrMultiViewEnabled = false;
     vrMultiViewRenderActive = false;
-    vrMultiViewFBOValidated = false;
 #endif
 
     if (xrStageSpace != XR_NULL_HANDLE && xrStageSpace != xrLocalSpace) {
@@ -2394,39 +2423,19 @@ extern "C" int stdVR_OpenXR_PrepareMultiViewBuffer(void)
     previousFBO = trackedFBO;
     memcpy(previousViewport, trackedViewport, sizeof(previousViewport));
 
-    // Get the swapchain texture array
-    if (xrMultiViewSwapchainImageIndex >= xrMultiViewSwapchainImages.size()) {
+    // Validate swapchain image index
+    if (xrMultiViewSwapchainImageIndex >= vrMultiViewFBOs.size()) {
         VR_Log("stdVR_OpenXR: MultiView image index out of range: %u\n", xrMultiViewSwapchainImageIndex);
         XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
         xrReleaseSwapchainImage(xrMultiViewSwapchain, &releaseInfo);
         return 0;
     }
-    GLuint textureArray = xrMultiViewSwapchainImages[xrMultiViewSwapchainImageIndex].image;
 
-    // Bind MultiView FBO
-    glBindFramebuffer(GL_FRAMEBUFFER, vrMultiViewFBO);
+    // Get the pre-configured FBO for this swapchain image (like RazeXR - no re-attaching)
+    GLuint fbo = vrMultiViewFBOs[xrMultiViewSwapchainImageIndex];
 
-    // Attach color texture array with MultiView (both eyes in one attachment)
-    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-        textureArray, 0, 0, 2);
-
-    // Re-attach depth texture array (ensure it's in sync with color)
-    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-        vrMultiViewDepthTexArray, 0, 0, 2);
-
-    // Validate FBO on first use
-    if (!vrMultiViewFBOValidated) {
-        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-            VR_Log("stdVR_OpenXR: MultiView FBO incomplete, status 0x%x\n", status);
-            glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
-            XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
-            xrReleaseSwapchainImage(xrMultiViewSwapchain, &releaseInfo);
-            return 0;
-        }
-        vrMultiViewFBOValidated = true;
-        VR_Log("stdVR_OpenXR: MultiView FBO validated successfully\n");
-    }
+    // Bind the FBO (use GL_DRAW_FRAMEBUFFER like RazeXR)
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
 
     // Set viewport to VR render target size
     int width = xrConfigViews[0].recommendedImageRectWidth;
@@ -2434,14 +2443,14 @@ extern "C" int stdVR_OpenXR_PrepareMultiViewBuffer(void)
     glViewport(0, 0, width, height);
 
     // Update tracked state
-    trackedFBO = vrMultiViewFBO;
+    trackedFBO = fbo;
     trackedViewport[0] = 0;
     trackedViewport[1] = 0;
     trackedViewport[2] = width;
     trackedViewport[3] = height;
 
     // Tell std3D to route rendering to MultiView FBO
-    std3D_SetVRTargetFBO(vrMultiViewFBO, width, height);
+    std3D_SetVRTargetFBO(fbo, width, height);
 
     // Enable MultiView direct rendering mode (skip internal FBO)
     std3D_SetMultiViewActive(1);
@@ -2453,8 +2462,8 @@ extern "C" int stdVR_OpenXR_PrepareMultiViewBuffer(void)
     vrMultiViewRenderActive = true;
 
     if (mvPrepareCount <= 10 || mvPrepareCount % 100 == 0) {
-        VR_Log("stdVR_OpenXR_PrepareMultiViewBuffer #%d: texArray=%u fbo=%u %dx%d\n",
-            mvPrepareCount, textureArray, vrMultiViewFBO, width, height);
+        VR_Log("stdVR_OpenXR_PrepareMultiViewBuffer #%d: fbo=%u %dx%d\n",
+            mvPrepareCount, fbo, width, height);
     }
 
     return 1;
@@ -2466,21 +2475,21 @@ extern "C" int stdVR_OpenXR_FinishMultiViewBuffer(void)
         return 0;
     }
 
-    // Clear alpha channel to 1.0 (some runtimes treat alpha=0 as discard)
-    glBindFramebuffer(GL_FRAMEBUFFER, vrMultiViewFBO);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    // Get current FBO
+    GLuint fbo = vrMultiViewFBOs[xrMultiViewSwapchainImageIndex];
+
+    // Discard depth buffer so tiler doesn't need to write it back (like RazeXR)
+    const GLenum depthAttachment[1] = {GL_DEPTH_ATTACHMENT};
+    glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 1, depthAttachment);
+
+    // Unbind FBO (like RazeXR - don't detach textures, they stay permanently attached)
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
     // Restore std3D's window FBO routing
     std3D_ClearVRTargetFBO();
 
     // Disable MultiView direct rendering mode
     std3D_ClearMultiViewActive();
-
-    // Detach color texture array from FBO
-    glFramebufferTextureMultiviewOVR(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 0, 0, 0, 2);
 
     // Restore previous FBO and viewport
     glBindFramebuffer(GL_FRAMEBUFFER, previousFBO);
@@ -2501,7 +2510,10 @@ extern "C" int stdVR_OpenXR_FinishMultiViewBuffer(void)
 
 extern "C" int stdVR_OpenXR_GetMultiViewFBO(void)
 {
-    return vrMultiViewRenderActive ? (int)vrMultiViewFBO : 0;
+    if (!vrMultiViewRenderActive || xrMultiViewSwapchainImageIndex >= vrMultiViewFBOs.size()) {
+        return 0;
+    }
+    return (int)vrMultiViewFBOs[xrMultiViewSwapchainImageIndex];
 }
 
 // Get stereo eye offsets for MultiView rendering

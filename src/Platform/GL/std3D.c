@@ -4806,11 +4806,15 @@ void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices)
     }
 
     // Update view matrices UBO (2 x mat4 = 128 bytes)
+    // Use buffer orphaning (glBufferData with NULL) before glBufferSubData to avoid
+    // race conditions on tiled GPUs where the GPU may still be reading the old data
     glBindBuffer(GL_UNIFORM_BUFFER, std3D_viewMatricesUBO);
+    glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, 2 * 16 * sizeof(float), viewMatrices);
 
     // Update projection matrices UBO (2 x mat4 = 128 bytes)
     glBindBuffer(GL_UNIFORM_BUFFER, std3D_projMatricesUBO);
+    glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, 2 * 16 * sizeof(float), projMatrices);
 
     glBindBuffer(GL_UNIFORM_BUFFER, 0);

@@ -37,12 +37,8 @@ void main(void)
 #ifdef MULTIVIEW_ENABLED
     // Apply stereo parallax using MVP's original depth
     // Parallax should be inversely proportional to depth (near=more, far=less)
-    float eyeOffset;
-    if (gl_ViewID_OVR == 0u) {
-        eyeOffset = u_viewMatrices[0][3][0];
-    } else {
-        eyeOffset = u_viewMatrices[1][3][0];
-    }
+    // Use direct array indexing (not if-else) to avoid tiled GPU issues on Pico
+    float eyeOffset = u_viewMatrices[gl_ViewID_OVR][3][0];
     // Divide by mvpDepth for proper parallax (larger depth = smaller offset)
     pos.x += eyeOffset / (mvpDepth + 0.0001);
 #endif
