@@ -13,6 +13,7 @@
 #include "World/jkPlayer.h"
 #include "Dss/sithDSSThing.h"
 #include "General/stdMath.h"
+#include "Platform/VR/stdVR.h"
 #include "jk.h"
 
 int sithSoundMixer_Startup()
@@ -859,7 +860,19 @@ void sithSoundMixer_Tick(flex_t deltaSecs)
     }
     //printf("--- %u\n", sithSoundMixer_activeChannels);
     rdVector_Scale3(&tmp, &sithCamera_currentCamera->vec3_1, 10.0);
-    stdSound_SetPositionOrientation(&tmp, &sithCamera_currentCamera->viewMat.lvec, &sithCamera_currentCamera->viewMat.uvec);
+
+#ifdef QOL_IMPROVEMENTS
+    // Added: In VR, use HMD-combined orientation for the audio listener
+    // so 3D audio rotates with head movement
+    if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+        rdMatrix34 hmdView;
+        stdVR_CombineCameraWithHMD(&sithCamera_currentCamera->viewMat, &hmdView);
+        stdSound_SetPositionOrientation(&tmp, &hmdView.lvec, &hmdView.uvec);
+    } else
+#endif
+    {
+        stdSound_SetPositionOrientation(&tmp, &sithCamera_currentCamera->viewMat.lvec, &sithCamera_currentCamera->viewMat.uvec);
+    }
 }
 
 void sithSoundMixer_TickPlayingSound(sithPlayingSound *sound, flex_t deltaSecs)
