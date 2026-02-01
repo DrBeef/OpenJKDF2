@@ -1,0 +1,996 @@
+#include "stdVR_Map3D.h"
+
+#ifdef PLATFORM_VR
+
+#include "stdPlatform.h"
+#include "World/sithSector.h"
+#include "World/sithSurface.h"
+#include "World/sithWorld.h"
+#include "World/sithThing.h"
+#include "AI/sithAIClass.h"
+#include "Gameplay/sithPlayer.h"
+#include "Engine/sithRender.h"
+#include "Engine/sithCamera.h"
+#include "Engine/rdCamera.h"
+#include "Primitives/rdMath.h"
+#include "Primitives/rdMatrix.h"
+#include "stdVR.h"
+
+#include <math.h>
+
+// GLES3 for direct line rendering
+#ifdef TARGET_ANDROID_NATIVE_GLES
+#include <GLES3/gl3.h>
+#else
+#include <GL/glew.h>
+#endif
+
+// Simple line shader for VR map rendering
+static GLuint stdVR_map3DShaderProgram = 0;
+static GLuint stdVR_map3DVertexBuffer = 0;
+static GLuint stdVR_map3DVertexArray = 0;  // VAO required for GLES3
+static GLint stdVR_map3DUniformMVP = -1;
+static int stdVR_map3DShaderInitted = 0;
+
+// Vertex data for line rendering (position + color)
+typedef struct {
+    float x, y, z;
+    float r, g, b, a;
+} stdVR_Map3DVertex;
+
+#define STDVR_MAP3D_MAX_VERTICES (STDVR_MAP3D_MAX_LINES * 2)
+static stdVR_Map3DVertex stdVR_map3DVertices[STDVR_MAP3D_MAX_VERTICES];
+
+// Map state
+static stdVR_Map3DState stdVR_map3DState = {0};
+
+// Line buffer
+static stdVR_Map3DLine stdVR_map3DLines[STDVR_MAP3D_MAX_LINES];
+static int stdVR_map3DNumLines = 0;
+
+// Depth-based color gradient settings (game units - levels use small coordinates)
+static float stdVR_map3DGradientNear = 0.0f;     // Distance where green is brightest
+static float stdVR_map3DGradientFar = 10.0f;     // Distance where green reaches minimum
+static uint8_t stdVR_map3DColorNear = 0xFF;      // Green channel value at near distance (255)
+static uint8_t stdVR_map3DColorFar = 0x60;       // Green channel value at far distance (80)
+
+// Configuration (in game units)
+// Note: Level coordinates are typically small (single digits), player height ~0.12 units
+static float stdVR_map3DDistance = 0.5f;    // Distance from player (game units)
+static float stdVR_map3DHeight = -0.1f;     // Height below eye level (game units)
+static float stdVR_map3DDefaultScale = 0.3f; // Scale factor - keep map reasonably sized
+
+// Player look direction for positioning map in front of player
+static rdVector3 stdVR_map3DLookDir = {0};
+
+// Map rotation (controlled by left thumbstick when map is visible)
+static float stdVR_map3DRotation = 0.0f;  // Rotation angle in degrees
+
+// Map zoom (controlled by right thumbstick Y when map is visible)
+static float stdVR_map3DZoom = 1.0f;  // Zoom multiplier (1.0 = default)
+#define STDVR_MAP3D_ZOOM_MIN 0.1f
+#define STDVR_MAP3D_ZOOM_MAX 8.0f
+
+// Two-handed gesture state for map manipulation
+static int stdVR_map3DGestureActive = 0;
+static float stdVR_map3DGestureStartDist = 0.0f;      // Initial distance between controllers
+static float stdVR_map3DGestureStartAngle = 0.0f;     // Initial angle between controllers (horizontal)
+static float stdVR_map3DGestureStartZoom = 1.0f;      // Zoom when gesture started
+static float stdVR_map3DGestureStartRotation = 0.0f;  // Rotation when gesture started
+static rdVector3 stdVR_map3DGestureStartMidpoint = {0}; // Midpoint when gesture started
+static rdVector3 stdVR_map3DGestureStartAnchor = {0}; // Anchor position when gesture started
+
+// Map anchor position in JKDF2 tracking space (world-fixed)
+static rdVector3 stdVR_map3DAnchorPos = {0};  // Where the map center is in JKDF2 coords
+static int stdVR_map3DAnchorSet = 0;          // Has anchor been initialized?
+
+// Tick counter for sector visit tracking
+static int stdVR_map3DRenderTick = 0;
+
+// Forward declarations
+static void stdVR_Map3D_CollectSectorEdges(sithSector* pSector, int depth);
+static void stdVR_Map3D_CollectSurfaceEdges(sithSector* pSector, sithSurface* pSurface);
+static void stdVR_Map3D_AddLine(rdVector3* v1, rdVector3* v2, uint32_t color);
+static uint32_t stdVR_Map3D_GetDepthColor(float depth);
+static void stdVR_Map3D_TransformToWorld(rdVector3* pOut, rdVector3* pIn);
+static void stdVR_Map3D_InitShader(void);
+static void stdVR_Map3D_ShutdownShader(void);
+
+// Vertex shader for colored lines - MultiView compatible with per-eye MVP
+static const char* stdVR_map3DVertexShaderSrc =
+#ifdef TARGET_ANDROID_NATIVE_GLES
+    "#version 300 es\n"
+    "#extension GL_OVR_multiview2 : enable\n"
+    "#define NUM_VIEWS 2\n"
+    "layout(num_views = NUM_VIEWS) in;\n"
+    "precision highp float;\n"
+    "layout(location = 0) in vec3 aPos;\n"
+    "layout(location = 1) in vec4 aColor;\n"
+    "uniform mat4 uMVP[2];\n"  // Per-eye MVP matrices
+    "out vec4 vColor;\n"
+    "void main() {\n"
+    "    gl_Position = uMVP[gl_ViewID_OVR] * vec4(aPos, 1.0);\n"
+    "    vColor = aColor;\n"
+    "}\n";
+#else
+    "#version 330 core\n"
+    "layout(location = 0) in vec3 aPos;\n"
+    "layout(location = 1) in vec4 aColor;\n"
+    "uniform mat4 uMVP[2];\n"
+    "uniform int uEyeIndex;\n"
+    "out vec4 vColor;\n"
+    "void main() {\n"
+    "    gl_Position = uMVP[uEyeIndex] * vec4(aPos, 1.0);\n"
+    "    vColor = aColor;\n"
+    "}\n";
+#endif
+
+// Fragment shader for colored lines
+static const char* stdVR_map3DFragmentShaderSrc =
+#ifdef TARGET_ANDROID_NATIVE_GLES
+    "#version 300 es\n"
+    "precision highp float;\n"
+    "in vec4 vColor;\n"
+    "out vec4 FragColor;\n"
+    "void main() {\n"
+    "    FragColor = vColor;\n"
+    "}\n";
+#else
+    "#version 330 core\n"
+    "in vec4 vColor;\n"
+    "out vec4 FragColor;\n"
+    "void main() {\n"
+    "    FragColor = vColor;\n"
+    "}\n";
+#endif
+
+static void stdVR_Map3D_InitShader(void)
+{
+    if (stdVR_map3DShaderInitted) return;
+
+    // Compile vertex shader
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &stdVR_map3DVertexShaderSrc, NULL);
+    glCompileShader(vertexShader);
+
+    GLint success;
+    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetShaderInfoLog(vertexShader, 512, NULL, infoLog);
+        stdPlatform_Printf("stdVR_Map3D: Vertex shader compile error: %s\n", infoLog);
+        return;
+    }
+
+    // Compile fragment shader
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &stdVR_map3DFragmentShaderSrc, NULL);
+    glCompileShader(fragmentShader);
+
+    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetShaderInfoLog(fragmentShader, 512, NULL, infoLog);
+        stdPlatform_Printf("stdVR_Map3D: Fragment shader compile error: %s\n", infoLog);
+        glDeleteShader(vertexShader);
+        return;
+    }
+
+    // Link program
+    stdVR_map3DShaderProgram = glCreateProgram();
+    glAttachShader(stdVR_map3DShaderProgram, vertexShader);
+    glAttachShader(stdVR_map3DShaderProgram, fragmentShader);
+    glLinkProgram(stdVR_map3DShaderProgram);
+
+    glGetProgramiv(stdVR_map3DShaderProgram, GL_LINK_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetProgramInfoLog(stdVR_map3DShaderProgram, 512, NULL, infoLog);
+        stdPlatform_Printf("stdVR_Map3D: Shader program link error: %s\n", infoLog);
+        glDeleteShader(vertexShader);
+        glDeleteShader(fragmentShader);
+        stdVR_map3DShaderProgram = 0;
+        return;
+    }
+
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
+
+    // Get uniform location for MVP array
+    stdVR_map3DUniformMVP = glGetUniformLocation(stdVR_map3DShaderProgram, "uMVP");
+
+    // Create VAO (required for GLES3)
+    glGenVertexArrays(1, &stdVR_map3DVertexArray);
+    glBindVertexArray(stdVR_map3DVertexArray);
+
+    // Create vertex buffer
+    glGenBuffers(1, &stdVR_map3DVertexBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, stdVR_map3DVertexBuffer);
+
+    // Set up vertex attributes in the VAO
+    glEnableVertexAttribArray(0);  // aPos
+    glEnableVertexAttribArray(1);  // aColor
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(stdVR_Map3DVertex), (void*)0);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(stdVR_Map3DVertex), (void*)(3 * sizeof(float)));
+
+    // Unbind VAO
+    glBindVertexArray(0);
+
+    stdVR_map3DShaderInitted = 1;
+    stdPlatform_Printf("stdVR_Map3D: Shader initialized (MVP uniform=%d, VAO=%u)\n",
+        stdVR_map3DUniformMVP, stdVR_map3DVertexArray);
+}
+
+static void stdVR_Map3D_ShutdownShader(void)
+{
+    if (stdVR_map3DVertexArray) {
+        glDeleteVertexArrays(1, &stdVR_map3DVertexArray);
+        stdVR_map3DVertexArray = 0;
+    }
+    if (stdVR_map3DVertexBuffer) {
+        glDeleteBuffers(1, &stdVR_map3DVertexBuffer);
+        stdVR_map3DVertexBuffer = 0;
+    }
+    if (stdVR_map3DShaderProgram) {
+        glDeleteProgram(stdVR_map3DShaderProgram);
+        stdVR_map3DShaderProgram = 0;
+    }
+    stdVR_map3DShaderInitted = 0;
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+void stdVR_Map3D_Startup(void)
+{
+    memset(&stdVR_map3DState, 0, sizeof(stdVR_map3DState));
+    stdVR_map3DState.scale = stdVR_map3DDefaultScale;
+    stdVR_map3DState.position.x = 0.0f;
+    stdVR_map3DState.position.y = stdVR_map3DHeight;
+    stdVR_map3DState.position.z = 0.0f;
+    stdVR_map3DState.bInitialized = 1;
+
+    stdPlatform_Printf("stdVR_Map3D: Initialized (scale=%.3f, dist=%.1f, height=%.1f)\n",
+        stdVR_map3DState.scale, stdVR_map3DDistance, stdVR_map3DHeight);
+}
+
+void stdVR_Map3D_Shutdown(void)
+{
+    stdVR_Map3D_ShutdownShader();
+    stdVR_map3DState.bInitialized = 0;
+    stdVR_map3DState.bEnabled = 0;
+    stdVR_map3DNumLines = 0;
+}
+
+void stdVR_Map3D_Toggle(void)
+{
+    stdVR_map3DState.bEnabled = !stdVR_map3DState.bEnabled;
+
+    if (stdVR_map3DState.bEnabled) {
+        // Initialize anchor position in front of the user when map is enabled
+        // Get current head pose to place map relative to where user is looking
+        rdMatrix34 eyePose;
+        stdVR_GetEyeViewMatrix(0, &eyePose);
+
+        // Place anchor 0.8m in front of the head along the look direction
+        // eyePose is in JKDF2 space: scale=position, lvec=forward direction
+        float mapDistance = 0.8f;
+        stdVR_map3DAnchorPos.x = eyePose.scale.x + eyePose.lvec.x * mapDistance;
+        stdVR_map3DAnchorPos.y = eyePose.scale.y + eyePose.lvec.y * mapDistance;
+        stdVR_map3DAnchorPos.z = eyePose.scale.z + eyePose.lvec.z * mapDistance;
+
+        stdVR_map3DAnchorSet = 1;
+        stdVR_map3DRotation = 0.0f;  // Reset rotation
+        stdVR_map3DZoom = 1.0f;      // Reset zoom
+
+        stdPlatform_Printf("stdVR_Map3D: HeadPos=(%.2f,%.2f,%.2f) Lvec=(%.2f,%.2f,%.2f)\n",
+            eyePose.scale.x, eyePose.scale.y, eyePose.scale.z,
+            eyePose.lvec.x, eyePose.lvec.y, eyePose.lvec.z);
+        stdPlatform_Printf("stdVR_Map3D: Anchor set at %.2f, %.2f, %.2f (JKDF2 space)\n",
+            stdVR_map3DAnchorPos.x, stdVR_map3DAnchorPos.y, stdVR_map3DAnchorPos.z);
+    }
+
+    stdPlatform_Printf("stdVR_Map3D: %s\n", stdVR_map3DState.bEnabled ? "Enabled" : "Disabled");
+}
+
+int stdVR_Map3D_IsVisible(void)
+{
+    return stdVR_map3DState.bEnabled;
+}
+
+void stdVR_Map3D_SetScale(float scale)
+{
+    stdVR_map3DState.scale = scale;
+}
+
+void stdVR_Map3D_SetDistance(float distance)
+{
+    stdVR_map3DDistance = distance;
+}
+
+void stdVR_Map3D_SetHeight(float height)
+{
+    stdVR_map3DHeight = height;
+    stdVR_map3DState.position.y = height;
+}
+
+void stdVR_Map3D_Rotate(float deltaAngle)
+{
+    stdVR_map3DRotation += deltaAngle;
+    // Keep in 0-360 range
+    while (stdVR_map3DRotation >= 360.0f) stdVR_map3DRotation -= 360.0f;
+    while (stdVR_map3DRotation < 0.0f) stdVR_map3DRotation += 360.0f;
+}
+
+void stdVR_Map3D_Zoom(float deltaZoom)
+{
+    stdVR_map3DZoom *= (1.0f + deltaZoom);
+    // Clamp to valid range
+    if (stdVR_map3DZoom < STDVR_MAP3D_ZOOM_MIN) stdVR_map3DZoom = STDVR_MAP3D_ZOOM_MIN;
+    if (stdVR_map3DZoom > STDVR_MAP3D_ZOOM_MAX) stdVR_map3DZoom = STDVR_MAP3D_ZOOM_MAX;
+}
+
+void stdVR_Map3D_ProcessGestures(int bothGripsHeld, rdVector3* pLeftPos, rdVector3* pRightPos)
+{
+    if (!stdVR_map3DState.bEnabled) {
+        stdVR_map3DGestureActive = 0;
+        return;
+    }
+
+    if (bothGripsHeld && pLeftPos && pRightPos) {
+        // Controller positions are in JKDF2 space: X=right, Y=forward, Z=up
+        // Calculate horizontal distance between controllers (XY plane, ignore Z/vertical)
+        float dx = pRightPos->x - pLeftPos->x;
+        float dy = pRightPos->y - pLeftPos->y;
+        float horizontalDist = sqrtf(dx*dx + dy*dy);
+
+        // Also track full 3D distance for scaling
+        float dz = pRightPos->z - pLeftPos->z;
+        float fullDist = sqrtf(dx*dx + dy*dy + dz*dz);
+
+        // Calculate current angle between controllers in horizontal plane only (XY)
+        // This makes rotation only respond to twisting hands, not lifting
+        float currentAngle = atan2f(dx, dy) * (180.0f / 3.14159265f);
+
+        // Calculate current midpoint (in JKDF2 space)
+        rdVector3 currentMidpoint;
+        currentMidpoint.x = (pLeftPos->x + pRightPos->x) * 0.5f;
+        currentMidpoint.y = (pLeftPos->y + pRightPos->y) * 0.5f;
+        currentMidpoint.z = (pLeftPos->z + pRightPos->z) * 0.5f;
+
+        if (!stdVR_map3DGestureActive) {
+            // Gesture just started - store initial state
+            stdVR_map3DGestureActive = 1;
+            stdVR_map3DGestureStartDist = fullDist;
+            stdVR_map3DGestureStartAngle = currentAngle;
+            stdVR_map3DGestureStartZoom = stdVR_map3DZoom;
+            stdVR_map3DGestureStartRotation = stdVR_map3DRotation;
+            stdVR_map3DGestureStartMidpoint = currentMidpoint;
+            stdVR_map3DGestureStartAnchor = stdVR_map3DAnchorPos;
+        } else {
+            // Gesture ongoing - apply transformations
+
+            // Scale: ratio of current distance to start distance
+            if (stdVR_map3DGestureStartDist > 0.01f) {
+                float scaleRatio = fullDist / stdVR_map3DGestureStartDist;
+                stdVR_map3DZoom = stdVR_map3DGestureStartZoom * scaleRatio;
+                // Clamp zoom
+                if (stdVR_map3DZoom < STDVR_MAP3D_ZOOM_MIN) stdVR_map3DZoom = STDVR_MAP3D_ZOOM_MIN;
+                if (stdVR_map3DZoom > STDVR_MAP3D_ZOOM_MAX) stdVR_map3DZoom = STDVR_MAP3D_ZOOM_MAX;
+            }
+
+            // Rotation: difference in horizontal angle only
+            // Only apply rotation if controllers are reasonably separated horizontally
+            if (horizontalDist > 0.05f) {
+                float angleDelta = currentAngle - stdVR_map3DGestureStartAngle;
+                // Handle angle wraparound
+                while (angleDelta > 180.0f) angleDelta -= 360.0f;
+                while (angleDelta < -180.0f) angleDelta += 360.0f;
+
+                stdVR_map3DRotation = stdVR_map3DGestureStartRotation - angleDelta;
+                // Keep in 0-360 range
+                while (stdVR_map3DRotation >= 360.0f) stdVR_map3DRotation -= 360.0f;
+                while (stdVR_map3DRotation < 0.0f) stdVR_map3DRotation += 360.0f;
+            }
+
+            // Translation: move anchor position in JKDF2 space
+            // Movement is 1:1 with controller movement
+            stdVR_map3DAnchorPos.x = stdVR_map3DGestureStartAnchor.x +
+                (currentMidpoint.x - stdVR_map3DGestureStartMidpoint.x);
+            stdVR_map3DAnchorPos.y = stdVR_map3DGestureStartAnchor.y +
+                (currentMidpoint.y - stdVR_map3DGestureStartMidpoint.y);
+            stdVR_map3DAnchorPos.z = stdVR_map3DGestureStartAnchor.z +
+                (currentMidpoint.z - stdVR_map3DGestureStartMidpoint.z);
+        }
+    } else {
+        // Grips released - anchor position persists in JKDF2 space
+        stdVR_map3DGestureActive = 0;
+    }
+}
+
+int stdVR_Map3D_ShouldPauseGame(void)
+{
+    // Pause game logic when map is visible
+    return stdVR_map3DState.bEnabled && stdVR_map3DState.bInitialized;
+}
+
+// ============================================================================
+// Update - Collect geometry from level
+// ============================================================================
+
+void stdVR_Map3D_Update(void)
+{
+    static int updateDebugCount = 0;
+
+    if (!stdVR_map3DState.bEnabled || !stdVR_map3DState.bInitialized) {
+        return;
+    }
+
+    // Need a valid player and world
+    if (!sithPlayer_pLocalPlayerThing || !sithWorld_pCurrentWorld) {
+        if (updateDebugCount < 5) {
+            updateDebugCount++;
+            stdPlatform_Printf("stdVR_Map3D_Update: No player (%p) or world (%p)\n",
+                sithPlayer_pLocalPlayerThing, sithWorld_pCurrentWorld);
+        }
+        return;
+    }
+
+    sithSector* pPlayerSector = sithPlayer_pLocalPlayerThing->sector;
+    if (!pPlayerSector) {
+        if (updateDebugCount < 5) {
+            updateDebugCount++;
+            stdPlatform_Printf("stdVR_Map3D_Update: No player sector\n");
+        }
+        return;
+    }
+
+    if (updateDebugCount < 5) {
+        updateDebugCount++;
+        stdPlatform_Printf("stdVR_Map3D_Update: sector=%p, flags=0x%x, numSurfaces=%d\n",
+            pPlayerSector, pPlayerSector->flags, pPlayerSector->numSurfaces);
+    }
+
+    // Store player position for centering
+    stdVR_map3DState.playerPos = sithPlayer_pLocalPlayerThing->position;
+
+    // Get player look direction from orientation matrix (lvec is forward)
+    rdMatrix34* pOrient = &sithPlayer_pLocalPlayerThing->lookOrientation;
+    stdVR_map3DLookDir = pOrient->lvec;
+
+    // Get player yaw from look orientation
+    stdVR_map3DState.playerYaw = atan2f(pOrient->lvec.x, pOrient->lvec.y) * (180.0f / 3.14159265f);
+
+    // Clear line buffer
+    stdVR_map3DNumLines = 0;
+
+    // Increment tick for visit tracking
+    stdVR_map3DRenderTick++;
+
+    // Recursively collect edges from sectors
+    stdVR_Map3D_CollectSectorEdges(pPlayerSector, 0);
+
+    // Add player position marker (bright yellow cross + direction arrow)
+    {
+        rdVector3 playerPos = stdVR_map3DState.playerPos;
+        float markerSize = 0.5f;  // Size in game units
+        uint32_t markerColor = 0xFF00FFFF;  // Bright yellow (AABBGGRR)
+        uint32_t arrowColor = 0xFF0000FF;   // Red for direction
+
+        // Cross at player position
+        rdVector3 v1, v2;
+
+        // Horizontal line (X axis)
+        v1.x = playerPos.x - markerSize;
+        v1.y = playerPos.y;
+        v1.z = playerPos.z;
+        v2.x = playerPos.x + markerSize;
+        v2.y = playerPos.y;
+        v2.z = playerPos.z;
+        stdVR_Map3D_AddLine(&v1, &v2, markerColor);
+
+        // Vertical line (Y axis in game = forward)
+        v1.x = playerPos.x;
+        v1.y = playerPos.y - markerSize;
+        v1.z = playerPos.z;
+        v2.x = playerPos.x;
+        v2.y = playerPos.y + markerSize;
+        v2.z = playerPos.z;
+        stdVR_Map3D_AddLine(&v1, &v2, markerColor);
+
+        // Direction arrow (pointing where player is facing)
+        float yawRad = stdVR_map3DState.playerYaw * (3.14159265f / 180.0f);
+        float arrowLen = markerSize * 1.5f;
+        float arrowDirX = sinf(yawRad) * arrowLen;
+        float arrowDirY = cosf(yawRad) * arrowLen;
+
+        v1 = playerPos;
+        v2.x = playerPos.x + arrowDirX;
+        v2.y = playerPos.y + arrowDirY;
+        v2.z = playerPos.z;
+        stdVR_Map3D_AddLine(&v1, &v2, arrowColor);
+
+        // Arrow head - lines pointing back from the tip at ~150 degrees from forward
+        float headSize = markerSize * 0.4f;
+        float headAngle = 0.5f;  // ~30 degrees from the reverse direction
+        float headAngle1 = yawRad + 3.14159265f - headAngle;  // back-left
+        float headAngle2 = yawRad + 3.14159265f + headAngle;  // back-right
+
+        v1 = v2;  // Arrow tip
+        rdVector3 v3;
+        v3.x = v2.x + sinf(headAngle1) * headSize;
+        v3.y = v2.y + cosf(headAngle1) * headSize;
+        v3.z = v2.z;
+        stdVR_Map3D_AddLine(&v1, &v3, arrowColor);
+
+        v3.x = v2.x + sinf(headAngle2) * headSize;
+        v3.y = v2.y + cosf(headAngle2) * headSize;
+        v3.z = v2.z;
+        stdVR_Map3D_AddLine(&v1, &v3, arrowColor);
+    }
+
+    // Draw enemy markers (red diamonds for hostile living actors in sectors visited this frame)
+    if (sithWorld_pCurrentWorld && sithWorld_pCurrentWorld->things) {
+        uint32_t enemyColor = 0xFF0000FF;  // Bright red (AABBGGRR)
+        float enemyMarkerSize = 0.12f;      // Size in game units
+
+        for (int i = 0; i < sithWorld_pCurrentWorld->numThingsLoaded; i++) {
+            sithThing* pThing = &sithWorld_pCurrentWorld->things[i];
+
+            // Skip non-actors and dead/disabled things
+            if (pThing->type != SITH_THING_ACTOR) continue;
+            if (pThing->thingflags & (SITH_TF_DEAD | SITH_TF_DISABLED)) continue;
+            if (!pThing->sector) continue;  // Not in world
+
+            // Skip things in sectors not visited during this map render
+            if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
+
+            // Skip friendly/neutral NPCs (no AIClass or alignment >= 0)
+            // Hostile enemies have negative alignment
+            if (!pThing->pAIClass || pThing->pAIClass->alignment >= 0.0f) continue;
+
+            // Draw diamond marker at enemy position
+            rdVector3 pos = pThing->position;
+            rdVector3 v1, v2;
+
+            // Diamond shape: 4 lines forming an X rotated 45 degrees
+            v1.x = pos.x; v1.y = pos.y + enemyMarkerSize; v1.z = pos.z;
+            v2.x = pos.x + enemyMarkerSize; v2.y = pos.y; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
+
+            v1.x = pos.x + enemyMarkerSize; v1.y = pos.y; v1.z = pos.z;
+            v2.x = pos.x; v2.y = pos.y - enemyMarkerSize; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
+
+            v1.x = pos.x; v1.y = pos.y - enemyMarkerSize; v1.z = pos.z;
+            v2.x = pos.x - enemyMarkerSize; v2.y = pos.y; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
+
+            v1.x = pos.x - enemyMarkerSize; v1.y = pos.y; v1.z = pos.z;
+            v2.x = pos.x; v2.y = pos.y + enemyMarkerSize; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
+        }
+    }
+
+    // Draw pickup markers (blue diamonds for uncollected items in sectors visited this frame)
+    if (sithWorld_pCurrentWorld && sithWorld_pCurrentWorld->things) {
+        uint32_t pickupColor = 0xFFFF8000;  // Light blue (AABBGGRR)
+        float pickupMarkerSize = 0.08f;      // Smaller than enemy markers
+
+        for (int i = 0; i < sithWorld_pCurrentWorld->numThingsLoaded; i++) {
+            sithThing* pThing = &sithWorld_pCurrentWorld->things[i];
+
+            // Skip non-items and disabled things
+            if (pThing->type != SITH_THING_ITEM) continue;
+            if (pThing->thingflags & SITH_TF_DISABLED) continue;
+            if (!pThing->sector) continue;  // Not in world
+
+            // Skip things in sectors not visited during this map render
+            if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
+
+            // Draw small diamond marker at pickup position
+            rdVector3 pos = pThing->position;
+            rdVector3 v1, v2;
+
+            v1.x = pos.x; v1.y = pos.y + pickupMarkerSize; v1.z = pos.z;
+            v2.x = pos.x + pickupMarkerSize; v2.y = pos.y; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+
+            v1.x = pos.x + pickupMarkerSize; v1.y = pos.y; v1.z = pos.z;
+            v2.x = pos.x; v2.y = pos.y - pickupMarkerSize; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+
+            v1.x = pos.x; v1.y = pos.y - pickupMarkerSize; v1.z = pos.z;
+            v2.x = pos.x - pickupMarkerSize; v2.y = pos.y; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+
+            v1.x = pos.x - pickupMarkerSize; v1.y = pos.y; v1.z = pos.z;
+            v2.x = pos.x; v2.y = pos.y + pickupMarkerSize; v2.z = pos.z;
+            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+        }
+    }
+
+    // Debug: log how many lines collected
+    static int collectDebugCount = 0;
+    if (collectDebugCount < 5) {
+        collectDebugCount++;
+        stdPlatform_Printf("stdVR_Map3D_Update: Collected %d lines\n", stdVR_map3DNumLines);
+    }
+}
+
+// ============================================================================
+// Geometry Collection
+// ============================================================================
+
+static void stdVR_Map3D_CollectSectorEdges(sithSector* pSector, int depth)
+{
+    if (!pSector || depth > STDVR_MAP3D_MAX_DEPTH) {
+        return;
+    }
+
+    // Skip if already visited this frame
+    if (pSector->renderTick == stdVR_map3DRenderTick) {
+        return;
+    }
+    pSector->renderTick = stdVR_map3DRenderTick;
+
+    // Check visibility flags (unless showing all for debug)
+    if (!(pSector->flags & SITH_SECTOR_AUTOMAPVISIBLE)) {
+        // Still recurse through adjoins to find visible sectors
+        for (int i = 0; i < pSector->numSurfaces; i++) {
+            sithSurface* pSurface = &pSector->surfaces[i];
+            if (pSurface->adjoin && pSurface->adjoin->sector) {
+                stdVR_Map3D_CollectSectorEdges(pSurface->adjoin->sector, depth + 1);
+            }
+        }
+        return;
+    }
+
+    // Skip hidden sectors
+    if (pSector->flags & SITH_SECTOR_AUTOMAPHIDE) {
+        return;
+    }
+
+    // Collect edges from all non-adjoin surfaces (walls, floors, ceilings)
+    // Adjoin surfaces are portals to other sectors - skip them to avoid duplicate edges
+    for (int i = 0; i < pSector->numSurfaces; i++) {
+        sithSurface* pSurface = &pSector->surfaces[i];
+
+        // Skip adjoin surfaces (portals) - they don't have visible geometry
+        if (pSurface->adjoin) {
+            continue;
+        }
+
+        // Draw all solid surfaces (walls, floors, ceilings)
+        stdVR_Map3D_CollectSurfaceEdges(pSector, pSurface);
+    }
+
+    // Recurse to adjacent sectors
+    for (int i = 0; i < pSector->numSurfaces; i++) {
+        sithSurface* pSurface = &pSector->surfaces[i];
+        if (pSurface->adjoin && pSurface->adjoin->sector) {
+            stdVR_Map3D_CollectSectorEdges(pSurface->adjoin->sector, depth + 1);
+        }
+    }
+}
+
+static void stdVR_Map3D_CollectSurfaceEdges(sithSector* pSector, sithSurface* pSurface)
+{
+    int numVerts = pSurface->surfaceInfo.face.numVertices;
+    if (!pSector || !pSurface || numVerts < 2) {
+        return;
+    }
+
+    // Get vertex buffer from world
+    rdVector3* pVertices = sithWorld_pCurrentWorld->vertices;
+    if (!pVertices) {
+        return;
+    }
+
+    // Get vertex index array from surface
+    int* pVertexIdxs = pSurface->surfaceInfo.face.vertexPosIdx;
+    if (!pVertexIdxs) {
+        return;
+    }
+
+    // Draw edges around the surface
+    for (int i = 0; i < numVerts; i++) {
+        int idx1 = pVertexIdxs[i];
+        int idx2 = pVertexIdxs[(i + 1) % numVerts];
+
+        rdVector3 v1 = pVertices[idx1];
+        rdVector3 v2 = pVertices[idx2];
+
+        // Calculate depth as distance from player (using midpoint)
+        rdVector3 mid;
+        mid.x = (v1.x + v2.x) * 0.5f - stdVR_map3DState.playerPos.x;
+        mid.y = (v1.y + v2.y) * 0.5f - stdVR_map3DState.playerPos.y;
+        mid.z = (v1.z + v2.z) * 0.5f - stdVR_map3DState.playerPos.z;
+        float depth = sqrtf(mid.x * mid.x + mid.y * mid.y + mid.z * mid.z);
+
+        uint32_t color = stdVR_Map3D_GetDepthColor(depth);
+
+        stdVR_Map3D_AddLine(&v1, &v2, color);
+    }
+}
+
+static void stdVR_Map3D_AddLine(rdVector3* v1, rdVector3* v2, uint32_t color)
+{
+    if (stdVR_map3DNumLines >= STDVR_MAP3D_MAX_LINES) {
+        return;
+    }
+
+    stdVR_Map3DLine* pLine = &stdVR_map3DLines[stdVR_map3DNumLines++];
+    pLine->start = *v1;
+    pLine->end = *v2;
+    pLine->color = color;
+}
+
+static uint32_t stdVR_Map3D_GetDepthColor(float depth)
+{
+    // Smooth gradient from bright green (near) to dark green (far)
+    float t;
+    if (depth <= stdVR_map3DGradientNear) {
+        t = 0.0f;  // Full brightness
+    } else if (depth >= stdVR_map3DGradientFar) {
+        t = 1.0f;  // Minimum brightness
+    } else {
+        // Smooth interpolation between near and far
+        t = (depth - stdVR_map3DGradientNear) / (stdVR_map3DGradientFar - stdVR_map3DGradientNear);
+    }
+
+    // Interpolate green channel value
+    uint8_t green = (uint8_t)(stdVR_map3DColorNear + t * (stdVR_map3DColorFar - stdVR_map3DColorNear));
+
+    // Return color in AABBGGRR format (full alpha, no red/blue, interpolated green)
+    return (0xFF << 24) | (green << 8);
+}
+
+// ============================================================================
+// Rendering
+// ============================================================================
+
+// Transform game vertex to JKDF2 tracking space (model transform only)
+// Coordinate conversion to OpenGL happens in the view matrix
+static void stdVR_Map3D_TransformToWorld(rdVector3* pOut, rdVector3* pIn)
+{
+    // Center on player position (in game coordinates)
+    float x = pIn->x - stdVR_map3DState.playerPos.x;
+    float y = pIn->y - stdVR_map3DState.playerPos.y;
+    float z = pIn->z - stdVR_map3DState.playerPos.z;
+
+    // Apply user rotation around Z axis (vertical axis in game coords)
+    float rotRad = stdVR_map3DRotation * (3.14159265f / 180.0f);
+    float cosR = cosf(rotRad);
+    float sinR = sinf(rotRad);
+    float rx = x * cosR - y * sinR;
+    float ry = x * sinR + y * cosR;
+    x = rx;
+    y = ry;
+
+    // Apply scale (shrink the map to a reasonable size in meters)
+    float mapScale = 0.035f * stdVR_map3DZoom;
+    x *= mapScale;
+    y *= mapScale;
+    z *= mapScale;
+
+    // Add anchor offset to get world position (JKDF2 tracking space)
+    // Keep in JKDF2 coords - view matrix will handle conversion
+    pOut->x = stdVR_map3DAnchorPos.x + x;
+    pOut->y = stdVR_map3DAnchorPos.y + y;
+    pOut->z = stdVR_map3DAnchorPos.z + z;
+}
+
+// Helper to multiply two 4x4 matrices (column-major): result = a * b
+static void stdVR_Map3D_MultMatrix44(float* result, float* a, float* b)
+{
+    float temp[16];
+    for (int col = 0; col < 4; col++) {
+        for (int row = 0; row < 4; row++) {
+            temp[col * 4 + row] =
+                a[0 * 4 + row] * b[col * 4 + 0] +
+                a[1 * 4 + row] * b[col * 4 + 1] +
+                a[2 * 4 + row] * b[col * 4 + 2] +
+                a[3 * 4 + row] * b[col * 4 + 3];
+        }
+    }
+    memcpy(result, temp, 16 * sizeof(float));
+}
+
+void stdVR_Map3D_GetProjectionMatrix(float* pOut16, float zNear, float zFar)
+{
+    // Build asymmetric projection matrix from FOV tangents
+    float fovLeft = stdVR_clientInfo.eyes[0].fovLeft;
+    float fovRight = stdVR_clientInfo.eyes[1].fovRight;
+    float fovUp = stdVR_clientInfo.eyes[0].fovUp;
+    float fovDown = stdVR_clientInfo.eyes[0].fovDown;
+
+    float left = -fovLeft * zNear;
+    float right = fovRight * zNear;
+    float bottom = -fovDown * zNear;
+    float top = fovUp * zNear;
+
+    float width = right - left;
+    float height = top - bottom;
+
+    // Column-major 4x4 perspective matrix
+    memset(pOut16, 0, 16 * sizeof(float));
+    pOut16[0] = 2.0f * zNear / width;
+    pOut16[5] = 2.0f * zNear / height;
+    pOut16[8] = (right + left) / width;
+    pOut16[9] = (top + bottom) / height;
+    pOut16[10] = -(zFar + zNear) / (zFar - zNear);
+    pOut16[11] = -1.0f;
+    pOut16[14] = -2.0f * zFar * zNear / (zFar - zNear);
+    pOut16[15] = 0.0f;
+}
+
+void stdVR_Map3D_Render(void)
+{
+    if (!stdVR_map3DState.bEnabled || stdVR_map3DNumLines == 0) {
+        return;
+    }
+
+    // Initialize shader on first render
+    if (!stdVR_map3DShaderInitted) {
+        stdVR_Map3D_InitShader();
+        if (!stdVR_map3DShaderInitted) {
+            return;  // Shader init failed
+        }
+    }
+
+    // Build MVP matrices for world-fixed rendering
+    int numVertices = stdVR_map3DNumLines * 2;
+    float mvpMatrices[32];  // 2 x 4x4 = 32 floats
+
+    // Debug logging
+    static int renderDebugCount = 0;
+    if (renderDebugCount < 5) {
+        renderDebugCount++;
+        stdPlatform_Printf("stdVR_Map3D: Anchor=%.2f,%.2f,%.2f numLines=%d\n",
+            stdVR_map3DAnchorPos.x, stdVR_map3DAnchorPos.y, stdVR_map3DAnchorPos.z,
+            stdVR_map3DNumLines);
+    }
+
+    // Get eye poses from VR system (in JKDF2 space)
+    rdMatrix34 eyePoses[2];
+    stdVR_GetEyeViewMatrix(0, &eyePoses[0]);
+    stdVR_GetEyeViewMatrix(1, &eyePoses[1]);
+
+    if (renderDebugCount <= 5) {
+        stdPlatform_Printf("stdVR_Map3D: Eye0Pos=%.2f,%.2f,%.2f rvec=%.2f,%.2f,%.2f\n",
+            eyePoses[0].scale.x, eyePoses[0].scale.y, eyePoses[0].scale.z,
+            eyePoses[0].rvec.x, eyePoses[0].rvec.y, eyePoses[0].rvec.z);
+    }
+
+    // Transform vertices to OpenGL world space (model transform already applied)
+    for (int i = 0; i < stdVR_map3DNumLines; i++) {
+        stdVR_Map3DLine* pLine = &stdVR_map3DLines[i];
+
+        rdVector3 start, end;
+        stdVR_Map3D_TransformToWorld(&start, &pLine->start);
+        stdVR_Map3D_TransformToWorld(&end, &pLine->end);
+
+        float r = ((pLine->color >> 0) & 0xFF) / 255.0f;
+        float g = ((pLine->color >> 8) & 0xFF) / 255.0f;
+        float b = ((pLine->color >> 16) & 0xFF) / 255.0f;
+        float a = ((pLine->color >> 24) & 0xFF) / 255.0f;
+        if (a < 0.1f) a = 1.0f;
+
+        stdVR_map3DVertices[i * 2 + 0].x = start.x;
+        stdVR_map3DVertices[i * 2 + 0].y = start.y;
+        stdVR_map3DVertices[i * 2 + 0].z = start.z;
+        stdVR_map3DVertices[i * 2 + 0].r = r;
+        stdVR_map3DVertices[i * 2 + 0].g = g;
+        stdVR_map3DVertices[i * 2 + 0].b = b;
+        stdVR_map3DVertices[i * 2 + 0].a = a;
+
+        stdVR_map3DVertices[i * 2 + 1].x = end.x;
+        stdVR_map3DVertices[i * 2 + 1].y = end.y;
+        stdVR_map3DVertices[i * 2 + 1].z = end.z;
+        stdVR_map3DVertices[i * 2 + 1].r = r;
+        stdVR_map3DVertices[i * 2 + 1].g = g;
+        stdVR_map3DVertices[i * 2 + 1].b = b;
+        stdVR_map3DVertices[i * 2 + 1].a = a;
+    }
+
+    // Build MVP for each eye
+    // Use symmetric projection + proper view matrix
+    for (int eye = 0; eye < 2; eye++) {
+        float projMat[16];
+        float viewMat[16];
+        float* mvpMat = &mvpMatrices[eye * 16];
+
+        float zNear = 0.05f;
+        float zFar = 50.0f;
+        stdVR_Map3D_GetProjectionMatrix(projMat, zNear, zFar);
+
+        // Build view matrix: JKDF2 view rotation + coordinate conversion
+        // Combined rotation = CoordConvert * JKDF2_ViewRotation
+        // JKDF2 view rotation has rows: rvec, lvec, uvec
+        // After coord convert: rows become rvec, uvec, -lvec
+        rdMatrix34* pEye = &eyePoses[eye];
+        float rx = pEye->rvec.x, ry = pEye->rvec.y, rz = pEye->rvec.z;
+        float fx = pEye->lvec.x, fy = pEye->lvec.y, fz = pEye->lvec.z;
+        float ux = pEye->uvec.x, uy = pEye->uvec.y, uz = pEye->uvec.z;
+        float px = pEye->scale.x, py = pEye->scale.y, pz = pEye->scale.z;
+
+        // Rotation part (column-major): rows are rvec, uvec, -lvec
+        viewMat[0] = rx;   viewMat[4] = ry;   viewMat[8]  = rz;
+        viewMat[1] = ux;   viewMat[5] = uy;   viewMat[9]  = uz;
+        viewMat[2] = -fx;  viewMat[6] = -fy;  viewMat[10] = -fz;
+        viewMat[3] = 0.0f; viewMat[7] = 0.0f; viewMat[11] = 0.0f;
+
+        // Translation: compute eye pos in JKDF2 eye-local, then convert to GL
+        float localX = rx*px + ry*py + rz*pz;  // dot(rvec, pos)
+        float localY = fx*px + fy*py + fz*pz;  // dot(lvec, pos)
+        float localZ = ux*px + uy*py + uz*pz;  // dot(uvec, pos)
+
+        // Convert to OpenGL and negate for view matrix
+        viewMat[12] = -localX;      // GL.x = -JK_local.x
+        viewMat[13] = -localZ;      // GL.y = -JK_local.z
+        viewMat[14] = localY;       // GL.z = JK_local.y (double negative)
+        viewMat[15] = 1.0f;
+
+        // MVP = Projection * View
+        //stdVR_Map3D_MultMatrix44(mvpMat, projMat, viewMat);
+        stdVR_Map3D_MultMatrix44(mvpMat, projMat, viewMat);
+    }
+
+    // Save GL state
+    GLint prevProgram;
+    GLint prevVAO;
+    GLint prevBlend;
+    GLint prevDepthTest;
+    GLint prevDepthMask;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
+    glGetIntegerv(GL_BLEND, &prevBlend);
+    glGetIntegerv(GL_DEPTH_TEST, &prevDepthTest);
+    glGetIntegerv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+
+    // Set up our rendering state
+    glUseProgram(stdVR_map3DShaderProgram);
+
+    // Upload both MVP matrices (array of 2 mat4)
+    glUniformMatrix4fv(stdVR_map3DUniformMVP, 2, GL_FALSE, mvpMatrices);
+
+    // Bind our VAO (vertex attributes are already configured)
+    glBindVertexArray(stdVR_map3DVertexArray);
+
+    // Upload vertex data
+    glBindBuffer(GL_ARRAY_BUFFER, stdVR_map3DVertexBuffer);
+    glBufferData(GL_ARRAY_BUFFER, numVertices * sizeof(stdVR_Map3DVertex),
+                 stdVR_map3DVertices, GL_STREAM_DRAW);
+
+    // Enable blending, disable depth test for HUD-like overlay
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+
+    // Draw lines
+    glDrawArrays(GL_LINES, 0, numVertices);
+
+    // Restore GL state
+    glBindVertexArray(prevVAO);
+    glUseProgram(prevProgram);
+    if (!prevBlend) glDisable(GL_BLEND);
+    if (prevDepthTest) glEnable(GL_DEPTH_TEST);
+    glDepthMask(prevDepthMask);
+
+    // Debug logging
+    static int renderLogCount = 0;
+    if (renderLogCount < 5) {
+        renderLogCount++;
+        stdPlatform_Printf("stdVR_Map3D: Rendered %d lines (%d verts), MVP[0]=(%.2f,%.2f,%.2f,%.2f)\n",
+            stdVR_map3DNumLines, numVertices,
+            mvpMatrices[0], mvpMatrices[5], mvpMatrices[10], mvpMatrices[15]);
+    }
+}
+
+// Note: DrawPlayerMarker removed - rdDebug_DrawLine3 breaks VR MultiView rendering
+// TODO: Add player marker using the custom shader when needed
+
+#endif // PLATFORM_VR

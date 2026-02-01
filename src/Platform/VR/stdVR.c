@@ -107,6 +107,9 @@ int stdVR_Startup(void)
     // Initialize per-weapon offset system
     stdVR_WeaponOffsets_Startup();
 
+    // Initialize 3D map system
+    stdVR_Map3D_Startup();
+
 #ifdef VR_WEAPON_ALIGNMENT_TOOL
     // Initialize alignment tool
     stdVR_AlignmentTool_Startup();
@@ -131,6 +134,9 @@ void stdVR_Shutdown(void)
     }
 
     stdPlatform_Printf("stdVR: Shutting down VR subsystem...\n");
+
+    // Shutdown 3D map system
+    stdVR_Map3D_Shutdown();
 
     // Shutdown per-weapon offset system
     stdVR_WeaponOffsets_Shutdown();
@@ -860,7 +866,7 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
 }
 
 // Combine game camera with HMD center pose (no eye offset, for MultiView center)
-void stdVR_CombineCameraWithCenter(const rdMatrix34* pGameCamera, rdMatrix34* pOut)
+void stdVR_CombineCameraWithHMD(const rdMatrix34* pGameCamera, rdMatrix34* pOut)
 {
     if (!pGameCamera || !pOut) return;
 

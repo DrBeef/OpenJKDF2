@@ -38,6 +38,10 @@
 #include "World/jkPlayer.h"
 #include "Cog/sithCog.h"
 #include "Devices/sithComm.h"
+
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR_Map3D.h"
+#endif
 #include "stdPlatform.h"
 #include "jk.h"
 
@@ -247,6 +251,15 @@ int sithMain_Tick()
 #endif
 
     sithMain_tickStartMs = stdPlatform_GetTimeMsec(); // Added: perf analyzing
+
+#ifdef PLATFORM_VR
+    // Pause game logic when VR 3D map is visible
+    if (stdVR_Map3D_ShouldPauseGame()) {
+        sithTime_Tick();  // Keep time tracking but skip game logic
+        sithMain_tickEndMs = stdPlatform_GetTimeMsec();
+        return 0;
+    }
+#endif
 
     if ( (g_submodeFlags & 8) != 0 )
     {

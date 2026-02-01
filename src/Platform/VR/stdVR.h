@@ -7,6 +7,7 @@
 #include "Platform/VR/stdVR_Types.h"
 #include "Platform/VR/stdVR_WeaponOffsets.h"
 #include "Platform/VR/stdVR_AlignmentTool.h"
+#include "Platform/VR/stdVR_Map3D.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -100,7 +101,7 @@ int stdVR_GetMenuTriggerReleased(void); // Was trigger released this frame
 void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix34* pOut);
 
 // Helper function to combine game camera with HMD center pose (for MultiView)
-void stdVR_CombineCameraWithCenter(const rdMatrix34* pGameCamera, rdMatrix34* pOut);
+void stdVR_CombineCameraWithHMD(const rdMatrix34* pGameCamera, rdMatrix34* pOut);
 
 // Added: Get/set current eye view matrix (for weapon rendering in VR)
 void stdVR_SetCurrentEyeViewMatrix(const rdMatrix34* pMat);

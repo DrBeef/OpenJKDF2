@@ -905,6 +905,12 @@ void jkPlayer_DrawPov()
         VR_Log("=== jkPlayer_DrawPov called #%d, povModel=%p ===\n",
             drawPovCallCount, (void*)playerThings[playerThingIdx].povModel.model3);
     }
+
+    // Don't render weapon when 3D map is visible
+    extern int stdVR_Map3D_IsVisible(void);
+    if (stdVR_Map3D_IsVisible()) {
+        return;
+    }
 #endif
 
     if (!playerThings[playerThingIdx].povModel.model3)

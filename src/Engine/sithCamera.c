@@ -938,7 +938,7 @@ void sithCamera_PrepareFrameVR(void)
     // In VR, update camera position/sector to match HMD center for culling/audio
     if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
         rdMatrix34 hmdView;
-        stdVR_CombineCameraWithCenter(&sithCamera_currentCamera->viewMat, &hmdView);
+        stdVR_CombineCameraWithHMD(&sithCamera_currentCamera->viewMat, &hmdView);
 
         rdVector3 basePos = sithCamera_currentCamera->viewMat.scale;
         sithSector* baseSector = sithCamera_currentCamera->sector;
@@ -1036,7 +1036,7 @@ void sithCamera_SetVRViewMultiView(void)
     // For MultiView, we use the center/head view (no IPD offset)
     // The shader will apply per-eye transforms via gl_ViewID_OVR
     rdMatrix34 centerView;
-    stdVR_CombineCameraWithCenter(&sithCamera_currentCamera->viewMat, &centerView);
+    stdVR_CombineCameraWithHMD(&sithCamera_currentCamera->viewMat, &centerView);
 
     // Store for weapon rendering (center position)
     stdVR_SetCurrentEyeViewMatrix(&centerView);

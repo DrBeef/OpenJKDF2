@@ -381,6 +381,9 @@ int jkGame_Update()
             rdAdvanceFrame();  // This calls std3D_StartScene via rdCache_AdvanceFrame
             sithCamera_PrepareFrameVR();  // Updates camera position, sets rdCamera
 
+            // Added: Update 3D map geometry (collects sector edges once per frame)
+            stdVR_Map3D_Update();
+
 #if defined(TARGET_ANDROID_NATIVE_GLES)  // MultiView for Quest VR
             // === MultiView Path (single-pass stereo rendering) ===
             // Uses GL_OVR_multiview2 to render both eyes in a single draw call.
@@ -403,6 +406,9 @@ int jkGame_Update()
                     // Render scene once - GPU renders to both eye layers
                     sithRender_Draw();
                     jkPlayer_DrawPov();
+
+                    // Added: Render 3D map overlay (uses rdDebug_DrawLine3 which adds to render cache)
+                    stdVR_Map3D_Render();
 
                     // Flush render cache
                     rdCache_Flush();
@@ -442,6 +448,9 @@ int jkGame_Update()
                     // Render scene for this eye
                     sithRender_Draw();
                     jkPlayer_DrawPov();
+
+                    // Added: Render 3D map overlay (uses rdDebug_DrawLine3 which adds to render cache)
+                    stdVR_Map3D_Render();
 
                     // Flush render cache per-eye so triangles are actually drawn to internal FBO
                     // before we blit to VR swapchain. Without this, both eyes get empty content.

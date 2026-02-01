@@ -6,6 +6,7 @@
 
 #include "stdVR.h"
 #include "stdVR_Types.h"
+#include "stdVR_Map3D.h"
 #include "Platform/stdControl.h"
 #include "stdPlatform.h"
 #include "General/stdMath.h"
@@ -101,6 +102,38 @@ void stdVR_Input_GetMovementDirection(float* pMoveX, float* pMoveY)
     // so flip it here to keep "left = strafe left".
     float moveX = -ApplyDeadzone(stdVR_clientInfo.analogMove[0], STDVR_THUMBSTICK_DEADZONE);
     float moveY = ApplyDeadzone(stdVR_clientInfo.analogMove[1], STDVR_THUMBSTICK_DEADZONE);
+
+    // If 3D map is visible, use left stick for map rotation instead of movement
+    if (stdVR_Map3D_IsVisible()) {
+        float deltaTime = 1.0f / 72.0f;  // Approximate frame time
+
+        // Two-handed gesture control: both grips held
+        int bothGripsHeld = (stdVR_clientInfo.buttonState & STDVR_BTN_GRIP_L) &&
+                           (stdVR_clientInfo.buttonState & STDVR_BTN_GRIP_R);
+        if (bothGripsHeld) {
+            rdVector3 leftPos, rightPos;
+            stdVR_GetControllerPose(STDVR_CONTROLLER_LEFT, &leftPos, NULL);
+            stdVR_GetControllerPose(STDVR_CONTROLLER_RIGHT, &rightPos, NULL);
+            stdVR_Map3D_ProcessGestures(1, &leftPos, &rightPos);
+        } else {
+            stdVR_Map3D_ProcessGestures(0, NULL, NULL);
+
+            // Thumbstick controls only when grips not held
+            // Rotate map with left thumbstick left/right
+            float rotationSpeed = 120.0f;  // Degrees per second at full deflection
+            stdVR_Map3D_Rotate(-moveY * rotationSpeed * deltaTime);
+
+            // Zoom map with right thumbstick Y axis
+            float zoomInput = ApplyDeadzone(stdVR_clientInfo.analogTurn[1], STDVR_THUMBSTICK_DEADZONE);
+            float zoomSpeed = 1.5f;  // Zoom rate per second at full deflection
+            stdVR_Map3D_Zoom(zoomInput * zoomSpeed * deltaTime);
+        }
+
+        // Don't pass movement input when map is visible
+        *pMoveX = 0.0f;
+        *pMoveY = 0.0f;
+        return;
+    }
 
     // Movement is already oriented based on controller/head direction
     // The actual transformation happens in sithControl when we apply moveYaw
@@ -297,6 +330,14 @@ void stdVR_Input_MapToGame(void)
             // Run mode: one longer pulse
             stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.5f, 0.15f, 150.0f);
         }
+    }
+
+    // Added: Right thumbstick click = toggle 3D map
+    if (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_R) {
+        stdVR_Map3D_Toggle();
+        // Haptic feedback on both controllers
+        stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.4f, 0.15f, 120.0f);
+        stdVR_TriggerHaptic(STDVR_CONTROLLER_RIGHT, 0.4f, 0.15f, 120.0f);
     }
 }
 
