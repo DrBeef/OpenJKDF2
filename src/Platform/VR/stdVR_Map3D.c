@@ -54,6 +54,16 @@ static int stdVR_map3DNumCachedLines = 0;
 static int stdVR_map3DCacheValid = 0;
 static int stdVR_map3DLastCacheSectorId = -1;  // Track sector for cache invalidation
 
+// Cached activatable surface positions (collected once during cache update)
+#define STDVR_MAP3D_MAX_ACTIVATABLES 256
+static rdVector3 stdVR_map3DActivatables[STDVR_MAP3D_MAX_ACTIVATABLES];
+static int stdVR_map3DNumActivatables = 0;
+
+// Cached visited sector IDs (to avoid conflict with game's renderTick usage)
+#define STDVR_MAP3D_MAX_VISITED_SECTORS 512
+static int stdVR_map3DVisitedSectors[STDVR_MAP3D_MAX_VISITED_SECTORS];
+static int stdVR_map3DNumVisitedSectors = 0;
+
 // Depth-based color gradient settings (game units - levels use small coordinates)
 static float stdVR_map3DGradientNear = 0.0f;     // Distance where green is brightest
 static float stdVR_map3DGradientFar = 10.0f;     // Distance where green reaches minimum
@@ -136,6 +146,7 @@ static void stdVR_Map3D_CollectEntityMarkers(void);
 static void stdVR_Map3D_AddGridAndFrame(void);
 static void stdVR_Map3D_UpdateCachedGeometry(void);
 static void stdVR_Map3D_Draw3DDiamond(rdVector3* pCenter, float size, uint32_t color, float rotationRad);
+static int stdVR_Map3D_IsSectorVisited(sithSector* pSector);
 
 // Vertex shader for colored lines - MultiView compatible with per-eye MVP
 static const char* stdVR_map3DVertexShaderSrc =
@@ -491,7 +502,7 @@ int stdVR_Map3D_ShouldPauseGame(void)
 // Update - Collect geometry from level (with caching for performance)
 // ============================================================================
 
-// Update cached static geometry (level edges)
+// Update cached static geometry (level edges and activatable surfaces)
 static void stdVR_Map3D_UpdateCachedGeometry(void)
 {
     if (!sithPlayer_pLocalPlayerThing || !sithWorld_pCurrentWorld) return;
@@ -499,21 +510,91 @@ static void stdVR_Map3D_UpdateCachedGeometry(void)
     sithSector* pPlayerSector = sithPlayer_pLocalPlayerThing->sector;
     if (!pPlayerSector) return;
 
-    // Clear cached line buffer
+    // Clear cached buffers
     stdVR_map3DNumCachedLines = 0;
+    stdVR_map3DNumActivatables = 0;
+    stdVR_map3DNumVisitedSectors = 0;
 
-    // Increment tick for visit tracking
+    // Increment tick for visit tracking during collection
     stdVR_map3DRenderTick++;
 
     // Recursively collect edges from sectors
     stdVR_Map3D_CollectSectorEdges(pPlayerSector, 0);
 
+    // Collect activatable surface positions from visited sectors
+    rdVector3* pVertices = sithWorld_pCurrentWorld->vertices;
+    if (pVertices) {
+        for (int s = 0; s < sithWorld_pCurrentWorld->numSectors; s++) {
+            sithSector* pSector = &sithWorld_pCurrentWorld->sectors[s];
+
+            // Skip sectors not visited during geometry collection
+            if (!stdVR_Map3D_IsSectorVisited(pSector)) continue;
+
+            for (int i = 0; i < pSector->numSurfaces; i++) {
+                sithSurface* pSurface = &pSector->surfaces[i];
+
+                // Only collect COG-linked surfaces (activatable switches, panels, etc.)
+                // Skip scrolling surfaces - those are animated screens, not activatables
+                if (!(pSurface->surfaceFlags & SITH_SURFACE_COG_LINKED)) continue;
+                if (pSurface->surfaceFlags & SITH_SURFACE_SCROLLING) continue;
+
+                // Calculate centroid and bounding box of surface vertices
+                int numVerts = pSurface->surfaceInfo.face.numVertices;
+                int* pVertexIdxs = pSurface->surfaceInfo.face.vertexPosIdx;
+                if (numVerts < 3 || !pVertexIdxs) continue;
+
+                rdVector3 centroid = {0, 0, 0};
+                rdVector3 minBounds = {1e30f, 1e30f, 1e30f};
+                rdVector3 maxBounds = {-1e30f, -1e30f, -1e30f};
+
+                for (int v = 0; v < numVerts; v++) {
+                    int idx = pVertexIdxs[v];
+                    rdVector3* pVert = &pVertices[idx];
+                    centroid.x += pVert->x;
+                    centroid.y += pVert->y;
+                    centroid.z += pVert->z;
+
+                    if (pVert->x < minBounds.x) minBounds.x = pVert->x;
+                    if (pVert->y < minBounds.y) minBounds.y = pVert->y;
+                    if (pVert->z < minBounds.z) minBounds.z = pVert->z;
+                    if (pVert->x > maxBounds.x) maxBounds.x = pVert->x;
+                    if (pVert->y > maxBounds.y) maxBounds.y = pVert->y;
+                    if (pVert->z > maxBounds.z) maxBounds.z = pVert->z;
+                }
+                centroid.x /= numVerts;
+                centroid.y /= numVerts;
+                centroid.z /= numVerts;
+
+                // Filter by size - switches are very small (< 0.15 game units in any dimension)
+                // Large surfaces like screens, doors, or decorative panels are skipped
+                float sizeX = maxBounds.x - minBounds.x;
+                float sizeY = maxBounds.y - minBounds.y;
+                float sizeZ = maxBounds.z - minBounds.z;
+                float maxSize = sizeX > sizeY ? sizeX : sizeY;
+                maxSize = maxSize > sizeZ ? maxSize : sizeZ;
+
+                if (maxSize > 0.15f) continue;  // Skip large surfaces
+
+                // Filter by orientation - switches are on walls (vertical surfaces)
+                // Vertical surfaces have mostly horizontal normals (small Z component)
+                rdVector3* pNormal = &pSurface->surfaceInfo.face.normal;
+                float absNormalZ = pNormal->z > 0 ? pNormal->z : -pNormal->z;
+                if (absNormalZ > 0.15f) continue;  // Skip floors/ceilings
+
+                // Store in cache
+                if (stdVR_map3DNumActivatables < STDVR_MAP3D_MAX_ACTIVATABLES) {
+                    stdVR_map3DActivatables[stdVR_map3DNumActivatables++] = centroid;
+                }
+            }
+        }
+    }
+
     // Mark cache as valid
     stdVR_map3DCacheValid = 1;
     stdVR_map3DLastCacheSectorId = (int)(pPlayerSector - sithWorld_pCurrentWorld->sectors);
 
-    stdPlatform_Printf("stdVR_Map3D: Cached %d level lines (sector %d)\n",
-        stdVR_map3DNumCachedLines, stdVR_map3DLastCacheSectorId);
+    stdPlatform_Printf("stdVR_Map3D: Cached %d level lines, %d activatables (sector %d)\n",
+        stdVR_map3DNumCachedLines, stdVR_map3DNumActivatables, stdVR_map3DLastCacheSectorId);
 }
 
 // Collect entity markers (player, enemies, items) - called every frame
@@ -599,7 +680,7 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
             if (!pThing->sector) continue;  // Not in world
 
             // Skip things in sectors not visited during cache collection
-            if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
+            if (!stdVR_Map3D_IsSectorVisited(pThing->sector)) continue;
 
             // Skip friendly/neutral NPCs (no AIClass or alignment >= 0)
             // Hostile enemies have negative alignment
@@ -625,7 +706,7 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
             if (!pThing->sector) continue;  // Not in world
 
             // Skip things in sectors not visited during cache collection
-            if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
+            if (!stdVR_Map3D_IsSectorVisited(pThing->sector)) continue;
 
             // Draw rotating 3D diamond marker at pickup position
             // Offset up so bottom point sits at floor level
@@ -649,11 +730,22 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
             if (!pThing->sector) continue;  // Not in world
 
             // Skip things in sectors not visited during cache collection
-            if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
+            if (!stdVR_Map3D_IsSectorVisited(pThing->sector)) continue;
 
             // Draw rotating 3D diamond marker at activatable position
             rdVector3 pos = pThing->position;
             pos.z += activateMarkerSize;  // Offset up so bottom point sits at thing's base
+            stdVR_Map3D_Draw3DDiamond(&pos, activateMarkerSize, activateColor, stdVR_map3DMarkerRotation);
+        }
+    }
+
+    // Draw activatable surface markers from cached positions (yellow diamonds)
+    {
+        uint32_t activateColor = 0xFF00FFFF;  // Bright yellow (AABBGGRR)
+        float activateMarkerSize = 0.06f;      // Smaller than pickups
+
+        for (int i = 0; i < stdVR_map3DNumActivatables; i++) {
+            rdVector3 pos = stdVR_map3DActivatables[i];
             stdVR_Map3D_Draw3DDiamond(&pos, activateMarkerSize, activateColor, stdVR_map3DMarkerRotation);
         }
     }
@@ -906,6 +998,11 @@ static void stdVR_Map3D_CollectSectorEdges(sithSector* pSector, int depth)
     }
     pSector->renderTick = stdVR_map3DRenderTick;
 
+    // Store sector ID in our visited list (for entity visibility checks later)
+    if (stdVR_map3DNumVisitedSectors < STDVR_MAP3D_MAX_VISITED_SECTORS) {
+        stdVR_map3DVisitedSectors[stdVR_map3DNumVisitedSectors++] = pSector->id;
+    }
+
     // Check visibility flags (unless showing all for debug)
     if (!(pSector->flags & SITH_SECTOR_AUTOMAPVISIBLE)) {
         // Still recurse through adjoins to find visible sectors
@@ -1077,6 +1174,17 @@ static void stdVR_Map3D_Draw3DDiamond(rdVector3* pCenter, float size, uint32_t c
     stdVR_Map3D_AddLine(&vBottom, &vE, color);
     stdVR_Map3D_AddLine(&vBottom, &vS, color);
     stdVR_Map3D_AddLine(&vBottom, &vW, color);
+}
+
+// Check if a sector was visited during cache collection
+static int stdVR_Map3D_IsSectorVisited(sithSector* pSector)
+{
+    if (!pSector) return 0;
+    int sectorId = pSector->id;
+    for (int i = 0; i < stdVR_map3DNumVisitedSectors; i++) {
+        if (stdVR_map3DVisitedSectors[i] == sectorId) return 1;
+    }
+    return 0;
 }
 
 static uint32_t stdVR_Map3D_GetDepthColor(float depth, int bIsFloor)
@@ -1341,7 +1449,7 @@ void stdVR_Map3D_Render(void)
     glEnable(GL_LINE_SMOOTH);
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
 #endif
-    glLineWidth(1.5f);  // Slightly thicker lines for better visibility
+    glLineWidth(1.2f);  // Slightly thin lines for holographic look
 
     // Draw lines
     glDrawArrays(GL_LINES, 0, numVertices);
