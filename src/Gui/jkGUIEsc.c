@@ -21,6 +21,11 @@
 #include "Main/jkMain.h"
 #include "Dss/sithMulti.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#include "Platform/VR/stdVR_Map3D.h"
+#endif
+
 enum jkGuiEscButton_t
 {
     JKGUIESC_RETURNTOGAME = 1,
@@ -122,6 +127,15 @@ void jkGuiEsc_Show()
                 continue;
 
             case JKGUIESC_MAP:
+#ifdef PLATFORM_VR
+                // In VR, use the 3D holographic map instead of the 2D menu map
+                if (stdVR_bEnabled) {
+                    stdVR_Map3D_Toggle();
+                    jkMain_MissionReload();
+                    jkGuiRend_UpdateSurface();
+                    return;  // Close menu and return to game with map visible
+                }
+#endif
                 jkGuiMap_Show();
                 continue;
 
