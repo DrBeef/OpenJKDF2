@@ -86,6 +86,10 @@ static int stdVR_map3DZoomAnimating = 0;        // Is zoom-in animation in progr
 static int stdVR_map3DClosing = 0;              // Is map closing (zoom-out animation)
 static float stdVR_map3DCloseStartZoom = 1.0f;  // Zoom level when close started
 
+// 3D marker rotation (for enemy/pickup diamonds)
+static float stdVR_map3DMarkerRotation = 0.0f;  // Current rotation angle in radians
+static float stdVR_map3DMarkerRotationSpeed = 3.14159f; // Radians per second (PI = 0.5 rotation/sec)
+
 // Configuration (in game units)
 // Note: Level coordinates are typically small (single digits), player height ~0.12 units
 static float stdVR_map3DDistance = 0.5f;    // Distance from player (game units)
@@ -131,6 +135,7 @@ static void stdVR_Map3D_ShutdownShader(void);
 static void stdVR_Map3D_CollectEntityMarkers(void);
 static void stdVR_Map3D_AddGridAndFrame(void);
 static void stdVR_Map3D_UpdateCachedGeometry(void);
+static void stdVR_Map3D_Draw3DDiamond(rdVector3* pCenter, float size, uint32_t color, float rotationRad);
 
 // Vertex shader for colored lines - MultiView compatible with per-eye MVP
 static const char* stdVR_map3DVertexShaderSrc =
@@ -329,7 +334,7 @@ void stdVR_Map3D_Toggle(void)
         if (sithPlayer_pLocalPlayerThing) {
             rdMatrix34* pOrient = &sithPlayer_pLocalPlayerThing->lookOrientation;
             float playerYaw = atan2f(pOrient->lvec.x, pOrient->lvec.y) * (180.0f / 3.14159265f);
-            stdVR_map3DRotation = playerYaw;  // Negate so arrow points toward user
+            stdVR_map3DRotation = playerYaw;  // Arrow points away from user
         } else {
             stdVR_map3DRotation = 0.0f;
         }
@@ -542,11 +547,18 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
         v2.z = playerPos.z;
         stdVR_Map3D_AddLine(&v1, &v2, markerColor);
 
-        // Direction arrow (pointing where player is facing)
-        float yawRad = stdVR_map3DState.playerYaw * (3.14159265f / 180.0f);
+        // Direction arrow (combining game character orientation + physical HMD rotation)
+        // Game character yaw (from snap turns, etc.)
+        float characterYawRad = stdVR_map3DState.playerYaw * (3.14159265f / 180.0f);
+        // HMD physical rotation (from tracking)
+        rdMatrix34 headPose;
+        stdVR_GetEyeViewMatrix(0, &headPose);
+        float hmdYawRad = atan2f(headPose.lvec.x, headPose.lvec.y);
+        // Combined total yaw
+        float totalYawRad = characterYawRad + hmdYawRad;
         float arrowLen = markerSize * 1.5f;
-        float arrowDirX = sinf(yawRad) * arrowLen;
-        float arrowDirY = cosf(yawRad) * arrowLen;
+        float arrowDirX = sinf(totalYawRad) * arrowLen;
+        float arrowDirY = cosf(totalYawRad) * arrowLen;
 
         v1 = playerPos;
         v2.x = playerPos.x + arrowDirX;
@@ -557,8 +569,8 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
         // Arrow head - lines pointing back from the tip at ~150 degrees from forward
         float headSize = markerSize * 0.4f;
         float headAngle = 0.5f;  // ~30 degrees from the reverse direction
-        float headAngle1 = yawRad + 3.14159265f - headAngle;  // back-left
-        float headAngle2 = yawRad + 3.14159265f + headAngle;  // back-right
+        float headAngle1 = totalYawRad + 3.14159265f - headAngle;  // back-left
+        float headAngle2 = totalYawRad + 3.14159265f + headAngle;  // back-right
 
         v1 = v2;  // Arrow tip
         rdVector3 v3;
@@ -573,7 +585,7 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
         stdVR_Map3D_AddLine(&v1, &v3, arrowColor);
     }
 
-    // Draw enemy markers (red diamonds for hostile living actors in sectors visited this frame)
+    // Draw enemy markers (rotating 3D red diamonds for hostile living actors)
     if (sithWorld_pCurrentWorld && sithWorld_pCurrentWorld->things) {
         uint32_t enemyColor = 0xFF0000FF;  // Bright red (AABBGGRR)
         float enemyMarkerSize = 0.12f;      // Size in game units
@@ -593,30 +605,13 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
             // Hostile enemies have negative alignment
             if (!pThing->pAIClass || pThing->pAIClass->alignment >= 0.0f) continue;
 
-            // Draw diamond marker at enemy position
+            // Draw rotating 3D diamond marker at enemy position
             rdVector3 pos = pThing->position;
-            rdVector3 v1, v2;
-
-            // Diamond shape: 4 lines forming an X rotated 45 degrees
-            v1.x = pos.x; v1.y = pos.y + enemyMarkerSize; v1.z = pos.z;
-            v2.x = pos.x + enemyMarkerSize; v2.y = pos.y; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
-
-            v1.x = pos.x + enemyMarkerSize; v1.y = pos.y; v1.z = pos.z;
-            v2.x = pos.x; v2.y = pos.y - enemyMarkerSize; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
-
-            v1.x = pos.x; v1.y = pos.y - enemyMarkerSize; v1.z = pos.z;
-            v2.x = pos.x - enemyMarkerSize; v2.y = pos.y; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
-
-            v1.x = pos.x - enemyMarkerSize; v1.y = pos.y; v1.z = pos.z;
-            v2.x = pos.x; v2.y = pos.y + enemyMarkerSize; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, enemyColor);
+            stdVR_Map3D_Draw3DDiamond(&pos, enemyMarkerSize, enemyColor, stdVR_map3DMarkerRotation);
         }
     }
 
-    // Draw pickup markers (blue diamonds for uncollected items in sectors visited this frame)
+    // Draw pickup markers (rotating 3D blue diamonds for uncollected items)
     if (sithWorld_pCurrentWorld && sithWorld_pCurrentWorld->things) {
         uint32_t pickupColor = 0xFFFF8000;  // Light blue (AABBGGRR)
         float pickupMarkerSize = 0.08f;      // Smaller than enemy markers
@@ -632,25 +627,34 @@ static void stdVR_Map3D_CollectEntityMarkers(void)
             // Skip things in sectors not visited during cache collection
             if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
 
-            // Draw small diamond marker at pickup position
+            // Draw rotating 3D diamond marker at pickup position
+            // Offset up so bottom point sits at floor level
             rdVector3 pos = pThing->position;
-            rdVector3 v1, v2;
+            pos.z += pickupMarkerSize;
+            stdVR_Map3D_Draw3DDiamond(&pos, pickupMarkerSize, pickupColor, stdVR_map3DMarkerRotation);
+        }
+    }
 
-            v1.x = pos.x; v1.y = pos.y + pickupMarkerSize; v1.z = pos.z;
-            v2.x = pos.x + pickupMarkerSize; v2.y = pos.y; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+    // Draw activatable thing markers (yellow diamonds for COG-type things like switches)
+    if (sithWorld_pCurrentWorld && sithWorld_pCurrentWorld->things) {
+        uint32_t activateColor = 0xFF00FFFF;  // Bright yellow (AABBGGRR)
+        float activateMarkerSize = 0.06f;      // Smaller than pickups
 
-            v1.x = pos.x + pickupMarkerSize; v1.y = pos.y; v1.z = pos.z;
-            v2.x = pos.x; v2.y = pos.y - pickupMarkerSize; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+        for (int i = 0; i < sithWorld_pCurrentWorld->numThingsLoaded; i++) {
+            sithThing* pThing = &sithWorld_pCurrentWorld->things[i];
 
-            v1.x = pos.x; v1.y = pos.y - pickupMarkerSize; v1.z = pos.z;
-            v2.x = pos.x - pickupMarkerSize; v2.y = pos.y; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+            // Only show COG-type things (switches, buttons, intractable objects)
+            if (pThing->type != SITH_THING_COG) continue;
+            if (pThing->thingflags & SITH_TF_DISABLED) continue;
+            if (!pThing->sector) continue;  // Not in world
 
-            v1.x = pos.x - pickupMarkerSize; v1.y = pos.y; v1.z = pos.z;
-            v2.x = pos.x; v2.y = pos.y + pickupMarkerSize; v2.z = pos.z;
-            stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
+            // Skip things in sectors not visited during cache collection
+            if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
+
+            // Draw rotating 3D diamond marker at activatable position
+            rdVector3 pos = pThing->position;
+            pos.z += activateMarkerSize;  // Offset up so bottom point sits at thing's base
+            stdVR_Map3D_Draw3DDiamond(&pos, activateMarkerSize, activateColor, stdVR_map3DMarkerRotation);
         }
     }
 }
@@ -807,6 +811,19 @@ void stdVR_Map3D_Update(void)
             stdVR_map3DZoom = stdVR_map3DCloseStartZoom * (1.0f - easeT);
             if (stdVR_map3DZoom < 0.01f) stdVR_map3DZoom = 0.01f;
         }
+    }
+
+    // Update 3D marker rotation (continuous spin)
+    {
+        static uint32_t lastMarkerUpdateTime = 0;
+        uint32_t currentTime = stdPlatform_GetTimeMsec();
+        if (lastMarkerUpdateTime == 0) lastMarkerUpdateTime = currentTime;
+        float deltaTime = (currentTime - lastMarkerUpdateTime) / 1000.0f;
+        lastMarkerUpdateTime = currentTime;
+
+        stdVR_map3DMarkerRotation += stdVR_map3DMarkerRotationSpeed * deltaTime;
+        // Keep in 0 to 2*PI range
+        while (stdVR_map3DMarkerRotation >= 6.28318f) stdVR_map3DMarkerRotation -= 6.28318f;
     }
 
     // Need a valid player and world
@@ -995,6 +1012,71 @@ static void stdVR_Map3D_AddLine(rdVector3* v1, rdVector3* v2, uint32_t color)
     pLine->start = *v1;
     pLine->end = *v2;
     pLine->color = color;
+}
+
+// Draw a rotating 3D diamond (octahedron) marker
+static void stdVR_Map3D_Draw3DDiamond(rdVector3* pCenter, float size, uint32_t color, float rotationRad)
+{
+    // Octahedron vertices (before rotation):
+    // Middle plane: N(0,+1,0), E(+1,0,0), S(0,-1,0), W(-1,0,0)
+    // Top: (0,0,+1), Bottom: (0,0,-1)
+
+    float cosR = cosf(rotationRad);
+    float sinR = sinf(rotationRad);
+
+    // Middle vertices use reduced diameter (2/3 of size)
+    float midSize = size * 0.67f;
+
+    // Calculate rotated middle vertices (rotate around Z axis)
+    rdVector3 vN, vE, vS, vW, vTop, vBottom;
+
+    // North vertex (0, +midSize, 0) rotated
+    vN.x = pCenter->x + (-sinR * midSize);
+    vN.y = pCenter->y + (cosR * midSize);
+    vN.z = pCenter->z;
+
+    // East vertex (+midSize, 0, 0) rotated
+    vE.x = pCenter->x + (cosR * midSize);
+    vE.y = pCenter->y + (sinR * midSize);
+    vE.z = pCenter->z;
+
+    // South vertex (0, -midSize, 0) rotated
+    vS.x = pCenter->x + (sinR * midSize);
+    vS.y = pCenter->y + (-cosR * midSize);
+    vS.z = pCenter->z;
+
+    // West vertex (-midSize, 0, 0) rotated
+    vW.x = pCenter->x + (-cosR * midSize);
+    vW.y = pCenter->y + (-sinR * midSize);
+    vW.z = pCenter->z;
+
+    // Top and bottom vertices (on Z axis, full size, no rotation needed)
+    vTop.x = pCenter->x;
+    vTop.y = pCenter->y;
+    vTop.z = pCenter->z + size;
+
+    vBottom.x = pCenter->x;
+    vBottom.y = pCenter->y;
+    vBottom.z = pCenter->z - size;
+
+    // Draw 12 edges of the octahedron
+    // Middle square edges (4)
+    stdVR_Map3D_AddLine(&vN, &vE, color);
+    stdVR_Map3D_AddLine(&vE, &vS, color);
+    stdVR_Map3D_AddLine(&vS, &vW, color);
+    stdVR_Map3D_AddLine(&vW, &vN, color);
+
+    // Top to middle vertices (4)
+    stdVR_Map3D_AddLine(&vTop, &vN, color);
+    stdVR_Map3D_AddLine(&vTop, &vE, color);
+    stdVR_Map3D_AddLine(&vTop, &vS, color);
+    stdVR_Map3D_AddLine(&vTop, &vW, color);
+
+    // Bottom to middle vertices (4)
+    stdVR_Map3D_AddLine(&vBottom, &vN, color);
+    stdVR_Map3D_AddLine(&vBottom, &vE, color);
+    stdVR_Map3D_AddLine(&vBottom, &vS, color);
+    stdVR_Map3D_AddLine(&vBottom, &vW, color);
 }
 
 static uint32_t stdVR_Map3D_GetDepthColor(float depth, int bIsFloor)
