@@ -48,11 +48,43 @@ static stdVR_Map3DState stdVR_map3DState = {0};
 static stdVR_Map3DLine stdVR_map3DLines[STDVR_MAP3D_MAX_LINES];
 static int stdVR_map3DNumLines = 0;
 
+// Cached geometry (level edges - static, collected once when map opens)
+static stdVR_Map3DLine stdVR_map3DCachedLines[STDVR_MAP3D_MAX_LINES];
+static int stdVR_map3DNumCachedLines = 0;
+static int stdVR_map3DCacheValid = 0;
+static int stdVR_map3DLastCacheSectorId = -1;  // Track sector for cache invalidation
+
 // Depth-based color gradient settings (game units - levels use small coordinates)
 static float stdVR_map3DGradientNear = 0.0f;     // Distance where green is brightest
 static float stdVR_map3DGradientFar = 10.0f;     // Distance where green reaches minimum
 static uint8_t stdVR_map3DColorNear = 0xFF;      // Green channel value at near distance (255)
 static uint8_t stdVR_map3DColorFar = 0x60;       // Green channel value at far distance (80)
+
+// Grid floor settings
+static int stdVR_map3DShowGrid = 1;             // Show grid floor
+static float stdVR_map3DGridSize = 10.0f;       // Grid cell size in game units
+static float stdVR_map3DGridExtent = 50.0f;     // Grid extends this far from player
+static uint32_t stdVR_map3DGridColor = 0x40008000;  // Dark green, 25% alpha (AABBGGRR)
+
+// Visual frame settings
+static int stdVR_map3DShowFrame = 1;            // Show frame around map
+static uint32_t stdVR_map3DFrameColor = 0xFF00FF80;  // Cyan-ish glow color
+
+// Holographic transparency (0-255, lower = more transparent)
+static uint8_t stdVR_map3DFloorAlpha = 0xCC;    // Floor lines (80% opaque)
+static uint8_t stdVR_map3DWallAlpha = 0x99;     // Wall lines (60% opaque)
+
+// Wall color (different from floor for visual distinction)
+static uint8_t stdVR_map3DWallColorNear = 0x80; // Blue channel for walls (near)
+static uint8_t stdVR_map3DWallColorFar = 0x40;  // Blue channel for walls (far)
+
+// Zoom animation settings
+static float stdVR_map3DTargetZoom = 1.4f;      // Target zoom level
+static float stdVR_map3DZoomAnimDuration = 0.5f; // Animation duration in seconds
+static uint32_t stdVR_map3DAnimStartTime = 0;   // Timestamp when animation started
+static int stdVR_map3DZoomAnimating = 0;        // Is zoom-in animation in progress
+static int stdVR_map3DClosing = 0;              // Is map closing (zoom-out animation)
+static float stdVR_map3DCloseStartZoom = 1.0f;  // Zoom level when close started
 
 // Configuration (in game units)
 // Note: Level coordinates are typically small (single digits), player height ~0.12 units
@@ -91,10 +123,14 @@ static int stdVR_map3DRenderTick = 0;
 static void stdVR_Map3D_CollectSectorEdges(sithSector* pSector, int depth);
 static void stdVR_Map3D_CollectSurfaceEdges(sithSector* pSector, sithSurface* pSurface);
 static void stdVR_Map3D_AddLine(rdVector3* v1, rdVector3* v2, uint32_t color);
-static uint32_t stdVR_Map3D_GetDepthColor(float depth);
+static void stdVR_Map3D_AddCachedLine(rdVector3* v1, rdVector3* v2, uint32_t color);
+static uint32_t stdVR_Map3D_GetDepthColor(float depth, int bIsFloor);
 static void stdVR_Map3D_TransformToWorld(rdVector3* pOut, rdVector3* pIn);
 static void stdVR_Map3D_InitShader(void);
 static void stdVR_Map3D_ShutdownShader(void);
+static void stdVR_Map3D_CollectEntityMarkers(void);
+static void stdVR_Map3D_AddGridAndFrame(void);
+static void stdVR_Map3D_UpdateCachedGeometry(void);
 
 // Vertex shader for colored lines - MultiView compatible with per-eye MVP
 static const char* stdVR_map3DVertexShaderSrc =
@@ -265,38 +301,69 @@ void stdVR_Map3D_Shutdown(void)
 
 void stdVR_Map3D_Toggle(void)
 {
-    stdVR_map3DState.bEnabled = !stdVR_map3DState.bEnabled;
+    // If currently closing, ignore toggle (let animation finish)
+    if (stdVR_map3DClosing) {
+        return;
+    }
 
-    if (stdVR_map3DState.bEnabled) {
+    if (!stdVR_map3DState.bEnabled) {
+        // Opening the map
+        stdVR_map3DState.bEnabled = 1;
         // Initialize anchor position in front of the user when map is enabled
         // Get current head pose to place map relative to where user is looking
         rdMatrix34 eyePose;
         stdVR_GetEyeViewMatrix(0, &eyePose);
 
-        // Place anchor 0.8m in front of the head along the look direction
+        // Place anchor in front of the head along the look direction
         // eyePose is in JKDF2 space: scale=position, lvec=forward direction
-        float mapDistance = 0.8f;
+        float mapDistance = 0.55f;   // Distance from head (closer)
+        float mapDropHeight = 0.25f; // How much lower than eye level
         stdVR_map3DAnchorPos.x = eyePose.scale.x + eyePose.lvec.x * mapDistance;
         stdVR_map3DAnchorPos.y = eyePose.scale.y + eyePose.lvec.y * mapDistance;
-        stdVR_map3DAnchorPos.z = eyePose.scale.z + eyePose.lvec.z * mapDistance;
+        stdVR_map3DAnchorPos.z = eyePose.scale.z + eyePose.lvec.z * mapDistance - mapDropHeight;
 
         stdVR_map3DAnchorSet = 1;
-        stdVR_map3DRotation = 0.0f;  // Reset rotation
-        stdVR_map3DZoom = 1.0f;      // Reset zoom
+
+        // Orient map so player arrow points forward (same direction user is facing)
+        // Calculate player's current yaw and set map rotation to compensate
+        if (sithPlayer_pLocalPlayerThing) {
+            rdMatrix34* pOrient = &sithPlayer_pLocalPlayerThing->lookOrientation;
+            float playerYaw = atan2f(pOrient->lvec.x, pOrient->lvec.y) * (180.0f / 3.14159265f);
+            stdVR_map3DRotation = playerYaw;  // Negate so arrow points toward user
+        } else {
+            stdVR_map3DRotation = 0.0f;
+        }
+
+        // Start zoom-in animation from 0 to target
+        stdVR_map3DZoom = 0.01f;     // Start nearly invisible
+        stdVR_map3DAnimStartTime = stdPlatform_GetTimeMsec();
+        stdVR_map3DZoomAnimating = 1;
+        stdVR_map3DClosing = 0;
+
+        // Invalidate cache so geometry is recollected fresh
+        stdVR_map3DCacheValid = 0;
+        stdVR_map3DLastCacheSectorId = -1;
 
         stdPlatform_Printf("stdVR_Map3D: HeadPos=(%.2f,%.2f,%.2f) Lvec=(%.2f,%.2f,%.2f)\n",
             eyePose.scale.x, eyePose.scale.y, eyePose.scale.z,
             eyePose.lvec.x, eyePose.lvec.y, eyePose.lvec.z);
         stdPlatform_Printf("stdVR_Map3D: Anchor set at %.2f, %.2f, %.2f (JKDF2 space)\n",
             stdVR_map3DAnchorPos.x, stdVR_map3DAnchorPos.y, stdVR_map3DAnchorPos.z);
+        stdPlatform_Printf("stdVR_Map3D: Opening\n");
+    } else {
+        // Closing the map - start zoom-out animation
+        stdVR_map3DCloseStartZoom = stdVR_map3DZoom;
+        stdVR_map3DAnimStartTime = stdPlatform_GetTimeMsec();
+        stdVR_map3DClosing = 1;
+        stdVR_map3DZoomAnimating = 0;
+        stdPlatform_Printf("stdVR_Map3D: Closing\n");
     }
-
-    stdPlatform_Printf("stdVR_Map3D: %s\n", stdVR_map3DState.bEnabled ? "Enabled" : "Disabled");
 }
 
 int stdVR_Map3D_IsVisible(void)
 {
-    return stdVR_map3DState.bEnabled;
+    // Visible if enabled OR if closing animation is in progress
+    return stdVR_map3DState.bEnabled || stdVR_map3DClosing;
 }
 
 void stdVR_Map3D_SetScale(float scale)
@@ -411,59 +478,24 @@ void stdVR_Map3D_ProcessGestures(int bothGripsHeld, rdVector3* pLeftPos, rdVecto
 
 int stdVR_Map3D_ShouldPauseGame(void)
 {
-    // Pause game logic when map is visible
-    return stdVR_map3DState.bEnabled && stdVR_map3DState.bInitialized;
+    // Pause game logic when map is visible (including during close animation)
+    return (stdVR_map3DState.bEnabled || stdVR_map3DClosing) && stdVR_map3DState.bInitialized;
 }
 
 // ============================================================================
-// Update - Collect geometry from level
+// Update - Collect geometry from level (with caching for performance)
 // ============================================================================
 
-void stdVR_Map3D_Update(void)
+// Update cached static geometry (level edges)
+static void stdVR_Map3D_UpdateCachedGeometry(void)
 {
-    static int updateDebugCount = 0;
-
-    if (!stdVR_map3DState.bEnabled || !stdVR_map3DState.bInitialized) {
-        return;
-    }
-
-    // Need a valid player and world
-    if (!sithPlayer_pLocalPlayerThing || !sithWorld_pCurrentWorld) {
-        if (updateDebugCount < 5) {
-            updateDebugCount++;
-            stdPlatform_Printf("stdVR_Map3D_Update: No player (%p) or world (%p)\n",
-                sithPlayer_pLocalPlayerThing, sithWorld_pCurrentWorld);
-        }
-        return;
-    }
+    if (!sithPlayer_pLocalPlayerThing || !sithWorld_pCurrentWorld) return;
 
     sithSector* pPlayerSector = sithPlayer_pLocalPlayerThing->sector;
-    if (!pPlayerSector) {
-        if (updateDebugCount < 5) {
-            updateDebugCount++;
-            stdPlatform_Printf("stdVR_Map3D_Update: No player sector\n");
-        }
-        return;
-    }
+    if (!pPlayerSector) return;
 
-    if (updateDebugCount < 5) {
-        updateDebugCount++;
-        stdPlatform_Printf("stdVR_Map3D_Update: sector=%p, flags=0x%x, numSurfaces=%d\n",
-            pPlayerSector, pPlayerSector->flags, pPlayerSector->numSurfaces);
-    }
-
-    // Store player position for centering
-    stdVR_map3DState.playerPos = sithPlayer_pLocalPlayerThing->position;
-
-    // Get player look direction from orientation matrix (lvec is forward)
-    rdMatrix34* pOrient = &sithPlayer_pLocalPlayerThing->lookOrientation;
-    stdVR_map3DLookDir = pOrient->lvec;
-
-    // Get player yaw from look orientation
-    stdVR_map3DState.playerYaw = atan2f(pOrient->lvec.x, pOrient->lvec.y) * (180.0f / 3.14159265f);
-
-    // Clear line buffer
-    stdVR_map3DNumLines = 0;
+    // Clear cached line buffer
+    stdVR_map3DNumCachedLines = 0;
 
     // Increment tick for visit tracking
     stdVR_map3DRenderTick++;
@@ -471,6 +503,17 @@ void stdVR_Map3D_Update(void)
     // Recursively collect edges from sectors
     stdVR_Map3D_CollectSectorEdges(pPlayerSector, 0);
 
+    // Mark cache as valid
+    stdVR_map3DCacheValid = 1;
+    stdVR_map3DLastCacheSectorId = (int)(pPlayerSector - sithWorld_pCurrentWorld->sectors);
+
+    stdPlatform_Printf("stdVR_Map3D: Cached %d level lines (sector %d)\n",
+        stdVR_map3DNumCachedLines, stdVR_map3DLastCacheSectorId);
+}
+
+// Collect entity markers (player, enemies, items) - called every frame
+static void stdVR_Map3D_CollectEntityMarkers(void)
+{
     // Add player position marker (bright yellow cross + direction arrow)
     {
         rdVector3 playerPos = stdVR_map3DState.playerPos;
@@ -543,7 +586,7 @@ void stdVR_Map3D_Update(void)
             if (pThing->thingflags & (SITH_TF_DEAD | SITH_TF_DISABLED)) continue;
             if (!pThing->sector) continue;  // Not in world
 
-            // Skip things in sectors not visited during this map render
+            // Skip things in sectors not visited during cache collection
             if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
 
             // Skip friendly/neutral NPCs (no AIClass or alignment >= 0)
@@ -586,7 +629,7 @@ void stdVR_Map3D_Update(void)
             if (pThing->thingflags & SITH_TF_DISABLED) continue;
             if (!pThing->sector) continue;  // Not in world
 
-            // Skip things in sectors not visited during this map render
+            // Skip things in sectors not visited during cache collection
             if (pThing->sector->renderTick != stdVR_map3DRenderTick) continue;
 
             // Draw small diamond marker at pickup position
@@ -610,12 +653,223 @@ void stdVR_Map3D_Update(void)
             stdVR_Map3D_AddLine(&v1, &v2, pickupColor);
         }
     }
+}
 
-    // Debug: log how many lines collected
+// Add grid floor and frame around map
+static void stdVR_Map3D_AddGridAndFrame(void)
+{
+    rdVector3 playerPos = stdVR_map3DState.playerPos;
+    rdVector3 v1, v2;
+
+    // Grid floor at player Z level
+    if (stdVR_map3DShowGrid) {
+        float gridZ = playerPos.z;
+        float gridExtent = stdVR_map3DGridExtent;
+        float gridSize = stdVR_map3DGridSize;
+        uint32_t gridColor = stdVR_map3DGridColor;
+
+        // Calculate grid boundaries centered on player
+        float minX = playerPos.x - gridExtent;
+        float maxX = playerPos.x + gridExtent;
+        float minY = playerPos.y - gridExtent;
+        float maxY = playerPos.y + gridExtent;
+
+        // Snap to grid
+        minX = floorf(minX / gridSize) * gridSize;
+        maxX = ceilf(maxX / gridSize) * gridSize;
+        minY = floorf(minY / gridSize) * gridSize;
+        maxY = ceilf(maxY / gridSize) * gridSize;
+
+        // Draw X-parallel lines (running along X axis)
+        for (float y = minY; y <= maxY; y += gridSize) {
+            v1.x = minX; v1.y = y; v1.z = gridZ;
+            v2.x = maxX; v2.y = y; v2.z = gridZ;
+            stdVR_Map3D_AddLine(&v1, &v2, gridColor);
+        }
+
+        // Draw Y-parallel lines (running along Y axis)
+        for (float x = minX; x <= maxX; x += gridSize) {
+            v1.x = x; v1.y = minY; v1.z = gridZ;
+            v2.x = x; v2.y = maxY; v2.z = gridZ;
+            stdVR_Map3D_AddLine(&v1, &v2, gridColor);
+        }
+    }
+
+    // Holographic frame around the map bounds
+    if (stdVR_map3DShowFrame && stdVR_map3DCacheValid && stdVR_map3DNumCachedLines > 0) {
+        // Calculate bounds from cached geometry
+        float minX = 1e30f, maxX = -1e30f;
+        float minY = 1e30f, maxY = -1e30f;
+        float minZ = 1e30f, maxZ = -1e30f;
+
+        for (int i = 0; i < stdVR_map3DNumCachedLines; i++) {
+            stdVR_Map3DLine* pLine = &stdVR_map3DCachedLines[i];
+
+            if (pLine->start.x < minX) minX = pLine->start.x;
+            if (pLine->start.x > maxX) maxX = pLine->start.x;
+            if (pLine->end.x < minX) minX = pLine->end.x;
+            if (pLine->end.x > maxX) maxX = pLine->end.x;
+
+            if (pLine->start.y < minY) minY = pLine->start.y;
+            if (pLine->start.y > maxY) maxY = pLine->start.y;
+            if (pLine->end.y < minY) minY = pLine->end.y;
+            if (pLine->end.y > maxY) maxY = pLine->end.y;
+
+            if (pLine->start.z < minZ) minZ = pLine->start.z;
+            if (pLine->start.z > maxZ) maxZ = pLine->start.z;
+            if (pLine->end.z < minZ) minZ = pLine->end.z;
+            if (pLine->end.z > maxZ) maxZ = pLine->end.z;
+        }
+
+        // Add small padding to bounds
+        float pad = 1.0f;
+        minX -= pad; maxX += pad;
+        minY -= pad; maxY += pad;
+        minZ -= pad; maxZ += pad;
+
+        uint32_t frameColor = stdVR_map3DFrameColor;
+
+        // Draw 12 edges of a bounding box
+        // Bottom face (z = minZ)
+        v1.x = minX; v1.y = minY; v1.z = minZ; v2.x = maxX; v2.y = minY; v2.z = minZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = maxX; v1.y = minY; v1.z = minZ; v2.x = maxX; v2.y = maxY; v2.z = minZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = maxX; v1.y = maxY; v1.z = minZ; v2.x = minX; v2.y = maxY; v2.z = minZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = minX; v1.y = maxY; v1.z = minZ; v2.x = minX; v2.y = minY; v2.z = minZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+
+        // Top face (z = maxZ)
+        v1.x = minX; v1.y = minY; v1.z = maxZ; v2.x = maxX; v2.y = minY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = maxX; v1.y = minY; v1.z = maxZ; v2.x = maxX; v2.y = maxY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = maxX; v1.y = maxY; v1.z = maxZ; v2.x = minX; v2.y = maxY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = minX; v1.y = maxY; v1.z = maxZ; v2.x = minX; v2.y = minY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+
+        // Vertical edges
+        v1.x = minX; v1.y = minY; v1.z = minZ; v2.x = minX; v2.y = minY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = maxX; v1.y = minY; v1.z = minZ; v2.x = maxX; v2.y = minY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = maxX; v1.y = maxY; v1.z = minZ; v2.x = maxX; v2.y = maxY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+        v1.x = minX; v1.y = maxY; v1.z = minZ; v2.x = minX; v2.y = maxY; v2.z = maxZ;
+        stdVR_Map3D_AddLine(&v1, &v2, frameColor);
+    }
+}
+
+void stdVR_Map3D_Update(void)
+{
+    static int updateDebugCount = 0;
+
+    // Allow updates if enabled OR if closing animation is in progress
+    if ((!stdVR_map3DState.bEnabled && !stdVR_map3DClosing) || !stdVR_map3DState.bInitialized) {
+        return;
+    }
+
+    // Update zoom-in animation (opening)
+    if (stdVR_map3DZoomAnimating) {
+        uint32_t currentTime = stdPlatform_GetTimeMsec();
+        float elapsed = (currentTime - stdVR_map3DAnimStartTime) / 1000.0f;
+        float t = elapsed / stdVR_map3DZoomAnimDuration;
+
+        if (t >= 1.0f) {
+            // Animation complete
+            stdVR_map3DZoom = stdVR_map3DTargetZoom;
+            stdVR_map3DZoomAnimating = 0;
+        } else {
+            // Smooth ease-out interpolation: 1 - (1-t)^2
+            float easeT = 1.0f - (1.0f - t) * (1.0f - t);
+            stdVR_map3DZoom = 0.01f + easeT * (stdVR_map3DTargetZoom - 0.01f);
+        }
+    }
+
+    // Update zoom-out animation (closing)
+    if (stdVR_map3DClosing) {
+        uint32_t currentTime = stdPlatform_GetTimeMsec();
+        float elapsed = (currentTime - stdVR_map3DAnimStartTime) / 1000.0f;
+        float t = elapsed / stdVR_map3DZoomAnimDuration;
+
+        if (t >= 1.0f) {
+            // Animation complete - actually close the map
+            stdVR_map3DZoom = 0.01f;
+            stdVR_map3DClosing = 0;
+            stdVR_map3DState.bEnabled = 0;
+            stdPlatform_Printf("stdVR_Map3D: Closed\n");
+            return;  // Don't process further this frame
+        } else {
+            // Smooth ease-in interpolation: t^2 (starts slow, ends fast)
+            float easeT = t * t;
+            stdVR_map3DZoom = stdVR_map3DCloseStartZoom * (1.0f - easeT);
+            if (stdVR_map3DZoom < 0.01f) stdVR_map3DZoom = 0.01f;
+        }
+    }
+
+    // Need a valid player and world
+    if (!sithPlayer_pLocalPlayerThing || !sithWorld_pCurrentWorld) {
+        if (updateDebugCount < 5) {
+            updateDebugCount++;
+            stdPlatform_Printf("stdVR_Map3D_Update: No player (%p) or world (%p)\n",
+                sithPlayer_pLocalPlayerThing, sithWorld_pCurrentWorld);
+        }
+        return;
+    }
+
+    sithSector* pPlayerSector = sithPlayer_pLocalPlayerThing->sector;
+    if (!pPlayerSector) {
+        if (updateDebugCount < 5) {
+            updateDebugCount++;
+            stdPlatform_Printf("stdVR_Map3D_Update: No player sector\n");
+        }
+        return;
+    }
+
+    // Store player position for centering
+    stdVR_map3DState.playerPos = sithPlayer_pLocalPlayerThing->position;
+
+    // Get player look direction from orientation matrix (lvec is forward)
+    rdMatrix34* pOrient = &sithPlayer_pLocalPlayerThing->lookOrientation;
+    stdVR_map3DLookDir = pOrient->lvec;
+
+    // Get player yaw from look orientation
+    stdVR_map3DState.playerYaw = atan2f(pOrient->lvec.x, pOrient->lvec.y) * (180.0f / 3.14159265f);
+
+    // Check if cache needs update (first open or sector changed)
+    int currentSectorId = (int)(pPlayerSector - sithWorld_pCurrentWorld->sectors);
+    if (!stdVR_map3DCacheValid || currentSectorId != stdVR_map3DLastCacheSectorId) {
+        if (updateDebugCount < 10) {
+            updateDebugCount++;
+            stdPlatform_Printf("stdVR_Map3D_Update: Updating cache (sector %d -> %d)\n",
+                stdVR_map3DLastCacheSectorId, currentSectorId);
+        }
+        stdVR_Map3D_UpdateCachedGeometry();
+    }
+
+    // Clear dynamic line buffer (for this frame)
+    stdVR_map3DNumLines = 0;
+
+    // Copy cached geometry to render buffer
+    for (int i = 0; i < stdVR_map3DNumCachedLines; i++) {
+        stdVR_map3DLines[stdVR_map3DNumLines++] = stdVR_map3DCachedLines[i];
+    }
+
+    // Add entity markers (player, enemies, items) - these update every frame
+    stdVR_Map3D_CollectEntityMarkers();
+
+    // Add grid floor and frame
+    stdVR_Map3D_AddGridAndFrame();
+
+    // Debug: log how many lines collected (only first few frames)
     static int collectDebugCount = 0;
     if (collectDebugCount < 5) {
         collectDebugCount++;
-        stdPlatform_Printf("stdVR_Map3D_Update: Collected %d lines\n", stdVR_map3DNumLines);
+        stdPlatform_Printf("stdVR_Map3D_Update: %d cached + %d dynamic = %d total lines\n",
+            stdVR_map3DNumCachedLines, stdVR_map3DNumLines - stdVR_map3DNumCachedLines,
+            stdVR_map3DNumLines);
     }
 }
 
@@ -694,6 +948,9 @@ static void stdVR_Map3D_CollectSurfaceEdges(sithSector* pSector, sithSurface* pS
         return;
     }
 
+    // Determine if this is a floor surface (for color selection)
+    int bIsFloor = (pSurface->surfaceFlags & SITH_SURFACE_FLOOR) != 0;
+
     // Draw edges around the surface
     for (int i = 0; i < numVerts; i++) {
         int idx1 = pVertexIdxs[i];
@@ -709,10 +966,23 @@ static void stdVR_Map3D_CollectSurfaceEdges(sithSector* pSector, sithSurface* pS
         mid.z = (v1.z + v2.z) * 0.5f - stdVR_map3DState.playerPos.z;
         float depth = sqrtf(mid.x * mid.x + mid.y * mid.y + mid.z * mid.z);
 
-        uint32_t color = stdVR_Map3D_GetDepthColor(depth);
+        uint32_t color = stdVR_Map3D_GetDepthColor(depth, bIsFloor);
 
-        stdVR_Map3D_AddLine(&v1, &v2, color);
+        // Add to CACHED line buffer (static geometry)
+        stdVR_Map3D_AddCachedLine(&v1, &v2, color);
     }
+}
+
+static void stdVR_Map3D_AddCachedLine(rdVector3* v1, rdVector3* v2, uint32_t color)
+{
+    if (stdVR_map3DNumCachedLines >= STDVR_MAP3D_MAX_LINES) {
+        return;
+    }
+
+    stdVR_Map3DLine* pLine = &stdVR_map3DCachedLines[stdVR_map3DNumCachedLines++];
+    pLine->start = *v1;
+    pLine->end = *v2;
+    pLine->color = color;
 }
 
 static void stdVR_Map3D_AddLine(rdVector3* v1, rdVector3* v2, uint32_t color)
@@ -727,9 +997,9 @@ static void stdVR_Map3D_AddLine(rdVector3* v1, rdVector3* v2, uint32_t color)
     pLine->color = color;
 }
 
-static uint32_t stdVR_Map3D_GetDepthColor(float depth)
+static uint32_t stdVR_Map3D_GetDepthColor(float depth, int bIsFloor)
 {
-    // Smooth gradient from bright green (near) to dark green (far)
+    // Smooth gradient based on distance from player
     float t;
     if (depth <= stdVR_map3DGradientNear) {
         t = 0.0f;  // Full brightness
@@ -740,11 +1010,24 @@ static uint32_t stdVR_Map3D_GetDepthColor(float depth)
         t = (depth - stdVR_map3DGradientNear) / (stdVR_map3DGradientFar - stdVR_map3DGradientNear);
     }
 
-    // Interpolate green channel value
-    uint8_t green = (uint8_t)(stdVR_map3DColorNear + t * (stdVR_map3DColorFar - stdVR_map3DColorNear));
+    uint8_t red, green, blue, alpha;
 
-    // Return color in AABBGGRR format (full alpha, no red/blue, interpolated green)
-    return (0xFF << 24) | (green << 8);
+    if (bIsFloor) {
+        // Floor surfaces: green color with transparency
+        green = (uint8_t)(stdVR_map3DColorNear + t * (stdVR_map3DColorFar - stdVR_map3DColorNear));
+        red = 0;
+        blue = 0;
+        alpha = stdVR_map3DFloorAlpha;
+    } else {
+        // Wall surfaces: cyan/blue-ish color, more transparent
+        green = (uint8_t)(stdVR_map3DColorNear * 0.5f + t * (stdVR_map3DColorFar * 0.5f - stdVR_map3DColorNear * 0.5f));
+        blue = (uint8_t)(stdVR_map3DWallColorNear + t * (stdVR_map3DWallColorFar - stdVR_map3DWallColorNear));
+        red = 0;
+        alpha = stdVR_map3DWallAlpha;
+    }
+
+    // Return color in AABBGGRR format
+    return ((uint32_t)alpha << 24) | ((uint32_t)blue << 16) | ((uint32_t)green << 8) | red;
 }
 
 // ============================================================================
@@ -828,7 +1111,8 @@ void stdVR_Map3D_GetProjectionMatrix(float* pOut16, float zNear, float zFar)
 
 void stdVR_Map3D_Render(void)
 {
-    if (!stdVR_map3DState.bEnabled || stdVR_map3DNumLines == 0) {
+    // Render if enabled OR if closing animation is in progress
+    if ((!stdVR_map3DState.bEnabled && !stdVR_map3DClosing) || stdVR_map3DNumLines == 0) {
         return;
     }
 
@@ -970,6 +1254,13 @@ void stdVR_Map3D_Render(void)
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
 
+    // Enable line smoothing for anti-aliased lines (desktop GL only)
+#ifndef TARGET_ANDROID_NATIVE_GLES
+    glEnable(GL_LINE_SMOOTH);
+    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+#endif
+    glLineWidth(1.5f);  // Slightly thicker lines for better visibility
+
     // Draw lines
     glDrawArrays(GL_LINES, 0, numVertices);
 
@@ -979,6 +1270,10 @@ void stdVR_Map3D_Render(void)
     if (!prevBlend) glDisable(GL_BLEND);
     if (prevDepthTest) glEnable(GL_DEPTH_TEST);
     glDepthMask(prevDepthMask);
+#ifndef TARGET_ANDROID_NATIVE_GLES
+    glDisable(GL_LINE_SMOOTH);
+#endif
+    glLineWidth(1.0f);
 
     // Debug logging
     static int renderLogCount = 0;
