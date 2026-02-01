@@ -40,7 +40,7 @@ int stdVR_Map3D_IsVisible(void);
 
 // Update and render (call from VR render loop)
 void stdVR_Map3D_Update(void);
-void stdVR_Map3D_Render(void);
+void stdVR_Map3D_Render(int eye);  // eye = -1 for MultiView, 0/1 for per-eye PC VR
 
 // Configuration
 void stdVR_Map3D_SetScale(float scale);
@@ -67,7 +67,7 @@ static inline void stdVR_Map3D_Shutdown(void) {}
 static inline void stdVR_Map3D_Toggle(void) {}
 static inline int stdVR_Map3D_IsVisible(void) { return 0; }
 static inline void stdVR_Map3D_Update(void) {}
-static inline void stdVR_Map3D_Render(void) {}
+static inline void stdVR_Map3D_Render(int eye) { (void)eye; }
 static inline void stdVR_Map3D_SetScale(float scale) { (void)scale; }
 static inline void stdVR_Map3D_SetDistance(float distance) { (void)distance; }
 static inline void stdVR_Map3D_SetHeight(float height) { (void)height; }

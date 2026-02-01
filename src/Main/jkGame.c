@@ -407,8 +407,8 @@ int jkGame_Update()
                     sithRender_Draw();
                     jkPlayer_DrawPov();
 
-                    // Added: Render 3D map overlay (uses rdDebug_DrawLine3 which adds to render cache)
-                    stdVR_Map3D_Render();
+                    // Added: Render 3D map overlay (uses custom shader for VR stereo)
+                    stdVR_Map3D_Render(-1);  // -1 = MultiView mode, shader uses gl_ViewID_OVR
 
                     // Flush render cache
                     rdCache_Flush();
@@ -449,8 +449,8 @@ int jkGame_Update()
                     sithRender_Draw();
                     jkPlayer_DrawPov();
 
-                    // Added: Render 3D map overlay (uses rdDebug_DrawLine3 which adds to render cache)
-                    stdVR_Map3D_Render();
+                    // Added: Render 3D map overlay (uses custom shader for VR stereo)
+                    stdVR_Map3D_Render(eye);  // Pass eye index for per-eye PC VR rendering
 
                     // Flush render cache per-eye so triangles are actually drawn to internal FBO
                     // before we blit to VR swapchain. Without this, both eyes get empty content.

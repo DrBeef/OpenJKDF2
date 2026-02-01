@@ -18,6 +18,9 @@
 
 #include <math.h>
 
+// VR debug logging
+extern void VR_Log(const char* fmt, ...);
+
 // GLES3 for direct line rendering
 #ifdef TARGET_ANDROID_NATIVE_GLES
 #include <GLES3/gl3.h>
@@ -30,6 +33,7 @@ static GLuint stdVR_map3DShaderProgram = 0;
 static GLuint stdVR_map3DVertexBuffer = 0;
 static GLuint stdVR_map3DVertexArray = 0;  // VAO required for GLES3
 static GLint stdVR_map3DUniformMVP = -1;
+static GLint stdVR_map3DUniformEyeIndex = -1;  // For PC VR per-eye rendering
 static int stdVR_map3DShaderInitted = 0;
 
 // Vertex data for line rendering (position + color)
@@ -251,26 +255,35 @@ static void stdVR_Map3D_InitShader(void)
     // Get uniform location for MVP array
     stdVR_map3DUniformMVP = glGetUniformLocation(stdVR_map3DShaderProgram, "uMVP");
 
-    // Create VAO (required for GLES3)
+#ifndef TARGET_ANDROID_NATIVE_GLES
+    // PC VR: Get uniform location for eye index (used for per-eye rendering)
+    stdVR_map3DUniformEyeIndex = glGetUniformLocation(stdVR_map3DShaderProgram, "uEyeIndex");
+#endif
+
+    // Clear any pending errors
+    while (glGetError() != GL_NO_ERROR) {}
+
+    // Save current VAO binding (critical: main renderer uses VAO 1, not 0)
+    GLint prevVAO;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
+
+    // Create VAO for our line rendering
     glGenVertexArrays(1, &stdVR_map3DVertexArray);
     glBindVertexArray(stdVR_map3DVertexArray);
 
-    // Create vertex buffer
+    // Create vertex buffer and set up attributes in the VAO
     glGenBuffers(1, &stdVR_map3DVertexBuffer);
     glBindBuffer(GL_ARRAY_BUFFER, stdVR_map3DVertexBuffer);
-
-    // Set up vertex attributes in the VAO
     glEnableVertexAttribArray(0);  // aPos
     glEnableVertexAttribArray(1);  // aColor
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(stdVR_Map3DVertex), (void*)0);
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(stdVR_Map3DVertex), (void*)(3 * sizeof(float)));
 
-    // Unbind VAO
-    glBindVertexArray(0);
+    // Restore previous VAO (critical for main renderer)
+    glBindVertexArray(prevVAO);
 
     stdVR_map3DShaderInitted = 1;
-    stdPlatform_Printf("stdVR_Map3D: Shader initialized (MVP uniform=%d, VAO=%u)\n",
-        stdVR_map3DUniformMVP, stdVR_map3DVertexArray);
+    stdPlatform_Printf("stdVR_Map3D: Shader initialized (VAO=%u)\n", stdVR_map3DVertexArray);
 }
 
 static void stdVR_Map3D_ShutdownShader(void)
@@ -360,11 +373,6 @@ void stdVR_Map3D_Toggle(void)
         stdVR_map3DCacheValid = 0;
         stdVR_map3DLastCacheSectorId = -1;
 
-        stdPlatform_Printf("stdVR_Map3D: HeadPos=(%.2f,%.2f,%.2f) Lvec=(%.2f,%.2f,%.2f)\n",
-            eyePose.scale.x, eyePose.scale.y, eyePose.scale.z,
-            eyePose.lvec.x, eyePose.lvec.y, eyePose.lvec.z);
-        stdPlatform_Printf("stdVR_Map3D: Anchor set at %.2f, %.2f, %.2f (JKDF2 space)\n",
-            stdVR_map3DAnchorPos.x, stdVR_map3DAnchorPos.y, stdVR_map3DAnchorPos.z);
         stdPlatform_Printf("stdVR_Map3D: Opening\n");
     } else {
         // Closing the map - start zoom-out animation
@@ -1271,7 +1279,9 @@ static void stdVR_Map3D_MultMatrix44(float* result, float* a, float* b)
     memcpy(result, temp, 16 * sizeof(float));
 }
 
-void stdVR_Map3D_GetProjectionMatrix(float* pOut16, float zNear, float zFar)
+// Build symmetric projection matrix for MultiView (Android/Quest)
+// Uses averaged FOV values that work for both eyes in a single draw call
+static void stdVR_Map3D_GetSymmetricProjection(float* pOut16, float zNear, float zFar)
 {
     // Build asymmetric projection matrix from FOV tangents
     float fovLeft = stdVR_clientInfo.eyes[0].fovLeft;
@@ -1299,12 +1309,45 @@ void stdVR_Map3D_GetProjectionMatrix(float* pOut16, float zNear, float zFar)
     pOut16[15] = 0.0f;
 }
 
-void stdVR_Map3D_Render(void)
+#ifndef TARGET_ANDROID_NATIVE_GLES
+// Build per-eye asymmetric projection matrix for PC VR
+// Each eye gets its own projection based on that eye's FOV
+static void stdVR_Map3D_GetAsymmetricProjection(float* pOut16, int eyeIdx, float zNear, float zFar)
+{
+    // Use this specific eye's FOV tangents
+    float fovLeft = stdVR_clientInfo.eyes[eyeIdx].fovLeft;
+    float fovRight = stdVR_clientInfo.eyes[eyeIdx].fovRight;
+    float fovUp = stdVR_clientInfo.eyes[eyeIdx].fovUp;
+    float fovDown = stdVR_clientInfo.eyes[eyeIdx].fovDown;
+
+    float left = -fovLeft * zNear;
+    float right = fovRight * zNear;
+    float bottom = -fovDown * zNear;
+    float top = fovUp * zNear;
+
+    float width = right - left;
+    float height = top - bottom;
+
+    // Column-major 4x4 asymmetric perspective matrix
+    memset(pOut16, 0, 16 * sizeof(float));
+    pOut16[0] = 2.0f * zNear / width;
+    pOut16[5] = 2.0f * zNear / height;
+    pOut16[8] = (right + left) / width;
+    pOut16[9] = (top + bottom) / height;
+    pOut16[10] = -(zFar + zNear) / (zFar - zNear);
+    pOut16[11] = -1.0f;
+    pOut16[14] = -2.0f * zFar * zNear / (zFar - zNear);
+    pOut16[15] = 0.0f;
+}
+#endif
+
+void stdVR_Map3D_Render(int eye)
 {
     // Render if enabled OR if closing animation is in progress
     if ((!stdVR_map3DState.bEnabled && !stdVR_map3DClosing) || stdVR_map3DNumLines == 0) {
         return;
     }
+
 
     // Initialize shader on first render
     if (!stdVR_map3DShaderInitted) {
@@ -1318,25 +1361,12 @@ void stdVR_Map3D_Render(void)
     int numVertices = stdVR_map3DNumLines * 2;
     float mvpMatrices[32];  // 2 x 4x4 = 32 floats
 
-    // Debug logging
-    static int renderDebugCount = 0;
-    if (renderDebugCount < 5) {
-        renderDebugCount++;
-        stdPlatform_Printf("stdVR_Map3D: Anchor=%.2f,%.2f,%.2f numLines=%d\n",
-            stdVR_map3DAnchorPos.x, stdVR_map3DAnchorPos.y, stdVR_map3DAnchorPos.z,
-            stdVR_map3DNumLines);
-    }
 
     // Get eye poses from VR system (in JKDF2 space)
     rdMatrix34 eyePoses[2];
     stdVR_GetEyeViewMatrix(0, &eyePoses[0]);
     stdVR_GetEyeViewMatrix(1, &eyePoses[1]);
 
-    if (renderDebugCount <= 5) {
-        stdPlatform_Printf("stdVR_Map3D: Eye0Pos=%.2f,%.2f,%.2f rvec=%.2f,%.2f,%.2f\n",
-            eyePoses[0].scale.x, eyePoses[0].scale.y, eyePoses[0].scale.z,
-            eyePoses[0].rvec.x, eyePoses[0].rvec.y, eyePoses[0].rvec.z);
-    }
 
     // Transform vertices to OpenGL world space (model transform already applied)
     for (int i = 0; i < stdVR_map3DNumLines; i++) {
@@ -1370,21 +1400,27 @@ void stdVR_Map3D_Render(void)
     }
 
     // Build MVP for each eye
-    // Use symmetric projection + proper view matrix
-    for (int eye = 0; eye < 2; eye++) {
+    for (int eyeIdx = 0; eyeIdx < 2; eyeIdx++) {
         float projMat[16];
         float viewMat[16];
-        float* mvpMat = &mvpMatrices[eye * 16];
+        float* mvpMat = &mvpMatrices[eyeIdx * 16];
 
         float zNear = 0.05f;
         float zFar = 50.0f;
-        stdVR_Map3D_GetProjectionMatrix(projMat, zNear, zFar);
+
+#ifdef TARGET_ANDROID_NATIVE_GLES
+        // MultiView: use symmetric projection (same for both eyes)
+        stdVR_Map3D_GetSymmetricProjection(projMat, zNear, zFar);
+#else
+        // PC VR: use per-eye asymmetric projection
+        stdVR_Map3D_GetAsymmetricProjection(projMat, eyeIdx, zNear, zFar);
+#endif
 
         // Build view matrix: JKDF2 view rotation + coordinate conversion
         // Combined rotation = CoordConvert * JKDF2_ViewRotation
         // JKDF2 view rotation has rows: rvec, lvec, uvec
         // After coord convert: rows become rvec, uvec, -lvec
-        rdMatrix34* pEye = &eyePoses[eye];
+        rdMatrix34* pEye = &eyePoses[eyeIdx];
         float rx = pEye->rvec.x, ry = pEye->rvec.y, rz = pEye->rvec.z;
         float fx = pEye->lvec.x, fy = pEye->lvec.y, fz = pEye->lvec.z;
         float ux = pEye->uvec.x, uy = pEye->uvec.y, uz = pEye->uvec.z;
@@ -1412,17 +1448,39 @@ void stdVR_Map3D_Render(void)
         stdVR_Map3D_MultMatrix44(mvpMat, projMat, viewMat);
     }
 
-    // Save GL state
+    // Save GL state (comprehensive to avoid corrupting main renderer)
     GLint prevProgram;
     GLint prevVAO;
-    GLint prevBlend;
-    GLint prevDepthTest;
+    GLint prevVBO;
+    GLint prevFBO;
+    GLint prevBlendEnabled;
+    GLint prevDepthTestEnabled;
     GLint prevDepthMask;
+    GLint prevBlendSrcRGB, prevBlendDstRGB;
+    GLint prevCullFace;
+    GLint prevViewport[4];
+    GLint prevScissorBox[4];
+    GLint prevScissorEnabled;
     glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
-    glGetIntegerv(GL_BLEND, &prevBlend);
-    glGetIntegerv(GL_DEPTH_TEST, &prevDepthTest);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevVBO);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
+    prevBlendEnabled = glIsEnabled(GL_BLEND);
+    prevDepthTestEnabled = glIsEnabled(GL_DEPTH_TEST);
+    prevCullFace = glIsEnabled(GL_CULL_FACE);
+    prevScissorEnabled = glIsEnabled(GL_SCISSOR_TEST);
     glGetIntegerv(GL_DEPTH_WRITEMASK, &prevDepthMask);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &prevBlendSrcRGB);
+    glGetIntegerv(GL_BLEND_DST_RGB, &prevBlendDstRGB);
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+    glGetIntegerv(GL_SCISSOR_BOX, prevScissorBox);
+
+    // Also save element buffer binding (std3D uses indexed drawing)
+    GLint prevEBO;
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &prevEBO);
+
+    // Clear any pending GL errors
+    while (glGetError() != GL_NO_ERROR) {}
 
     // Set up our rendering state
     glUseProgram(stdVR_map3DShaderProgram);
@@ -1430,10 +1488,17 @@ void stdVR_Map3D_Render(void)
     // Upload both MVP matrices (array of 2 mat4)
     glUniformMatrix4fv(stdVR_map3DUniformMVP, 2, GL_FALSE, mvpMatrices);
 
-    // Bind our VAO (vertex attributes are already configured)
+#ifndef TARGET_ANDROID_NATIVE_GLES
+    // PC VR: Set eye index for per-eye rendering
+    if (eye >= 0 && stdVR_map3DUniformEyeIndex >= 0) {
+        glUniform1i(stdVR_map3DUniformEyeIndex, eye);
+    }
+#endif
+
+    // Bind our VAO which has all vertex attribute state pre-configured
     glBindVertexArray(stdVR_map3DVertexArray);
 
-    // Upload vertex data
+    // Upload vertex data to our VBO
     glBindBuffer(GL_ARRAY_BUFFER, stdVR_map3DVertexBuffer);
     glBufferData(GL_ARRAY_BUFFER, numVertices * sizeof(stdVR_Map3DVertex),
                  stdVR_map3DVertices, GL_STREAM_DRAW);
@@ -1443,36 +1508,41 @@ void stdVR_Map3D_Render(void)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);  // Lines don't need face culling
 
     // Enable line smoothing for anti-aliased lines (desktop GL only)
 #ifndef TARGET_ANDROID_NATIVE_GLES
     glEnable(GL_LINE_SMOOTH);
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
 #endif
-    glLineWidth(1.2f);  // Slightly thin lines for holographic look
+    // Note: glLineWidth values other than 1.0 may not be supported on some drivers
+
+    // Clear any pending errors before draw
+    while (glGetError() != GL_NO_ERROR) {}
 
     // Draw lines
     glDrawArrays(GL_LINES, 0, numVertices);
 
-    // Restore GL state
-    glBindVertexArray(prevVAO);
-    glUseProgram(prevProgram);
-    if (!prevBlend) glDisable(GL_BLEND);
-    if (prevDepthTest) glEnable(GL_DEPTH_TEST);
-    glDepthMask(prevDepthMask);
+    // Restore GL state (in reverse order)
 #ifndef TARGET_ANDROID_NATIVE_GLES
     glDisable(GL_LINE_SMOOTH);
 #endif
     glLineWidth(1.0f);
+    if (prevCullFace) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glDepthMask(prevDepthMask);
+    if (prevDepthTestEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (prevBlendEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (prevScissorEnabled) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    glBlendFunc(prevBlendSrcRGB, prevBlendDstRGB);
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    glScissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
 
-    // Debug logging
-    static int renderLogCount = 0;
-    if (renderLogCount < 5) {
-        renderLogCount++;
-        stdPlatform_Printf("stdVR_Map3D: Rendered %d lines (%d verts), MVP[0]=(%.2f,%.2f,%.2f,%.2f)\n",
-            stdVR_map3DNumLines, numVertices,
-            mvpMatrices[0], mvpMatrices[5], mvpMatrices[10], mvpMatrices[15]);
-    }
+    // Restore buffer, VAO, program, and FBO
+    glBindVertexArray(prevVAO);  // Restore VAO first (it affects buffer bindings)
+    glBindBuffer(GL_ARRAY_BUFFER, prevVBO);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, prevEBO);
+    glUseProgram(prevProgram);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prevFBO);
 }
 
 // Note: DrawPlayerMarker removed - rdDebug_DrawLine3 breaks VR MultiView rendering
