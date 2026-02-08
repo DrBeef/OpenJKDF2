@@ -695,7 +695,7 @@ extern "C" int stdVR_OpenXR_Init(void)
     createInfo.applicationInfo.applicationVersion = 1;
     strcpy(createInfo.applicationInfo.engineName, "OpenJKDF2");
     createInfo.applicationInfo.engineVersion = 1;
-    createInfo.applicationInfo.apiVersion = XR_CURRENT_API_VERSION;
+    createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
     createInfo.enabledExtensionCount = (uint32_t)enabledExtensions.size();
     createInfo.enabledExtensionNames = enabledExtensions.data();
 
@@ -2914,8 +2914,9 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
     stdVR_clientInfo.buttonState = 0;
 
     // Get thumbstick values (swap move/turn hands for left-handed mode)
-    int moveHand = (stdVR_config.dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
-    int turnHand = (moveHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
+    // SB: Don't swap sticks!
+    int moveHand = STDVR_CONTROLLER_LEFT;//(stdVR_config.dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
+    int turnHand = STDVR_CONTROLLER_RIGHT;//(moveHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
     for (int hand = 0; hand < STDVR_CONTROLLER_COUNT; hand++) {
         XrActionStateGetInfo getInfo = { XR_TYPE_ACTION_STATE_GET_INFO };
         getInfo.subactionPath = xrHandPaths[hand];

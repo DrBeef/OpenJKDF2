@@ -363,9 +363,11 @@ void jkGuiTitle_LoadingFinalize()
     int shouldSkip = 1;  // Always skip in quickstart mode
 #elif defined(PLATFORM_VR)
     extern int32_t Main_bVRTest;
-    int shouldSkip = jkPlayer_bFastMissionText || sithNet_isMulti || !sithWorld_pCurrentWorld || Main_bVRTest;
+    extern char Main_strMap[128+4];
+    int shouldSkip = jkPlayer_bFastMissionText || sithNet_isMulti || !sithWorld_pCurrentWorld || Main_bVRTest || Main_strMap[0];
 #else
-    int shouldSkip = jkPlayer_bFastMissionText || sithNet_isMulti || !sithWorld_pCurrentWorld;
+    extern char Main_strMap[128+4];
+    int shouldSkip = jkPlayer_bFastMissionText || sithNet_isMulti || !sithWorld_pCurrentWorld || Main_strMap[0];
 #endif
     if ( jkGuiTitle_whichLoading != 1)
     {

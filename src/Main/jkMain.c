@@ -937,6 +937,58 @@ void jkMain_TitleTick(int a1)
     }
 #endif
 
+#ifdef QOL_IMPROVEMENTS
+    // Added: Runtime quickstart via commandline.txt (-map argument)
+    // Allows skipping menus without recompiling
+    {
+        extern char Main_strEpisode[129];
+        extern char Main_strMap[128+4];
+
+        if (Main_strMap[0]) {
+            // Default episode to jk1 if not specified
+            if (!Main_strEpisode[0]) {
+                stdString_SafeStrCopy(Main_strEpisode, "jk1", 0x80);
+            }
+
+            stdPlatform_Printf("Runtime quickstart: episode=%s, map=%s\n", Main_strEpisode, Main_strMap);
+
+            jkSmack_gameMode = 0;
+
+            // Build full level filename
+            char levelFile[256];
+            snprintf(levelFile, sizeof(levelFile), "%s.jkl", Main_strMap);
+            _strncpy(jkMain_aLevelJklFname, levelFile, 127);
+            jkMain_aLevelJklFname[127] = 0;
+
+            // Load the episode GOB (jkRes_LoadGob adds .gob extension internally)
+            jkRes_LoadGob(Main_strEpisode);
+
+            // Free old episode data if present
+            if (jkEpisode_mLoad.paEntries) {
+                pHS->free(jkEpisode_mLoad.paEntries);
+                jkEpisode_mLoad.paEntries = NULL;
+                jkMain_pEpisodeEnt = NULL;
+                jkMain_pEpisodeEnt2 = NULL;
+            }
+
+            if (!jkEpisode_Load(&jkEpisode_mLoad)) {
+                stdPlatform_Printf("Runtime quickstart: Failed to load episode %s\n", Main_strEpisode);
+                jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
+                return;
+            }
+
+            jkEpisode_idk4(&jkEpisode_mLoad, Main_strMap);
+
+            jkPlayer_bLoadingSomething = 1;
+            if (jkGuiRend_thing_five)
+                jkGuiRend_thing_four = 1;
+            jkSmack_stopTick = 1;
+            jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY;
+            return;
+        }
+    }
+#endif // QOL_IMPROVEMENTS
+
 #ifdef VR_QUICKSTART_MODE
     // Quick-start mode: skip main menu and go directly to gameplay
     // Follows the pattern from jkMain_LoadLevelSingleplayer

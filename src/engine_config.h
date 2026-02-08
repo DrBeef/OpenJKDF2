@@ -468,10 +468,38 @@ extern FAST_FUNC void* __aeabi_memcpy8(void* dst, const void* src, size_t len);*
 // VR Quick-start mode - skips menus and loads directly into gameplay
 // Uncomment to enable for testing builds
 // =============================================================================
+// JK1 map names (case-sensitive):
+//   01narshadda      Level 1:  Nar Shaddaa Loading Terminal
+//   02narshadda      Level 2:  Nar Shaddaa Streets
+//   03katarn         Level 3:  Katarn House
+//   04EscapeHouse    Level 4:  Escape Katarn House
+//   06ABarons        Level 5:  Barons Hed
+//   06BBarons        Level 6:  Barons Hed 2
+//   07yun            Level 7:  Yun (Boss)
+//   08Escape88       Level 8:  Escape 8t88's Palace
+//   09FuelStation    Level 9:  Fuel Station
+//   10cargo          Level 10: Cargo Ship
+//   11gorc           Level 11: Gorc & Pic (Boss)
+//   12escape         Level 12: Escape Cargo Ship
+//   14tower          Level 13: Tower
+//   15maw            Level 14: Maw (Boss)
+//   Light side:
+//   16aEscapeShip    Level 15: Escape Ship
+//   17asarris        Level 16: Sarris (Boss)
+//   18Ascend         Level 17: Ascend Tower
+//   19A              Level 18: Descend Tower 1
+//   19B              Level 19: Descend Tower 2
+//   20aboc           Level 20: Boc (Boss)
+//   21ajerec         Level 21: Jerec (Final Boss)
+//   Dark side:
+//   16bEscapeShip    Level 15: Escape Ship
+//   17bsarris        Level 16: Sarris (Boss)
+//   20bboc           Level 20: Boc (Boss)
+//   21bjerec         Level 21: Jerec (Final Boss)
 //#define VR_QUICKSTART_MODE
 #ifdef VR_QUICKSTART_MODE
 #define VR_QUICKSTART_EPISODE "jk1"           // Episode GOB name (without .gob)
-#define VR_QUICKSTART_MAP     "01narshadda"   // Level filename (without .jkl)
+#define VR_QUICKSTART_MAP     "03katarn"   // Level filename (without .jkl)
 #endif
 
 // =============================================================================

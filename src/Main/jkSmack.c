@@ -49,7 +49,13 @@ int jkSmack_SmackPlay(const char *fname)
     // Skip intro videos in quickstart mode
     if (1)
 #elif !defined(ARCH_WASM)
+#ifdef QOL_IMPROVEMENTS
+    // Added: Also skip intro videos when a map is specified via commandline.txt
+    extern char Main_strMap[128+4];
+    if ( stdComm_EarlyInit() || jkPlayer_setDisableCutscenes || Main_strMap[0] )
+#else
     if ( stdComm_EarlyInit() || jkPlayer_setDisableCutscenes )
+#endif
 #else
     if (0)
 #endif

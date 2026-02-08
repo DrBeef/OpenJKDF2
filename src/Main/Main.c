@@ -286,6 +286,34 @@ int Main_StartupDedicated(int bFullyDedicated)
 }
 #endif // QOL_IMPROVEMENTS
 
+#ifdef QOL_IMPROVEMENTS
+// Added: Read commandline.txt to allow runtime quickstart without recompiling
+static void Main_ReadCommandLineFile(char *pOutBuf, int maxLen)
+{
+    pOutBuf[0] = 0;
+
+#ifdef TARGET_ANDROID
+    const char* pPath = "/sdcard/OpenJKDF2/commandline.txt";
+#else
+    const char* pPath = "commandline.txt";
+#endif
+
+    FILE* pFile = fopen(pPath, "r");
+    if (!pFile) return;
+
+    if (fgets(pOutBuf, maxLen, pFile)) {
+        // Strip trailing newline/CR
+        int len = strlen(pOutBuf);
+        while (len > 0 && (pOutBuf[len - 1] == '\n' || pOutBuf[len - 1] == '\r')) {
+            pOutBuf[--len] = 0;
+        }
+        stdPlatform_Printf("commandline.txt: '%s'\n", pOutBuf);
+    }
+
+    fclose(pFile);
+}
+#endif // QOL_IMPROVEMENTS
+
 int Main_Startup(const char *cmdline)
 {
     int result; // eax
@@ -335,7 +363,31 @@ int Main_Startup(const char *cmdline)
     Main_bDevMode = 0;
     jkGuiSound_musicVolume = 1.0;
     stdPlatform_Printf("%s\n", Main_path);
+
+#ifdef QOL_IMPROVEMENTS
+    // Added: Combine original cmdline with contents of commandline.txt
+    {
+        char fileCmdLine[512];
+        Main_ReadCommandLineFile(fileCmdLine, sizeof(fileCmdLine));
+
+        if (fileCmdLine[0]) {
+            char combinedCmdLine[1024];
+            combinedCmdLine[0] = 0;
+            if (cmdline && cmdline[0]) {
+                _strncpy(combinedCmdLine, cmdline, sizeof(combinedCmdLine) - 1);
+                combinedCmdLine[sizeof(combinedCmdLine) - 1] = 0;
+                strncat(combinedCmdLine, " ", sizeof(combinedCmdLine) - strlen(combinedCmdLine) - 1);
+            }
+            strncat(combinedCmdLine, fileCmdLine, sizeof(combinedCmdLine) - strlen(combinedCmdLine) - 1);
+            Main_ParseCmdLine(combinedCmdLine);
+        }
+        else {
+            Main_ParseCmdLine((char *)cmdline);
+        }
+    }
+#else
     Main_ParseCmdLine((char *)cmdline);
+#endif
 #ifdef TARGET_TWL
     Main_bNoHUD = 1;
 #endif
