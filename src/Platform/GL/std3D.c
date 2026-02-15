@@ -4682,6 +4682,12 @@ void std3D_DestroyVideoRGBTexture(void)
     std3D_bVideoRGBMode = 0;
 }
 
+// Added: Mirror mode for left-handed VR rendering
+void std3D_SetFrontFaceCW(int bCW)
+{
+    glFrontFace(bCW ? GL_CW : GL_CCW);
+}
+
 // Added: VR FBO override functions
 #ifdef PLATFORM_VR
 void std3D_SetVRTargetSize(int width, int height)

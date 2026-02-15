@@ -22,6 +22,7 @@
 #include "Gameplay/sithPlayer.h"
 #include "World/sithWeapon.h"
 #include "World/sithWorld.h"
+#include "World/sithModel.h"
 #include "World/sithSector.h"
 #include "Primitives/rdMatrix.h"
 #include "Devices/sithControl.h"
@@ -91,6 +92,10 @@ int jkPlayer_vrComfortVignette = 1;     // Enable comfort vignette (0/1)
 int jkPlayer_vrDominantHand = 1;        // 0=left, 1=right
 int jkPlayer_vrMoveDirection = 1;       // 0=head, 1=controller
 float jkPlayer_vrSupersampling = 1.0f;  // VR render scale multiplier
+static rdModel3* pVRFistsModel3 = NULL;
+static rdThing vrOffhandThing;
+static int bVROffhandReady = 0;
+static rdVector3 vrOffhandLhandOffset = {0}; // Cached K_Lhand bind-pose offset for centering
 #endif // PLATFORM_VR
 
 #ifdef JKM_DSS
@@ -351,7 +356,14 @@ void jkPlayer_Shutdown()
     _memset(jkPlayer_aMotsInfos, 0, sizeof(jkPlayer_aMotsInfos));
 #endif
     //nullsub_28_free();
-    
+
+#ifdef PLATFORM_VR
+    if (bVROffhandReady) {
+        rdThing_FreeEntry(&vrOffhandThing);
+        bVROffhandReady = 0;
+    }
+    pVRFistsModel3 = NULL;
+#endif
 }
 
 void jkPlayer_Open()
@@ -890,6 +902,15 @@ void jkPlayer_SetPovModel(jkPlayerInfo *info, rdModel3 *model)
             info->povModel.puppet = NULL;
         }
     }
+
+#ifdef PLATFORM_VR
+    // Log model filenames for VR off-hand debugging
+    if (model) {
+        extern void VR_Log(const char* fmt, ...);
+        VR_Log("SetPovModel: '%s' (curWeapon=%d, pVRFistsModel3=%p)\n",
+            model->filename, info->actorThing ? sithInventory_GetCurWeapon(info->actorThing) : -1, (void*)pVRFistsModel3);
+    }
+#endif
 }
 
 int jkPlayer_checkPov = 0;
@@ -1101,6 +1122,8 @@ void jkPlayer_DrawPov()
                 bVRHideLeftArm = 1;
             if (sithInventory_GetCurWeapon(pActorThing) == SITHBIN_THERMAL_DETONATOR)
                 bVRHideLeftArm = 1;
+            if (sithInventory_GetCurWeapon(pActorThing) == SITHBIN_FISTS)
+                bVRHideLeftArm = 1;
         }
         if (bVRHideLeftArm
             && playerThings[playerThingIdx].povModel.amputatedJoints
@@ -1116,6 +1139,20 @@ void jkPlayer_DrawPov()
                 vrAmputatedNodeIdx = node->idx;
                 playerThings[playerThingIdx].povModel.amputatedJoints[vrAmputatedNodeIdx] = 1;
             }
+        }
+
+        // Left-handed: mirror the weapon model along X so it appears in the correct hand.
+        // Negate rvec to flip the model, disable software backface culling and flip
+        // GL winding to compensate for reversed triangle orientation.
+        int bVRMirrorWeapon = (vrMotionWeapon && stdVR_GetDominantHand() == 0);
+        int vrSavedRenderOptions = 0;
+        if (bVRMirrorWeapon) {
+            viewMat.rvec.x = -viewMat.rvec.x;
+            viewMat.rvec.y = -viewMat.rvec.y;
+            viewMat.rvec.z = -viewMat.rvec.z;
+            vrSavedRenderOptions = rdGetRenderOptions();
+            rdSetRenderOptions(vrSavedRenderOptions & ~1);
+            std3D_SetFrontFaceCW(1);
         }
 #endif
         rdThing_Draw(&playerThings[playerThingIdx].povModel, &viewMat);
@@ -1133,7 +1170,123 @@ void jkPlayer_DrawPov()
         rdCache_Flush();
 #endif
 
-        // Added: we want the polyline to render in draw order so the spheres don't clip, 
+#ifdef PLATFORM_VR
+        if (bVRMirrorWeapon) {
+            std3D_SetFrontFaceCW(0);
+            rdSetRenderOptions(vrSavedRenderOptions);
+        }
+#endif
+
+#ifdef PLATFORM_VR
+        // Off-hand rendering: always show a bare fist hand at the off-hand controller.
+        // Uses a dedicated rdThing initialized from the fists POV model so that
+        // amputatedJoints/hierarchyNodeMatrices arrays match the fists hierarchy,
+        // regardless of what weapon is currently equipped.
+        if (stdVR_bEnabled && vrMotionWeapon) {
+            // Try to find the fists model if we don't have it yet
+            if (!pVRFistsModel3) {
+                // Method 1: capture from current POV when fists are equipped
+                sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
+                if (sithInventory_GetCurWeapon(pActorThing) == SITHBIN_FISTS
+                    && playerThings[playerThingIdx].povModel.model3)
+                {
+                    pVRFistsModel3 = playerThings[playerThingIdx].povModel.model3;
+                }
+            }
+            if (!pVRFistsModel3) {
+                // Method 2: look up common fists model names from the loaded model cache
+                static const char* aFistsModelNames[] = { "fistv.3do", "kyhand.3do", "fistpov.3do", NULL };
+                for (int i = 0; aFistsModelNames[i]; i++) {
+                    rdModel3* pModel = sithModel_LoadEntry(aFistsModelNames[i], 1);
+                    if (pModel) {
+                        pVRFistsModel3 = pModel;
+                        break;
+                    }
+                }
+            }
+
+            // Initialize the off-hand rdThing when we have the fists model but haven't set up yet
+            if (pVRFistsModel3 && !bVROffhandReady) {
+                sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
+                rdThing_NewEntry(&vrOffhandThing, pActorThing);
+                if (rdThing_SetModel3(&vrOffhandThing, pVRFistsModel3)) {
+                    bVROffhandReady = 1;
+
+                    // Compute K_Lhand bind-pose offset: build hierarchy matrices
+                    // with identity to get the model-space position of K_Lhand (node 2).
+                    // We translate the view matrix by the negative of this offset so
+                    // K_Lhand ends up centered on the controller instead of the model origin.
+                    rdMatrix34 identityMat;
+                    rdMatrix_Identity34(&identityMat);
+                    vrOffhandThing.frameTrue = 0;
+                    rdPuppet_BuildJointMatrices(&vrOffhandThing, &identityMat);
+
+                    if (pVRFistsModel3->numHierarchyNodes > 2) {
+                        rdVector_Copy3(&vrOffhandLhandOffset, &vrOffhandThing.hierarchyNodeMatrices[2].scale);
+                    } else {
+                        rdVector_Zero3(&vrOffhandLhandOffset);
+                    }
+                }
+            }
+
+            if (bVROffhandReady) {
+                rdMatrix34 offhandViewMat;
+                int offHand = 1 - stdVR_GetDominantHand();
+                // Use raw controller matrix (no weapon pitch/position offsets)
+                if (stdVR_GetControllerViewMatrixRaw(offHand, &offhandViewMat)) {
+                    // Left-handed: mirror the off-hand model along X so K_Lhand
+                    // appears as a right hand at the right controller.
+                    int bVRMirrorOffhand = (stdVR_GetDominantHand() == 0);
+                    int vrOffhandSavedRenderOptions = 0;
+                    if (bVRMirrorOffhand) {
+                        offhandViewMat.rvec.x = -offhandViewMat.rvec.x;
+                        offhandViewMat.rvec.y = -offhandViewMat.rvec.y;
+                        offhandViewMat.rvec.z = -offhandViewMat.rvec.z;
+                        vrOffhandSavedRenderOptions = rdGetRenderOptions();
+                        rdSetRenderOptions(vrOffhandSavedRenderOptions & ~1);
+                        std3D_SetFrontFaceCW(1);
+                    }
+
+                    // Translate so K_Lhand is centered on the controller position
+                    rdVector3 negLhandOffset;
+                    rdVector_Neg3(&negLhandOffset, &vrOffhandLhandOffset);
+                    rdMatrix_PreTranslate34(&offhandViewMat, &negLhandOffset);
+
+                    // Amputate K_Rhand (node 5) chain — always hide the weapon arm,
+                    // show only the bare off-hand arm
+                    int offhandAmputatedNodeIdx = -1;
+                    if (pVRFistsModel3->numHierarchyNodes > 5) {
+                        rdHierarchyNode* pNode = &pVRFistsModel3->hierarchyNodes[5];
+                        while (pNode->parent && pNode->parent->parent) {
+                            pNode = pNode->parent;
+                        }
+                        offhandAmputatedNodeIdx = pNode->idx;
+                        vrOffhandThing.amputatedJoints[offhandAmputatedNodeIdx] = 1;
+                    }
+
+                    // Force hierarchy matrix rebuild for off-hand position
+                    vrOffhandThing.frameTrue = 0;
+                    rdThing_Draw(&vrOffhandThing, &offhandViewMat);
+
+                    // Restore amputated joints
+                    if (offhandAmputatedNodeIdx >= 0) {
+                        vrOffhandThing.amputatedJoints[offhandAmputatedNodeIdx] = 0;
+                    }
+
+#ifndef TARGET_TWL
+                    rdCache_Flush();
+#endif
+
+                    if (bVRMirrorOffhand) {
+                        std3D_SetFrontFaceCW(0);
+                        rdSetRenderOptions(vrOffhandSavedRenderOptions);
+                    }
+                }
+            }
+        }
+#endif
+
+        // Added: we want the polyline to render in draw order so the spheres don't clip,
         // but we want the POV model to be aware of the depths still.
 #if defined(SDL2_RENDER) || defined(TARGET_TWL)
         if (playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_SABERON)

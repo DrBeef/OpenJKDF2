@@ -1216,7 +1216,8 @@ float stdVR_GetSwingSpeed(void)
 //
 // This builds a view matrix that positions AND orients the weapon according to the
 // controller, combining game camera body orientation with controller orientation.
-int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
+// Added: Internal helper for controller view matrix with optional weapon offsets
+static int stdVR_GetControllerViewMatrixInternal(int hand, rdMatrix34* pViewMat, int bApplyWeaponOffset)
 {
     static int debugCounter = 0;
     static int logEvery = 60; // Log every N frames
@@ -1261,8 +1262,9 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
     // into game world space by the body direction.
 
     // Use per-weapon offsets if available, otherwise fall back to global config
-    stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
-    float pitchAdjust = (pWeaponOffset ? pWeaponOffset->pitchAdjust : 0.f) + stdVR_motionConfig.weaponPitchAdjust;
+    stdVR_WeaponOffset* pWeaponOffset = bApplyWeaponOffset ? stdVR_GetCurrentWeaponOffset() : NULL;
+    float pitchAdjust = (pWeaponOffset ? pWeaponOffset->pitchAdjust : 0.f)
+                      + (bApplyWeaponOffset ? stdVR_motionConfig.weaponPitchAdjust : 0.f);
 
     // First apply pitch adjustment to controller pose if configured
     rdMatrix34 adjustedPose;
@@ -1296,25 +1298,26 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
     offset.y = ctrlPos.y - hmdPos.y;
     offset.z = ctrlPos.z - hmdPos.z;
 
-    // Apply weapon position offset in controller local space
-    // Transform the offset by controller orientation before adding
-    float weapOffX = pWeaponOffset ? pWeaponOffset->offsetX : 0.f;
-    float weapOffY = pWeaponOffset ? pWeaponOffset->offsetY : 0.f;
-    float weapOffZ = pWeaponOffset ? pWeaponOffset->offsetZ : 0.f;
+    // Apply weapon position offset in controller local space (only for weapon hand)
+    if (bApplyWeaponOffset) {
+        float weapOffX = pWeaponOffset ? pWeaponOffset->offsetX : 0.f;
+        float weapOffY = pWeaponOffset ? pWeaponOffset->offsetY : 0.f;
+        float weapOffZ = pWeaponOffset ? pWeaponOffset->offsetZ : 0.f;
 
-    if (weapOffX != 0.0f || weapOffY != 0.0f || weapOffZ != 0.0f) {
-        rdVector3 localOffset;
-        localOffset.x = weapOffX;
-        localOffset.y = weapOffY;
-        localOffset.z = weapOffZ;
+        if (weapOffX != 0.0f || weapOffY != 0.0f || weapOffZ != 0.0f) {
+            rdVector3 localOffset;
+            localOffset.x = weapOffX;
+            localOffset.y = weapOffY;
+            localOffset.z = weapOffZ;
 
-        // Transform local offset by controller orientation
-        rdVector3 transformedOffset;
-        rdMatrix_TransformVector34(&transformedOffset, &localOffset, &adjustedPose);
+            // Transform local offset by controller orientation
+            rdVector3 transformedOffset;
+            rdMatrix_TransformVector34(&transformedOffset, &localOffset, &adjustedPose);
 
-        offset.x += transformedOffset.x;
-        offset.y += transformedOffset.y;
-        offset.z += transformedOffset.z;
+            offset.x += transformedOffset.x;
+            offset.y += transformedOffset.y;
+            offset.z += transformedOffset.z;
+        }
     }
 
     // Scale offset to game world units (1:1 with world scale)
@@ -1364,6 +1367,18 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
     }
 
     return 1;
+}
+
+int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
+{
+    return stdVR_GetControllerViewMatrixInternal(hand, pViewMat, 1);
+}
+
+// Added: Raw controller view matrix without per-weapon pitch/position offsets.
+// Used for off-hand rendering so it doesn't shift when changing weapons.
+int stdVR_GetControllerViewMatrixRaw(int hand, rdMatrix34* pViewMat)
+{
+    return stdVR_GetControllerViewMatrixInternal(hand, pViewMat, 0);
 }
 
 // Debug: Draw controller axes at given world position using immediate mode GL

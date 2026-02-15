@@ -141,6 +141,8 @@ void std3D_DebugClearTestColor(int eye);
 void std3D_DebugSaveInternalFbo(const char* filename);
 // VR HUD rendering - draws overlay buffer to currently bound FBO
 void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight);
+// Mirror mode: flip front-face winding for rendering mirrored (left-handed) models
+void std3D_SetFrontFaceCW(int bCW);
 // VR HUD rendering - draws UI render list to currently bound FBO with specified dimensions
 void std3D_DrawUIRenderListToCurrentFBO(int width, int height);
 // MultiView UBO functions for single-pass stereo rendering

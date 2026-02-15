@@ -120,6 +120,7 @@ int stdVR_GetSaberWorldMatrix(int hand, rdMatrix34* pMatrix);
 int stdVR_IsSwingTriggered(void);
 float stdVR_GetSwingSpeed(void);
 int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat);
+int stdVR_GetControllerViewMatrixRaw(int hand, rdMatrix34* pViewMat);
 
 // Debug visualization
 void stdVR_DrawDebugControllerAxes(int hand);
