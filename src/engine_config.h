@@ -337,7 +337,7 @@
 #define RDCACHE_RENDER_LINES
 
 #ifdef PLATFORM_VR
-#define VR_SABER_DEBUG_LINE  // Enable debug line for VR saber collision ray
+//#define VR_SABER_DEBUG_LINE  // Enable debug line for VR saber collision ray
 #endif
 
 //#define RDMATERIAL_LRU_LOAD_UNLOAD
