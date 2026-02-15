@@ -145,6 +145,29 @@ int jkHud_Open()
     v6 = *jkHud_pStatusRightBm->mipSurfaces;
     jkHud_rightBlitX = Video_format.width - HUD_SCALED(v6->format.width);
     jkHud_rightBlitY = Video_format.height - HUD_SCALED(v6->format.height);
+
+#ifdef PLATFORM_VR
+    {
+        extern int stdVR_bEnabled;
+        if (stdVR_bEnabled) {
+            // Increase HUD scale for VR readability if still at default
+            if (jkPlayer_hudScale <= 2.0)
+                jkPlayer_hudScale = 3.0;
+
+            // Recalculate positions with VR scale
+            jkHud_leftBlitY = Video_format.height - HUD_SCALED((*jkHud_pStatusLeftBm->mipSurfaces)->format.height);
+            v6 = *jkHud_pStatusRightBm->mipSurfaces;
+            jkHud_rightBlitX = Video_format.width - HUD_SCALED(v6->format.width);
+            jkHud_rightBlitY = Video_format.height - HUD_SCALED(v6->format.height);
+
+            // Move panels inward so they're visible in the headset FOV
+            int vrInsetX = Video_format.width / 5;
+            jkHud_leftBlitX = vrInsetX;
+            jkHud_rightBlitX -= vrInsetX;
+        }
+    }
+#endif
+
     for (v7 = 0; v7 < 5; v7++)
     {
         jkHud_aTeamColors16bpp[v7] = stdColor_Indexed8ToRGB16(jkHud_aTeamColors8bpp[v7], Video_aPalette, &Video_format.format);

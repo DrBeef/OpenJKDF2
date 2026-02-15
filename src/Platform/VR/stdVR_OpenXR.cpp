@@ -2044,8 +2044,8 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
                 hudQuadLayer.subImage.imageArrayIndex = 0;
 
                 // Position HUD in front of player (head-locked at comfortable distance)
-                float hudDistance = 2.0f;  // 2 meters in front
-                hudQuadLayer.pose.position = { 0.0f, -0.3f, -hudDistance };  // Slightly below eye level
+                float hudDistance = 2.0f;  // 3 meters in front (reduces stereo depth)
+                hudQuadLayer.pose.position = { 0.0f, -1.0f, -hudDistance };  // Lower to avoid obscuring view
                 hudQuadLayer.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };  // Face player
 
                 // HUD size in meters (maintain ~4:3 aspect ratio)

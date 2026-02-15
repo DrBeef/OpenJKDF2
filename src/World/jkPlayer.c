@@ -1238,6 +1238,11 @@ void jkPlayer_DrawPov()
             }
 
             if (bVROffhandReady) {
+                // Hide off-hand during saber activation/deactivation and when saber is on
+                sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
+                int bVRHideOffhand = (pActorThing->jkFlags & (JKFLAG_SABERON | JKFLAG_SABEREXTEND | JKFLAG_SABERRETRACT)) != 0;
+
+                if (!bVRHideOffhand) {
                 rdMatrix34 offhandViewMat;
                 int offHand = 1 - stdVR_GetDominantHand();
                 // Use raw controller matrix (no weapon pitch/position offsets)
@@ -1291,6 +1296,7 @@ void jkPlayer_DrawPov()
                     }
                     rdSetRenderOptions(vrOffhandSavedRenderOptions);
                 }
+            }
             }
         }
 #endif
