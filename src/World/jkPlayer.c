@@ -1141,17 +1141,23 @@ void jkPlayer_DrawPov()
             }
         }
 
-        // Left-handed: mirror the weapon model along X so it appears in the correct hand.
-        // Negate rvec to flip the model, disable software backface culling and flip
-        // GL winding to compensate for reversed triangle orientation.
-        int bVRMirrorWeapon = (vrMotionWeapon && stdVR_GetDominantHand() == 0);
+        // VR motion controls: disable software backface culling for the weapon model.
+        // The SW backface test dots face normals (model space) against vertex positions
+        // (view space). When the controller points differently from the camera, the
+        // spaces don't match and visible faces get incorrectly culled.
         int vrSavedRenderOptions = 0;
+        if (vrMotionWeapon) {
+            vrSavedRenderOptions = rdGetRenderOptions();
+            rdSetRenderOptions(vrSavedRenderOptions & ~1);
+        }
+
+        // Left-handed: mirror the weapon model along X so it appears in the correct hand.
+        // Negate rvec to flip the model and flip GL winding to compensate.
+        int bVRMirrorWeapon = (vrMotionWeapon && stdVR_GetDominantHand() == 0);
         if (bVRMirrorWeapon) {
             viewMat.rvec.x = -viewMat.rvec.x;
             viewMat.rvec.y = -viewMat.rvec.y;
             viewMat.rvec.z = -viewMat.rvec.z;
-            vrSavedRenderOptions = rdGetRenderOptions();
-            rdSetRenderOptions(vrSavedRenderOptions & ~1);
             std3D_SetFrontFaceCW(1);
         }
 #endif
@@ -1173,6 +1179,8 @@ void jkPlayer_DrawPov()
 #ifdef PLATFORM_VR
         if (bVRMirrorWeapon) {
             std3D_SetFrontFaceCW(0);
+        }
+        if (vrMotionWeapon) {
             rdSetRenderOptions(vrSavedRenderOptions);
         }
 #endif
@@ -1234,16 +1242,17 @@ void jkPlayer_DrawPov()
                 int offHand = 1 - stdVR_GetDominantHand();
                 // Use raw controller matrix (no weapon pitch/position offsets)
                 if (stdVR_GetControllerViewMatrixRaw(offHand, &offhandViewMat)) {
+                    // Disable software backface culling (same reason as main weapon)
+                    int vrOffhandSavedRenderOptions = rdGetRenderOptions();
+                    rdSetRenderOptions(vrOffhandSavedRenderOptions & ~1);
+
                     // Left-handed: mirror the off-hand model along X so K_Lhand
                     // appears as a right hand at the right controller.
                     int bVRMirrorOffhand = (stdVR_GetDominantHand() == 0);
-                    int vrOffhandSavedRenderOptions = 0;
                     if (bVRMirrorOffhand) {
                         offhandViewMat.rvec.x = -offhandViewMat.rvec.x;
                         offhandViewMat.rvec.y = -offhandViewMat.rvec.y;
                         offhandViewMat.rvec.z = -offhandViewMat.rvec.z;
-                        vrOffhandSavedRenderOptions = rdGetRenderOptions();
-                        rdSetRenderOptions(vrOffhandSavedRenderOptions & ~1);
                         std3D_SetFrontFaceCW(1);
                     }
 
@@ -1279,8 +1288,8 @@ void jkPlayer_DrawPov()
 
                     if (bVRMirrorOffhand) {
                         std3D_SetFrontFaceCW(0);
-                        rdSetRenderOptions(vrOffhandSavedRenderOptions);
                     }
+                    rdSetRenderOptions(vrOffhandSavedRenderOptions);
                 }
             }
         }
