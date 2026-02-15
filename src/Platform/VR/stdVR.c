@@ -1163,6 +1163,34 @@ void stdVR_GetControllerWorldMatrix(int hand, rdMatrix34* pMatrix)
     pMatrix->scale.z = worldPos.z;
 }
 
+// Get saber blade world matrix for collision. Uses same orientation as visual rendering
+// (stdVR_GetControllerViewMatrix) so collision direction matches the visible blade exactly.
+// Unlike stdVR_GetControllerWorldMatrix, this does NOT apply the -90 pitch offset.
+int stdVR_GetSaberWorldMatrix(int hand, rdMatrix34* pMatrix)
+{
+    // Use the same function that renders the weapon visual
+    // This ensures collision direction matches the blade direction exactly
+    if (!stdVR_GetControllerViewMatrix(hand, pMatrix))
+        return 0;
+
+    // Normalize orientation vectors (visual rendering may have scale applied)
+    rdVector_Normalize3Acc(&pMatrix->rvec);
+    rdVector_Normalize3Acc(&pMatrix->lvec);
+    rdVector_Normalize3Acc(&pMatrix->uvec);
+    return 1;
+}
+
+void stdVR_GetControllerAimDirection(int hand, rdVector3* pDirection)
+{
+    rdMatrix34 worldMat;
+    if (stdVR_GetSaberWorldMatrix(hand, &worldMat)) {
+        rdVector_Copy3(pDirection, &worldMat.lvec);
+    } else {
+        rdVector_Zero3(pDirection);
+        pDirection->y = 1.0f; // Default: forward
+    }
+}
+
 // Check if a velocity-triggered attack occurred this frame for dominant hand
 int stdVR_IsSwingTriggered(void)
 {

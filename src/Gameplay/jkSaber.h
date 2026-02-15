@@ -28,6 +28,10 @@ MATH_FUNC void jkSaber_SpawnSparks(jkPlayerInfo *pPlayerInfo, rdVector3 *pPos, s
 void jkSaber_Enable(sithThing *pThing, flex_t damage, flex_t bladeLength, flex_t stunDelay);
 void jkSaber_Disable(sithThing *player);
 
+#ifdef PLATFORM_VR
+void jkSaber_DrawVRDebugLine(void);
+#endif
+
 //static void (*jkSaber_UpdateCollision)(sithThing *player, int joint) = (void*)jkSaber_UpdateCollision_ADDR;
 
 #endif // _JKSABER_H

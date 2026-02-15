@@ -19,6 +19,31 @@
 
 #include "jk.h"
 
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#include "Engine/rdCamera.h"
+#include "Engine/rdClip.h"
+#include "Raster/rdCache.h"
+#include "Engine/rdColormap.h"
+#include "Gameplay/sithInventory.h"
+#include "Cog/sithCog.h"
+
+// VR saber debug: stores the last collision ray for debug line rendering
+static rdVector3 jkSaber_vrDebugRayStart;
+static rdVector3 jkSaber_vrDebugRayEnd;
+static int jkSaber_vrDebugRayValid = 0;
+
+// Solid material for debug line rendering (same pattern as rdDebug.c)
+static rdTexture jkSaber_vrDebugTex = {0};
+static rdTexinfo jkSaber_vrDebugTexinfo = { .header = {0}, .texext_unk00 = 0, .texture_ptr = &jkSaber_vrDebugTex };
+static rdMaterial jkSaber_vrDebugMat = {0};
+
+// VR saber swing state
+static int jkSaber_vrSwingActive = 0;
+static uint32_t jkSaber_vrSwingEndTime = 0;
+#define JKSABER_VR_SWING_LINGER_MS 200  // Keep damage active briefly after swing slows
+#endif
+
 #define JKSABER_EXTENDTIME (0.3000000)
 
 void jkSaber_InitializeSaberInfo(sithThing *thing, char *material_side_fname, char *material_tip_fname, flex_t base_rad, flex_t tip_rad, flex_t len, sithThing *wall_sparks, sithThing *blood_sparks, sithThing *saber_sparks)
@@ -344,6 +369,110 @@ void jkSaber_UpdateCollision(sithThing *player, int joint, int bSecondary)
 
     playerInfo = player->playerInfo;
 
+#ifdef PLATFORM_VR
+    // VR Motion Saber: use controller position/orientation instead of animation joint
+    if (stdVR_bEnabled && stdVR_motionConfig.bMotionSaberEnabled
+        && player == sithPlayer_pLocalPlayerThing && !bSecondary)
+    {
+        int hand = stdVR_GetDominantHand();
+        stdVR_ControllerState* pCtrl = stdVR_GetController(hand);
+        if (pCtrl && pCtrl->bTracking)
+        {
+            // Get controller world matrix as the model base
+            // (same orientation as stdVR_GetControllerViewMatrix, no -90 pitch offset)
+            rdMatrix34 controllerMat;
+            if (!stdVR_GetSaberWorldMatrix(hand, &controllerMat)) return;
+
+            // Build POV model joint matrices from controller matrix, then use
+            // K_Rhand joint (5) - this matches exactly where jkSaber_Draw
+            // renders the blade visual.
+            rdPuppet_BuildJointMatrices(&playerThings[playerThingIdx].povModel, &controllerMat);
+            rdMatrix_Copy34(&jointMat, &playerThings[playerThingIdx].povModel.hierarchyNodeMatrices[5]);
+            // Normalize orientation (joint matrices may carry model scale)
+            rdVector_Normalize3Acc(&jointMat.rvec);
+            rdVector_Normalize3Acc(&jointMat.lvec);
+            rdVector_Normalize3Acc(&jointMat.uvec);
+
+            // Store blade tip position for game systems
+            rdVector_Copy3(&player->actorParams.saberBladePos, &jointMat.scale);
+            rdVector_MultAcc3(&player->actorParams.saberBladePos, &jointMat.lvec, playerInfo->polyline.length);
+
+            // Store debug ray
+            rdVector_Copy3(&jkSaber_vrDebugRayStart, &jointMat.scale);
+            rdVector_Copy3(&jkSaber_vrDebugRayEnd, &player->actorParams.saberBladePos);
+            jkSaber_vrDebugRayValid = 1;
+
+            // Handle swing-based damage activation
+            float swingSpeed = stdVR_GetSwingSpeed();
+            if (swingSpeed >= stdVR_motionConfig.saberVelocityTrigger)
+            {
+                if (!jkSaber_vrSwingActive)
+                {
+                    // Swing just started - reset damage tracking
+                    playerInfo->saberCollideInfo.numDamagedThings = 0;
+                    playerInfo->saberCollideInfo.numDamagedSurfaces = 0;
+
+                    // Trigger the weapon COG's fire handler to play swing sound + animation
+                    // The COG handles PlaySoundThing + PlayMode internally
+                    int curWeapon = sithInventory_GetCurWeapon(player);
+                    sithItemDescriptor* pWeaponDesc = sithInventory_GetBinByIdx(curWeapon);
+                    if (pWeaponDesc && pWeaponDesc->cog) {
+                        sithCog_SendMessageEx(pWeaponDesc->cog, SITH_MESSAGE_FIRE,
+                            SENDERTYPE_SYSTEM, 0,
+                            SENDERTYPE_THING, player->thingIdx,
+                            0, 0.0, 0.0, 0.0, 0.0);
+                    }
+                }
+                jkSaber_vrSwingActive = 1;
+                jkSaber_vrSwingEndTime = sithTime_curMs + JKSABER_VR_SWING_LINGER_MS;
+            }
+            else if (jkSaber_vrSwingActive && sithTime_curMs >= jkSaber_vrSwingEndTime)
+            {
+                // Swing ended
+                jkSaber_vrSwingActive = 0;
+            }
+
+            // Only do collision if swing is active
+            if (jkSaber_vrSwingActive)
+            {
+                // Use COG-set damage if available, otherwise default saber damage
+                flex_t damage = playerInfo->saberCollideInfo.damage;
+                if (damage <= 0.0f) damage = 100.0f;
+                playerInfo->saberCollideInfo.damage = damage;
+                playerInfo->saberCollideInfo.bladeLength = playerInfo->polyline.length;
+                playerInfo->saberCollideInfo.field_1A4 = 1;
+
+                // Temporal interpolation (reuse existing MOTS logic)
+                rdVector_Copy3(&jointPos, &jointMat.scale);
+                rdVector_Copy3(&a2a, &jointMat.lvec);
+
+                if (sithTime_deltaSeconds > 0.032f && playerInfo->bHasLastJointMat)
+                {
+                    pWhichLastJointMat = &playerInfo->lastSaberJointMat;
+                    flex_t fVar1 = sithTime_TickHz * 0.032f;
+                    rdMatrix_Copy34(&lastJointMat, pWhichLastJointMat);
+                    rdVector_Sub3(&lerpPosDelta, &jointMat.scale, &lastJointMat.scale);
+                    rdVector_Sub3(&lerpDirDelta, &jointMat.lvec, &lastJointMat.lvec);
+                    flex_t stepAmount = fVar1;
+                    for (; fVar1 < 1.0f; fVar1 += stepAmount) {
+                        rdVector_Copy3(&lerpSaberPos, &lastJointMat.scale);
+                        rdVector_MultAcc3(&lerpSaberPos, &lerpPosDelta, fVar1);
+                        rdVector_Copy3(&lerpSaberDir, &lastJointMat.lvec);
+                        rdVector_MultAcc3(&lerpSaberDir, &lerpDirDelta, fVar1);
+                        jkSaber_UpdateCollision2(player, &lerpSaberPos, &lerpSaberDir, &playerInfo->saberCollideInfo);
+                    }
+                }
+                jkSaber_UpdateCollision2(player, &jointPos, &a2a, &playerInfo->saberCollideInfo);
+            }
+
+            // Store for next frame interpolation
+            rdMatrix_Copy34(&playerInfo->lastSaberJointMat, &jointMat);
+            playerInfo->bHasLastJointMat = 1;
+            return;  // Skip the animation-based path below
+        }
+    }
+#endif
+
     rdMatrix_Copy34(&matrix, &player->lookOrientation);
     rdVector_Copy3(&matrix.scale, &player->position);
     if ( jkSmack_GetCurrentGuiState() == 6 ) {
@@ -485,3 +614,93 @@ void jkSaber_Disable(sithThing *player)
     player->playerInfo->bHasLastJointMat = 0; // MOTS added
 #endif
 }
+
+#ifdef PLATFORM_VR
+// Draw VR saber collision debug ray as a visible thin quad through rdCache.
+// Uses camera-space quad (4 verts) instead of GL_LINES (2 verts) to avoid
+// the disabled GL_LINES rendering path and MultiView line issues.
+void jkSaber_DrawVRDebugLine(void)
+{
+#ifdef VR_SABER_DEBUG_LINE
+    if (!jkSaber_vrDebugRayValid) return;
+    if (!rdCamera_pCurCamera || !rdCamera_pCurCamera->pClipFrustum) return;
+
+    // Transform world-space ray endpoints to camera space
+    rdVector3 verts[2];
+    rdMatrix_TransformPoint34(&verts[0], &jkSaber_vrDebugRayStart, &rdCamera_pCurCamera->view_matrix);
+    rdMatrix_TransformPoint34(&verts[1], &jkSaber_vrDebugRayEnd, &rdCamera_pCurCamera->view_matrix);
+
+    // Clip line to view frustum (modifies verts in-place)
+    int out1, out2;
+    if (!rdClip_Line3Project(rdCamera_pCurCamera->pClipFrustum, &verts[0], &verts[1], &out1, &out2))
+        return;
+
+    // Project to screen coordinates
+    rdVector3 screenVerts[2];
+    rdCamera_pCurCamera->fnProjectLst(screenVerts, verts, 2);
+
+    // Build a thin screen-space quad from the 2 projected endpoints
+    // Compute perpendicular offset in screen space for line width
+    float dx = screenVerts[1].x - screenVerts[0].x;
+    float dy = screenVerts[1].y - screenVerts[0].y;
+    float len = stdMath_Sqrt(dx * dx + dy * dy);
+    if (len < 0.001f) return;
+
+    // Perpendicular direction, scaled to ~1.5 pixels half-width
+    float halfWidth = 1.5f;
+    float px = (-dy / len) * halfWidth;
+    float py = (dx / len) * halfWidth;
+
+    // Average Z for depth sorting
+    float avgZ = (screenVerts[0].z + screenVerts[1].z) * 0.5f;
+
+    rdProcEntry* procEntry = rdCache_GetProcEntry();
+    if (!procEntry) return;
+
+    // 4 vertices forming a thin quad
+    procEntry->vertices[0].x = screenVerts[0].x - px;
+    procEntry->vertices[0].y = screenVerts[0].y - py;
+    procEntry->vertices[0].z = avgZ;
+
+    procEntry->vertices[1].x = screenVerts[0].x + px;
+    procEntry->vertices[1].y = screenVerts[0].y + py;
+    procEntry->vertices[1].z = avgZ;
+
+    procEntry->vertices[2].x = screenVerts[1].x + px;
+    procEntry->vertices[2].y = screenVerts[1].y + py;
+    procEntry->vertices[2].z = avgZ;
+
+    procEntry->vertices[3].x = screenVerts[1].x - px;
+    procEntry->vertices[3].y = screenVerts[1].y - py;
+    procEntry->vertices[3].z = avgZ;
+
+    // Setup solid material (same pattern as rdDebug_DrawScreenLine3)
+    jkSaber_vrDebugMat.num_texinfo = 8;
+    jkSaber_vrDebugMat.celIdx = 0;
+    for (int i = 0; i < 8; i++) {
+        jkSaber_vrDebugMat.texinfos[i] = &jkSaber_vrDebugTexinfo;
+    }
+
+    // Configure as unlit, solid color green quad
+    procEntry->textureMode = 0;
+    procEntry->geometryMode = RD_GEOMODE_SOLIDCOLOR;
+    procEntry->lightingMode = RD_LIGHTMODE_FULLYLIT;
+    procEntry->light_flags = 0;
+    procEntry->wallCel = 0;
+    procEntry->type = 0;
+    procEntry->extralight = 1.0f;
+    procEntry->material = &jkSaber_vrDebugMat;
+    procEntry->colormap = rdColormap_pCurMap;
+
+    // Set vertex intensities and UVs for 4 vertices
+    for (int i = 0; i < 4; i++) {
+        procEntry->vertexIntensities[i] = 1.0f;
+        procEntry->vertexUVs[i].x = 0.0f;
+        procEntry->vertexUVs[i].y = 0.0f;
+    }
+
+    // Green color: 0x00FF00 with full alpha
+    rdCache_AddProcFace(0xFF00FF00, 4, 0x7);
+#endif
+}
+#endif

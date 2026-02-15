@@ -1087,7 +1087,44 @@ void jkPlayer_DrawPov()
         
         //printf("pov in\n");
         //jkPlayer_checkPov = 1;
+#ifdef PLATFORM_VR
+        // Hide the entire off-hand arm when rendering one-handed weapons with motion controls.
+        // The VR weapon is attached to the dominant hand only, so the dangling
+        // left arm looks wrong. Walk up from K_Lhand (node 2) to find the
+        // topmost arm node (direct child of root) and amputate it, which
+        // hides it and all its children (forearm, hand).
+        int vrAmputatedNodeIdx = -1;
+        int bVRHideLeftArm = 0;
+        if (stdVR_bEnabled && vrMotionWeapon) {
+            sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
+            if (pActorThing->jkFlags & JKFLAG_SABERON)
+                bVRHideLeftArm = 1;
+            if (sithInventory_GetCurWeapon(pActorThing) == SITHBIN_THERMAL_DETONATOR)
+                bVRHideLeftArm = 1;
+        }
+        if (bVRHideLeftArm
+            && playerThings[playerThingIdx].povModel.amputatedJoints
+            && playerThings[playerThingIdx].povModel.model3)
+        {
+            rdModel3* model = playerThings[playerThingIdx].povModel.model3;
+            if (model->numHierarchyNodes > 2) {
+                rdHierarchyNode* node = &model->hierarchyNodes[2]; // K_Lhand
+                // Walk up to the highest ancestor that still has a parent (stop at root's child)
+                while (node->parent && node->parent->parent) {
+                    node = node->parent;
+                }
+                vrAmputatedNodeIdx = node->idx;
+                playerThings[playerThingIdx].povModel.amputatedJoints[vrAmputatedNodeIdx] = 1;
+            }
+        }
+#endif
         rdThing_Draw(&playerThings[playerThingIdx].povModel, &viewMat);
+#ifdef PLATFORM_VR
+        // Restore arm visibility after draw
+        if (vrAmputatedNodeIdx >= 0) {
+            playerThings[playerThingIdx].povModel.amputatedJoints[vrAmputatedNodeIdx] = 0;
+        }
+#endif
         //jkPlayer_checkPov = 0;
         //printf("pov done\n");
 
@@ -1118,6 +1155,11 @@ void jkPlayer_DrawPov()
             int hand = stdVR_GetDominantHand();
             stdVR_DrawDebugControllerAxes(hand);
         }*/
+
+        // Draw VR saber collision debug line
+        if (stdVR_bEnabled && stdVR_motionConfig.bMotionSaberEnabled) {
+            jkSaber_DrawVRDebugLine();
+        }
 #endif
     }
 }
