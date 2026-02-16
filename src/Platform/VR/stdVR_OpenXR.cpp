@@ -2044,8 +2044,11 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
                 hudQuadLayer.subImage.imageArrayIndex = 0;
 
                 // Position HUD in front of player (head-locked at comfortable distance)
-                float hudDistance = 2.0f;  // 3 meters in front (reduces stereo depth)
-                hudQuadLayer.pose.position = { 0.0f, -1.0f, -hudDistance };  // Lower to avoid obscuring view
+                float hudDistance = 2.0f;  // 2 meters in front (reduces stereo depth)
+                // Added: Center HUD vertically when weapon/force wheel is active
+                extern int stdVR_WeaponWheel_IsActive(void);
+                float hudYOffset = stdVR_WeaponWheel_IsActive() ? -0.6f : -1.0f;
+                hudQuadLayer.pose.position = { 0.0f, hudYOffset, -hudDistance };
                 hudQuadLayer.pose.orientation = { 0.0f, 0.0f, 0.0f, 1.0f };  // Face player
 
                 // HUD size in meters (maintain ~4:3 aspect ratio)

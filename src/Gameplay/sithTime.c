@@ -68,6 +68,15 @@ void sithTime_SetDelta(int deltaMs)
     if (g_debugmodeFlags & DEBUGFLAG_SLOWMO) {
         sithTime_deltaMs = (uint32_t)((flex_d_t)sithTime_deltaMs * 0.2);
     }
+#ifdef PLATFORM_VR
+    // Added: VR weapon wheel time slowdown
+    {
+        extern float stdVR_weaponWheelTimeScale;
+        if (stdVR_weaponWheelTimeScale != 1.0f) {
+            sithTime_deltaMs = (uint32_t)((flex_d_t)sithTime_deltaMs * stdVR_weaponWheelTimeScale);
+        }
+    }
+#endif
     sithTime_curMs += sithTime_deltaMs;
 #ifdef MICROSECOND_TIME
     sithTime_deltaUs = Linux_TimeUs() - sithTime_curUsAbsolute;
@@ -82,6 +91,15 @@ void sithTime_SetDelta(int deltaMs)
     if (g_debugmodeFlags & DEBUGFLAG_SLOWMO) {
         sithTime_deltaUs = (uint64_t)((flex_d_t)sithTime_deltaUs * 0.2);
     }
+#ifdef PLATFORM_VR
+    // Added: VR weapon wheel time slowdown (microsecond path)
+    {
+        extern float stdVR_weaponWheelTimeScale;
+        if (stdVR_weaponWheelTimeScale != 1.0f) {
+            sithTime_deltaUs = (uint64_t)((flex_d_t)sithTime_deltaUs * stdVR_weaponWheelTimeScale);
+        }
+    }
+#endif
     sithTime_curUsAbsolute = Linux_TimeUs();
     sithTime_deltaSeconds = (flex_d_t)sithTime_deltaUs * 0.001 * 0.001;
 

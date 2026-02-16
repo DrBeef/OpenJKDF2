@@ -884,7 +884,7 @@ void jkHudInv_LoadItemRes()
 #endif
         for (int j = 0; j < SITHBIN_NUMBINS; j++)
         {
-            if ( (sithInventory_aDescriptors[j].flags & (ITEMINFO_POWER|ITEMINFO_ITEM)) != 0 )
+            if ( (sithInventory_aDescriptors[j].flags & (ITEMINFO_WEAPON|ITEMINFO_POWER|ITEMINFO_ITEM)) != 0 )
             {
                 if ( sithInventory_aDescriptors[j].hudBitmap )
                     stdBitmap_Free(sithInventory_aDescriptors[j].hudBitmap);
@@ -894,7 +894,8 @@ void jkHudInv_LoadItemRes()
                 v4 = stdBitmap_Load(a1, 0, 0);
                 sithInventory_aDescriptors[j].hudBitmap = v4;
 #ifndef RDMATERIAL_MINIMIZE_STRUCTS
-                stdBitmap_ConvertColorFormat(&Video_format.format, v4);
+                if (v4)
+                    stdBitmap_ConvertColorFormat(&Video_format.format, v4);
 #endif
             }
         }

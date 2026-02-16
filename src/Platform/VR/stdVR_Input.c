@@ -71,6 +71,12 @@ void stdVR_Input_ProcessSnapTurn(void)
         return;
     }
 
+    // Added: Suppress turning while weapon wheel is active
+    if (stdVR_WeaponWheel_IsActive()) {
+        stdVR_snapTurnPending = 0;
+        return;
+    }
+
     float turnInput = stdVR_clientInfo.analogTurn[0];
 
     // Apply deadzone
@@ -135,6 +141,13 @@ void stdVR_Input_GetMovementDirection(float* pMoveX, float* pMoveY)
         return;
     }
 
+    // Added: Suppress movement while weapon wheel is active
+    if (stdVR_WeaponWheel_IsActive()) {
+        *pMoveX = 0.0f;
+        *pMoveY = 0.0f;
+        return;
+    }
+
     // Movement is already oriented based on controller/head direction
     // The actual transformation happens in sithControl when we apply moveYaw
     *pMoveX = moveX;
@@ -157,31 +170,37 @@ void stdVR_Input_MapToGame(void)
     // Process snap turn
     stdVR_Input_ProcessSnapTurn();
 
+    // Update weapon/force wheel (before weapon switch logic)
+    stdVR_WeaponWheel_Update();
+
     // Get movement input
     float moveX = 0.0f, moveY = 0.0f;
     stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
     // Weapon switching via dominant hand thumbstick up/down
-    // Use the turn stick (right thumbstick) Y axis
-    float weaponSwitchY = stdVR_clientInfo.analogTurn[1];  // Y axis of turn stick
+    // Disabled while weapon wheel is active (thumbstick used for wheel selection)
+    if (!stdVR_WeaponWheel_IsActive()) {
+        // Use the turn stick (right thumbstick) Y axis
+        float weaponSwitchY = stdVR_clientInfo.analogTurn[1];  // Y axis of turn stick
 
-    if (weaponSwitchY > STDVR_WEAPON_SWITCH_THRESHOLD) {
-        // Thumbstick pushed up - next weapon
-        if (stdVR_weaponSwitchState != 1) {
-            stdVR_nextWeaponTriggered = 1;
-            stdVR_weaponSwitchState = 1;
-            stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
+        if (weaponSwitchY > STDVR_WEAPON_SWITCH_THRESHOLD) {
+            // Thumbstick pushed up - next weapon
+            if (stdVR_weaponSwitchState != 1) {
+                stdVR_nextWeaponTriggered = 1;
+                stdVR_weaponSwitchState = 1;
+                stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
+            }
+        } else if (weaponSwitchY < -STDVR_WEAPON_SWITCH_THRESHOLD) {
+            // Thumbstick pushed down - previous weapon
+            if (stdVR_weaponSwitchState != -1) {
+                stdVR_prevWeaponTriggered = 1;
+                stdVR_weaponSwitchState = -1;
+                stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
+            }
+        } else if (weaponSwitchY > -0.3f && weaponSwitchY < 0.3f) {
+            // Thumbstick returned to center - reset state
+            stdVR_weaponSwitchState = 0;
         }
-    } else if (weaponSwitchY < -STDVR_WEAPON_SWITCH_THRESHOLD) {
-        // Thumbstick pushed down - previous weapon
-        if (stdVR_weaponSwitchState != -1) {
-            stdVR_prevWeaponTriggered = 1;
-            stdVR_weaponSwitchState = -1;
-            stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
-        }
-    } else if (weaponSwitchY > -0.3f && weaponSwitchY < 0.3f) {
-        // Thumbstick returned to center - reset state
-        stdVR_weaponSwitchState = 0;
     }
 
     // Map movement axes
@@ -367,6 +386,11 @@ int stdVR_Input_GetSnapTurnAngle(void)
 float stdVR_Input_GetSmoothTurnSpeed(void)
 {
     if (!stdVR_bEnabled || stdVR_config.turnMode != STDVR_TURN_SMOOTH) {
+        return 0.0f;
+    }
+
+    // Added: Suppress smooth turn while weapon wheel is active
+    if (stdVR_WeaponWheel_IsActive()) {
         return 0.0f;
     }
 

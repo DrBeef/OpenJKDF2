@@ -8,6 +8,7 @@
 #include "Platform/VR/stdVR_WeaponOffsets.h"
 #include "Platform/VR/stdVR_AlignmentTool.h"
 #include "Platform/VR/stdVR_Map3D.h"
+#include "Platform/VR/stdVR_WeaponWheel.h"
 
 #ifdef __cplusplus
 extern "C" {

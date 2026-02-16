@@ -731,8 +731,9 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 vrInput = stdVR_Input_IsButtonDown(btnFire1);
                 break;
             case INPUT_FUNC_FIRE2:
-                // Dominant grip = secondary fire
-                vrInput = stdVR_Input_IsButtonDown(btnFire2);
+                // Dominant grip = secondary fire (suppressed when weapon wheel active)
+                if (!stdVR_WeaponWheel_IsGripSuppressed(stdVR_config.dominantHand))
+                    vrInput = stdVR_Input_IsButtonDown(btnFire2);
                 break;
             case INPUT_FUNC_JUMP:
                 // Dominant face button = jump (A or X)
@@ -751,8 +752,9 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 vrInput = stdVR_Input_IsButtonDown(btnUseSkill);
                 break;
             case INPUT_FUNC_USEINV:
-                // Offhand grip = use inventory item
-                vrInput = stdVR_Input_IsButtonDown(btnUseInv);
+                // Offhand grip = use inventory item (suppressed when force wheel active)
+                if (!stdVR_WeaponWheel_IsGripSuppressed(1 - stdVR_config.dominantHand))
+                    vrInput = stdVR_Input_IsButtonDown(btnUseInv);
                 break;
             case INPUT_FUNC_NEXTWEAPON:
                 // Right thumbstick up flick = next weapon

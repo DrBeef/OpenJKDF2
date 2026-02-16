@@ -514,26 +514,28 @@ int jkGame_Update()
                     VR_Log("jkGame: VR HUD rendering to quad layer, vrHudPrepared=%d\n", vrHudPrepared);
                 }
 
-                // Draw HUD elements (these render to Video overlay buffers)
-                if (!Main_bMotsCompat) {
-                    if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
-                        jkHud_Draw();
-                    }
-                }
-                else {
-                    if (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_SCOPEHUD) {
-                        jkHudScope_Draw();
-                    }
-                    if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_80000000) == 0) {
+                // Draw HUD elements (hidden when weapon/force wheel is active)
+                if (!stdVR_WeaponWheel_IsActive()) {
+                    if (!Main_bMotsCompat) {
                         if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
                             jkHud_Draw();
                         }
                     }
                     else {
-                        jkHudCameraView_Draw();
+                        if (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_SCOPEHUD) {
+                            jkHudScope_Draw();
+                        }
+                        if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_80000000) == 0) {
+                            if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                                jkHud_Draw();
+                            }
+                        }
+                        else {
+                            jkHudCameraView_Draw();
+                        }
                     }
+                    jkHudInv_Draw();
                 }
-                jkHudInv_Draw();
 
 #ifdef VR_WEAPON_ALIGNMENT_TOOL
                 // Draw alignment tool overlay if active
@@ -541,6 +543,13 @@ int jkGame_Update()
                     stdVR_AlignmentTool_DrawOverlay();
                 }
 #endif
+
+                // Draw weapon/force wheel overlay on HUD
+                if (stdVR_WeaponWheel_IsActive()) {
+                    int wheelHudW, wheelHudH;
+                    stdVR_GetHudSize(&wheelHudW, &wheelHudH);
+                    stdVR_WeaponWheel_Draw(wheelHudW, wheelHudH);
+                }
 
                 // Flush the UI render list to the VR HUD FBO
                 // HUD elements are queued via std3D_DrawUIBitmap and need to be flushed
