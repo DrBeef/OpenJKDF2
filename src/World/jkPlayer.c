@@ -1110,6 +1110,9 @@ void jkPlayer_DrawPov()
         // Moved: see below.
 #if !(defined(SDL2_RENDER) || defined(TARGET_TWL))
         // Render saber if applicable
+#ifdef PLATFORM_VR
+        if (!stdVR_WeaponWheel_IsActive())
+#endif
         if (playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_SABERON)
         {
             jkSaber_Draw(&viewMat);
@@ -1171,6 +1174,9 @@ void jkPlayer_DrawPov()
             std3D_SetFrontFaceCW(1);
         }
 #endif
+#ifdef PLATFORM_VR
+        if (!stdVR_WeaponWheel_IsActive())
+#endif
         rdThing_Draw(&playerThings[playerThingIdx].povModel, &viewMat);
 #ifdef PLATFORM_VR
         // Restore arm visibility after draw
@@ -1200,7 +1206,7 @@ void jkPlayer_DrawPov()
         // Uses a dedicated rdThing initialized from the fists POV model so that
         // amputatedJoints/hierarchyNodeMatrices arrays match the fists hierarchy,
         // regardless of what weapon is currently equipped.
-        if (stdVR_bEnabled && vrMotionWeapon) {
+        if (stdVR_bEnabled && vrMotionWeapon && !stdVR_WeaponWheel_IsActive()) {
             // Try to find the fists model if we don't have it yet
             if (!pVRFistsModel3) {
                 // Method 1: capture from current POV when fists are equipped

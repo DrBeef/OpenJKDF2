@@ -31,6 +31,7 @@ extern sithThing* sithPlayer_pLocalPlayerThing;
 extern sithItemDescriptor sithInventory_aDescriptors[];
 extern stdFont* jkHud_pMsgFontSft;
 extern stdVBuffer Video_menuBuffer;
+extern int sithOverlayMap_bShowMap;
 
 // Time scale variable (read by sithTime_SetDelta)
 float stdVR_weaponWheelTimeScale = 1.0f;
@@ -220,7 +221,7 @@ static void stdVR_WeaponWheel_GetControllerAngles(int hand, float* pYaw, float* 
     if (!pCtrl->bTracking) return;
 
     *pYaw = stdVR_clientInfo.hmdOrientation.y - pCtrl->orientation.y;
-    *pPitch = pCtrl->orientation.x - 45.f;
+    *pPitch = pCtrl->orientation.x - 50.f;
 }
 
 // ============================================================================
@@ -262,6 +263,11 @@ static void stdVR_WeaponWheel_GetPointingAngle(int hand, float* pAngle, float* p
 void stdVR_WeaponWheel_Update(void)
 {
     if (!stdVR_bEnabled || !stdVR_IsSessionRunning()) {
+        return;
+    }
+
+    // Don't activate wheels while the holomap is showing
+    if (sithOverlayMap_bShowMap) {
         return;
     }
 
@@ -375,7 +381,7 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight)
     float coordH = (float)Video_menuBuffer.format.height;
     if (coordW < 1.0f || coordH < 1.0f) return;
 
-    float centerX = coordW * 0.5f;
+    float centerX = coordW * 0.54f;
     float centerY = coordH * 0.5f;
     float radius = coordH * 0.35f;
     int bWeaponWheel = (stdVR_wheelState.activeWheel == STDVR_WHEEL_WEAPON);
@@ -588,7 +594,7 @@ void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat)
 
     float centerX = coordW * 0.5f;
     float centerY = coordH * 0.5f;
-    float hudRadius = coordH * 0.15f;  // Must match Draw()
+    float hudRadius = coordH * 0.11f;  // Must match Draw()
 
     // World scale and forward depth for model placement
     float ws = stdVR_config.worldScale;
@@ -598,8 +604,8 @@ void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat)
     float normalScale = 0.25f;
     float highlightScale = 0.35f;
 
-    // Advance slow turntable rotation (~20 deg/sec at 60fps)
-    stdVR_wheelRotation += 0.016f * 0.35f;
+    // Advance turntable rotation (~45 deg/sec at 60fps)
+    stdVR_wheelRotation += 0.016f * 0.8f;
     if (stdVR_wheelRotation > 2.0f * STDVR_PI) {
         stdVR_wheelRotation -= 2.0f * STDVR_PI;
     }
@@ -655,7 +661,13 @@ void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat)
 
         float modelScale = bHighlighted ? highlightScale : normalScale;
 
-        // Build model matrix with turntable spin around camera up axis
+        // Build model matrix: vertical display pose with turntable spin.
+        // POV models have barrel along Y (lvec) and weapon body in -Z (uvec).
+        // Remap axes so barrel points UP and weapon face points toward viewer:
+        //   model X (rvec) = spin right    (horizontal, rotating)
+        //   model Y (lvec) = camera up     (barrel points upward)
+        //   model Z (uvec) = -spin forward (weapon top faces viewer)
+        // Handedness check: rvec × lvec = rotRight × camUp = rotFwd = -uvec ✓
         float sinSpin = sinf(stdVR_wheelRotation);
         float cosSpin = cosf(stdVR_wheelRotation);
 
@@ -671,12 +683,12 @@ void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat)
         modelMat.rvec.x = rotRight.x * modelScale;
         modelMat.rvec.y = rotRight.y * modelScale;
         modelMat.rvec.z = rotRight.z * modelScale;
-        modelMat.lvec.x = rotFwd.x * modelScale;
-        modelMat.lvec.y = rotFwd.y * modelScale;
-        modelMat.lvec.z = rotFwd.z * modelScale;
-        modelMat.uvec.x = camUp.x * modelScale;
-        modelMat.uvec.y = camUp.y * modelScale;
-        modelMat.uvec.z = camUp.z * modelScale;
+        modelMat.lvec.x = camUp.x * modelScale;
+        modelMat.lvec.y = camUp.y * modelScale;
+        modelMat.lvec.z = camUp.z * modelScale;
+        modelMat.uvec.x = -rotFwd.x * modelScale;
+        modelMat.uvec.y = -rotFwd.y * modelScale;
+        modelMat.uvec.z = -rotFwd.z * modelScale;
         rdVector_Copy3(&modelMat.scale, &worldPos);
 
         // Force hierarchy matrix rebuild per eye
