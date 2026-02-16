@@ -35,6 +35,7 @@
 #include "Main/sithCvar.h"
 #ifdef PLATFORM_VR
 #include "Platform/VR/stdVR.h"
+#include "Platform/VR/stdVR_WeaponWheel.h"
 #endif
 
 // DSi has *plenty* of time to read the text.
@@ -363,6 +364,7 @@ void jkPlayer_Shutdown()
         bVROffhandReady = 0;
     }
     pVRFistsModel3 = NULL;
+    stdVR_WeaponWheel_ResetCache();
 #endif
 }
 
@@ -910,6 +912,7 @@ void jkPlayer_SetPovModel(jkPlayerInfo *info, rdModel3 *model)
         VR_Log("SetPovModel: '%s' (curWeapon=%d, pVRFistsModel3=%p)\n",
             model->filename, info->actorThing ? sithInventory_GetCurWeapon(info->actorThing) : -1, (void*)pVRFistsModel3);
     }
+
 #endif
 }
 
@@ -997,6 +1000,13 @@ void jkPlayer_DrawPov()
 
         rdCamera_SetAmbientLight(&sithCamera_currentCamera->rdCam, ambLight);
         rdColormap_SetCurrent(sithCamera_currentCamera->sector->colormap);
+
+#ifdef PLATFORM_VR
+        // Draw 3D weapon models on the weapon wheel (if active)
+        if (stdVR_WeaponWheel_IsActive()) {
+            stdVR_WeaponWheel_Draw3D(&sithCamera_currentCamera->viewMat);
+        }
+#endif
 
         // In VR mode, use the PER-EYE camera matrix for weapon positioning.
         // This must match the view_matrix used in rdModel3_DrawMesh (which is the inverse of the per-eye matrix).

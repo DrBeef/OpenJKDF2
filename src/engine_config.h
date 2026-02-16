@@ -500,7 +500,7 @@ extern FAST_FUNC void* __aeabi_memcpy8(void* dst, const void* src, size_t len);*
 //   17bsarris        Level 16: Sarris (Boss)
 //   20bboc           Level 20: Boc (Boss)
 //   21bjerec         Level 21: Jerec (Final Boss)
-//#define VR_QUICKSTART_MODE
+#define VR_QUICKSTART_MODE
 #ifdef VR_QUICKSTART_MODE
 #define VR_QUICKSTART_EPISODE "jk1"           // Episode GOB name (without .gob)
 #define VR_QUICKSTART_MAP     "03katarn"   // Level filename (without .jkl)

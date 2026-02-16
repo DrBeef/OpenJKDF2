@@ -4,6 +4,8 @@
 // Added: VR weapon wheel and force power wheel overlay
 
 #include "types.h"
+#include "Primitives/rdModel3.h"
+#include "Primitives/rdMatrix.h"
 
 #ifdef PLATFORM_VR
 
@@ -44,6 +46,15 @@ int stdVR_WeaponWheel_IsActive(void);
 // Check if grip is captured by wheel for a given hand (0=left, 1=right)
 int stdVR_WeaponWheel_IsGripSuppressed(int hand);
 
+// Cache a weapon's POV model for 3D wheel rendering
+void stdVR_WeaponWheel_CacheModel(int binIdx, rdModel3* pModel);
+
+// Draw cached 3D weapon models in camera space (call from jkPlayer_DrawPov)
+void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat);
+
+// Free all cached model entries (call on level unload)
+void stdVR_WeaponWheel_ResetCache(void);
+
 #ifdef __cplusplus
 }
 #endif
@@ -54,6 +65,9 @@ static inline void stdVR_WeaponWheel_Update(void) {}
 static inline void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight) { (void)hudWidth; (void)hudHeight; }
 static inline int stdVR_WeaponWheel_IsActive(void) { return 0; }
 static inline int stdVR_WeaponWheel_IsGripSuppressed(int hand) { (void)hand; return 0; }
+static inline void stdVR_WeaponWheel_CacheModel(int binIdx, rdModel3* pModel) { (void)binIdx; (void)pModel; }
+static inline void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat) { (void)pCameraWorldMat; }
+static inline void stdVR_WeaponWheel_ResetCache(void) {}
 
 #endif // PLATFORM_VR
 

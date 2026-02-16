@@ -15,6 +15,11 @@
 #include "Gameplay/sithTime.h"
 #include "World/jkPlayer.h"
 #include "Primitives/rdVector.h"
+#include "Primitives/rdMatrix.h"
+#include "Engine/rdThing.h"
+#include "Engine/rdCamera.h"
+#include "Raster/rdCache.h"
+#include "World/sithModel.h"
 #include "Main/Main.h"
 
 #include <math.h>
@@ -32,6 +37,58 @@ float stdVR_weaponWheelTimeScale = 1.0f;
 
 // Wheel state
 static stdVR_WheelState stdVR_wheelState = {0};
+
+// Cached weapon models for 3D wheel rendering
+typedef struct stdVR_WheelModelCache {
+    rdModel3* pModel;       // Pointer to the weapon's POV model (owned by game, not us)
+    rdThing rdThing;        // Our own rdThing wrapper for rendering
+    int bInitialized;       // 1 if rdThing has been set up for this model
+} stdVR_WheelModelCache;
+
+static stdVR_WheelModelCache stdVR_aWheelModelCache[SITHBIN_NUMBINS] = {0};
+static float stdVR_wheelRotation = 0.0f;  // Slow spin animation (radians)
+
+// ============================================================================
+// Internal: Known POV model filenames for each weapon bin.
+// JK and MOTS use different names for fists; other weapons are the same.
+// ============================================================================
+typedef struct stdVR_WeaponModelName {
+    int binIdx;
+    const char* aNames[3]; // NULL-terminated list of possible filenames
+} stdVR_WeaponModelName;
+
+static const stdVR_WeaponModelName stdVR_aWeaponModelNames[] = {
+    { SITHBIN_FISTS,              { "fistv.3do", "kyhand.3do", NULL } },
+    { SITHBIN_BRYARPISTOL,        { "bryv.3do",  NULL } },
+    { SITHBIN_STORMTROOPER_RIFLE, { "strv.3do",  NULL } },
+    { SITHBIN_THERMAL_DETONATOR,  { "detv.3do",  NULL } },
+    { SITHBIN_TUSKEN_PROD,        { "bowv.3do",  NULL } },
+    { SITHBIN_REPEATER,           { "rptv.3do",  NULL } },
+    { SITHBIN_RAIL_DETONATOR,     { "rldv.3do",  NULL } },
+    { SITHBIN_SEQUENCER_CHARGE,   { "seqv.3do",  NULL } },
+    { SITHBIN_CONCUSSION_RIFLE,   { "conv.3do",  NULL } },
+    { SITHBIN_LIGHTSABER,         { "sabv.3do",  NULL } },
+};
+#define STDVR_NUM_WEAPON_MODELS (sizeof(stdVR_aWeaponModelNames) / sizeof(stdVR_aWeaponModelNames[0]))
+
+// ============================================================================
+// Internal: Ensure all weapon models are cached by loading from known names
+// ============================================================================
+static void stdVR_WeaponWheel_EnsureModelsCached(void)
+{
+    for (int w = 0; w < (int)STDVR_NUM_WEAPON_MODELS; w++) {
+        int binIdx = stdVR_aWeaponModelNames[w].binIdx;
+        if (stdVR_aWheelModelCache[binIdx].bInitialized) continue;
+
+        for (int n = 0; stdVR_aWeaponModelNames[w].aNames[n]; n++) {
+            rdModel3* pModel = sithModel_LoadEntry(stdVR_aWeaponModelNames[w].aNames[n], 0);
+            if (pModel) {
+                stdVR_WeaponWheel_CacheModel(binIdx, pModel);
+                break;
+            }
+        }
+    }
+}
 
 // Initial controller yaw/pitch captured when wheel opens (for relative pointing)
 static float stdVR_wheelInitialYaw = 0.0f;
@@ -216,6 +273,7 @@ void stdVR_WeaponWheel_Update(void)
 
     // Check for wheel activation (grip pressed)
     if (stdVR_clientInfo.buttonPressed & btnGripDominant) {
+        stdVR_WeaponWheel_EnsureModelsCached();
         int numSegs = stdVR_WeaponWheel_BuildWeaponSegments();
         if (numSegs > 0) {
             stdVR_wheelState.activeWheel = STDVR_WHEEL_WEAPON;
@@ -319,16 +377,19 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight)
 
     float centerX = coordW * 0.5f;
     float centerY = coordH * 0.5f;
-    float radius = coordH * 0.35f;  // Large radius — we have the full HUD now
+    float radius = coordH * 0.35f;
+    int bWeaponWheel = (stdVR_wheelState.activeWheel == STDVR_WHEEL_WEAPON);
 
     // Draw full-screen semi-transparent dark background
+    // Weapon wheel: very subtle so 3D models dominate. Force wheel: solid overlay.
     {
         rdRect bgRect;
         bgRect.x = 0;
         bgRect.y = 0;
         bgRect.width = (int)coordW;
         bgRect.height = (int)coordH;
-        std3D_DrawUIClearedRectRGBA(0, 0, 0, 160, &bgRect);
+        int bgAlpha = bWeaponWheel ? 40 : 160;
+        std3D_DrawUIClearedRectRGBA(0, 0, 0, bgAlpha, &bgRect);
     }
 
     float segmentArc = (2.0f * STDVR_PI) / stdVR_wheelState.numSegments;
@@ -344,55 +405,63 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight)
 
         int bHighlighted = (i == stdVR_wheelState.highlightedSegment);
 
-        // Draw highlight background for selected segment
-        if (bHighlighted) {
-            int hlSize = (int)(coordH * 0.06f);
-            rdRect hlRect;
-            hlRect.x = (int)iconX - hlSize;
-            hlRect.y = (int)iconY - hlSize;
-            hlRect.width = hlSize * 2;
-            hlRect.height = hlSize * 2;
-
-            if (stdVR_wheelState.activeWheel == STDVR_WHEEL_WEAPON) {
-                std3D_DrawUIClearedRectRGBA(255, 200, 50, 180, &hlRect);
-            } else {
+        if (!bWeaponWheel) {
+            // Force wheel: highlight background + icon bitmap
+            if (bHighlighted) {
+                int hlSize = (int)(coordH * 0.06f);
+                rdRect hlRect;
+                hlRect.x = (int)iconX - hlSize;
+                hlRect.y = (int)iconY - hlSize;
+                hlRect.width = hlSize * 2;
+                hlRect.height = hlSize * 2;
                 std3D_DrawUIClearedRectRGBA(50, 150, 255, 180, &hlRect);
+            }
+
+            stdBitmap* pIcon = stdVR_wheelState.aSegments[i].pIcon;
+            if (pIcon && pIcon->mipSurfaces && pIcon->mipSurfaces[0]) {
+                float iconScale = bHighlighted ? (coordH / 160.0f) : (coordH / 240.0f);
+                uint8_t brightness = bHighlighted ? 255 : 180;
+                uint8_t alpha = bHighlighted ? 255 : 220;
+
+                int iconW = pIcon->mipSurfaces[0]->format.width;
+                int iconH = pIcon->mipSurfaces[0]->format.height;
+                float drawX = iconX - (iconW * iconScale * 0.5f);
+                float drawY = iconY - (iconH * iconScale * 0.5f);
+
+                std3D_DrawUIBitmapRGBA(pIcon, 0, (flex_t)drawX, (flex_t)drawY,
+                                       NULL, (flex_t)iconScale, (flex_t)iconScale, 0,
+                                       brightness, brightness, brightness, alpha);
             }
         }
 
-        // Draw icon bitmap if available
-        stdBitmap* pIcon = stdVR_wheelState.aSegments[i].pIcon;
-        if (pIcon && pIcon->mipSurfaces && pIcon->mipSurfaces[0]) {
-            float iconScale = bHighlighted ? (coordH / 160.0f) : (coordH / 240.0f);
-            uint8_t brightness = bHighlighted ? 255 : 180;
-            uint8_t alpha = bHighlighted ? 255 : 220;
-
-            int iconW = pIcon->mipSurfaces[0]->format.width;
-            int iconH = pIcon->mipSurfaces[0]->format.height;
-            float drawX = iconX - (iconW * iconScale * 0.5f);
-            float drawY = iconY - (iconH * iconScale * 0.5f);
-
-            std3D_DrawUIBitmapRGBA(pIcon, 0, (flex_t)drawX, (flex_t)drawY,
-                                   NULL, (flex_t)iconScale, (flex_t)iconScale, 0,
-                                   brightness, brightness, brightness, alpha);
-        }
-
-        // Always draw text label at each segment position (essential when no icon)
+        // Text labels
         if (jkHud_pMsgFontSft) {
             const char* name = stdVR_WeaponWheel_GetName(stdVR_wheelState.aSegments[i].binIdx);
             int textLen = (int)strlen(name);
-            flex_t segFontScale = bHighlighted ? labelScale * 1.3f : labelScale;
-            int approxW = (int)(textLen * 7.0f * segFontScale);
 
-            // Position label below icon (or at icon position if no icon)
-            int labelOffsetY = (pIcon && pIcon->mipSurfaces && pIcon->mipSurfaces[0])
-                ? (int)(coordH * 0.04f) : 0;
-            int textX = (int)iconX - approxW / 2;
-            int textY = (int)iconY + labelOffsetY - (int)(6.0f * segFontScale);
-
-            stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, textX, textY,
-                                 (int)coordW, name,
-                                 bHighlighted ? 1 : 0, segFontScale);
+            if (bWeaponWheel) {
+                // Weapon wheel: show name under the highlighted weapon's position
+                if (bHighlighted) {
+                    flex_t segFontScale = labelScale * 1.3f;
+                    int approxW = (int)(textLen * 7.0f * segFontScale);
+                    int textX = (int)iconX - approxW / 2;
+                    int textY = (int)iconY + (int)(coordH * 0.035f);
+                    stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, textX, textY,
+                                         (int)coordW, name, 1, segFontScale);
+                }
+            } else {
+                // Force wheel: name at each segment position
+                flex_t segFontScale = bHighlighted ? labelScale * 1.3f : labelScale;
+                int approxW = (int)(textLen * 7.0f * segFontScale);
+                stdBitmap* pIcon = stdVR_wheelState.aSegments[i].pIcon;
+                int labelOffsetY = (pIcon && pIcon->mipSurfaces && pIcon->mipSurfaces[0])
+                    ? (int)(coordH * 0.04f) : 0;
+                int textX = (int)iconX - approxW / 2;
+                int textY = (int)iconY + labelOffsetY - (int)(6.0f * segFontScale);
+                stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, textX, textY,
+                                     (int)coordW, name,
+                                     bHighlighted ? 1 : 0, segFontScale);
+            }
         }
     }
 
@@ -451,6 +520,186 @@ int stdVR_WeaponWheel_IsGripSuppressed(int hand)
     }
 
     return 0;
+}
+
+// ============================================================================
+// Public: Cache a weapon's POV model for 3D wheel rendering
+// ============================================================================
+void stdVR_WeaponWheel_CacheModel(int binIdx, rdModel3* pModel)
+{
+    if (binIdx < 0 || binIdx >= SITHBIN_NUMBINS || !pModel) return;
+
+    stdVR_WheelModelCache* pCache = &stdVR_aWheelModelCache[binIdx];
+
+    // Already cached with the same model — skip
+    if (pCache->bInitialized && pCache->pModel == pModel) return;
+
+    // Different model or not yet cached — free old, set up new
+    if (pCache->bInitialized) {
+        rdThing_FreeEntry(&pCache->rdThing);
+        pCache->bInitialized = 0;
+    }
+
+    rdThing_NewEntry(&pCache->rdThing, sithPlayer_pLocalPlayerThing);
+    if (rdThing_SetModel3(&pCache->rdThing, pModel)) {
+        pCache->pModel = pModel;
+        pCache->bInitialized = 1;
+    }
+}
+
+// ============================================================================
+// Public: Draw cached 3D weapon models aligned with the 2D HUD overlay.
+// Uses inverse projection from HUD screen coordinates to world-space so that
+// each 3D model lines up with its corresponding text/cursor on the HUD layer.
+// ============================================================================
+void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat)
+{
+    if (stdVR_wheelState.activeWheel != STDVR_WHEEL_WEAPON || stdVR_wheelState.numSegments == 0) {
+        return;
+    }
+
+    // Use the VR per-eye matrix so models track with head movement.
+    rdMatrix34 eyeMat;
+    if (stdVR_GetCurrentEyeViewMatrix(&eyeMat)) {
+        pCameraWorldMat = &eyeMat;
+    }
+
+    // Get VR frustum tangents for inverse projection.
+    // These are set per-eye by sithCamera just before rendering:
+    //   nearLeft = -fovLeft (negative), right = fovRight (positive)
+    //   nearTop  = fovUp (positive),    bottom = -fovDown (negative)
+    if (!rdCamera_pCurCamera || !rdCamera_pCurCamera->pClipFrustum) return;
+    rdClipFrustum* pFrustum = rdCamera_pCurCamera->pClipFrustum;
+
+    float left   = pFrustum->nearLeft;   // negative (left boundary tangent)
+    float right  = pFrustum->right;      // positive (right boundary tangent)
+    float top    = pFrustum->nearTop;    // positive (top boundary tangent)
+    float bottom = pFrustum->bottom;     // negative (bottom boundary tangent)
+
+    // Sanity check: frustum must have non-zero extent
+    float hExtent = right - left;
+    float vExtent = top - bottom;
+    if (hExtent < 0.001f || vExtent < 0.001f) return;
+
+    // HUD coordinate space (same as stdVR_WeaponWheel_Draw uses)
+    float coordW = (float)Video_menuBuffer.format.width;
+    float coordH = (float)Video_menuBuffer.format.height;
+    if (coordW < 1.0f || coordH < 1.0f) return;
+
+    float centerX = coordW * 0.5f;
+    float centerY = coordH * 0.5f;
+    float hudRadius = coordH * 0.15f;  // Must match Draw()
+
+    // World scale and forward depth for model placement
+    float ws = stdVR_config.worldScale;
+    if (ws <= 0.001f) ws = 0.09f;
+    float forwardDist = 3.0f * ws;  // 2m forward from eye in JK units
+
+    float normalScale = 0.25f;
+    float highlightScale = 0.35f;
+
+    // Advance slow turntable rotation (~20 deg/sec at 60fps)
+    stdVR_wheelRotation += 0.016f * 0.35f;
+    if (stdVR_wheelRotation > 2.0f * STDVR_PI) {
+        stdVR_wheelRotation -= 2.0f * STDVR_PI;
+    }
+
+    float segmentArc = (2.0f * STDVR_PI) / stdVR_wheelState.numSegments;
+
+    // Camera basis vectors
+    rdVector3 camRight, camUp, camFwd, camPos;
+    rdVector_Copy3(&camRight, &pCameraWorldMat->rvec);
+    rdVector_Copy3(&camUp, &pCameraWorldMat->uvec);
+    rdVector_Copy3(&camFwd, &pCameraWorldMat->lvec);
+    rdVector_Copy3(&camPos, &pCameraWorldMat->scale);
+
+    // Disable software backface culling (model space vs view space mismatch)
+    extern int rdGetRenderOptions(void);
+    extern void rdSetRenderOptions(int options);
+    int savedRenderOptions = rdGetRenderOptions();
+    rdSetRenderOptions(savedRenderOptions & ~1);
+
+    for (int i = 0; i < stdVR_wheelState.numSegments; i++) {
+        int binIdx = stdVR_wheelState.aSegments[i].binIdx;
+        if (binIdx < 0 || binIdx >= SITHBIN_NUMBINS) continue;
+
+        stdVR_WheelModelCache* pCache = &stdVR_aWheelModelCache[binIdx];
+        if (!pCache->bInitialized) continue;
+
+        int bHighlighted = (i == stdVR_wheelState.highlightedSegment);
+
+        // Compute HUD position (same formula as Draw for exact alignment)
+        float segAngle = segmentArc * i + segmentArc * 0.5f;
+        float iconX = centerX + sinf(segAngle) * hudRadius;
+        float iconY = centerY - cosf(segAngle) * hudRadius;
+
+        // Normalize HUD position to 0..1 (proportional screen coords)
+        float nx = iconX / coordW;
+        float ny = iconY / coordH;
+
+        // Inverse projection: screen coords → view-space at forward depth.
+        // Derived from rdCamera_PerspProjectVR forward equations:
+        //   screen_x = offsetX + vx * (2*half_w / (right-left)) / vy
+        //   screen_y = offsetY - vz * (2*half_h / (top-bottom)) / vy
+        // Solving for vx, vz at normalized coords:
+        float vy = forwardDist;
+        float vx = vy * (nx * hExtent + left);
+        float vz = vy * (top - ny * vExtent);
+
+        // Transform view-space to world-space
+        // JK view convention: x=right(rvec), y=forward(lvec), z=up(uvec)
+        rdVector3 worldPos;
+        worldPos.x = camPos.x + camRight.x * vx + camFwd.x * vy + camUp.x * vz;
+        worldPos.y = camPos.y + camRight.y * vx + camFwd.y * vy + camUp.y * vz;
+        worldPos.z = camPos.z + camRight.z * vx + camFwd.z * vy + camUp.z * vz;
+
+        float modelScale = bHighlighted ? highlightScale : normalScale;
+
+        // Build model matrix with turntable spin around camera up axis
+        float sinSpin = sinf(stdVR_wheelRotation);
+        float cosSpin = cosf(stdVR_wheelRotation);
+
+        rdVector3 rotRight, rotFwd;
+        rotRight.x = camRight.x * cosSpin + camFwd.x * sinSpin;
+        rotRight.y = camRight.y * cosSpin + camFwd.y * sinSpin;
+        rotRight.z = camRight.z * cosSpin + camFwd.z * sinSpin;
+        rotFwd.x = -camRight.x * sinSpin + camFwd.x * cosSpin;
+        rotFwd.y = -camRight.y * sinSpin + camFwd.y * cosSpin;
+        rotFwd.z = -camRight.z * sinSpin + camFwd.z * cosSpin;
+
+        rdMatrix34 modelMat;
+        modelMat.rvec.x = rotRight.x * modelScale;
+        modelMat.rvec.y = rotRight.y * modelScale;
+        modelMat.rvec.z = rotRight.z * modelScale;
+        modelMat.lvec.x = rotFwd.x * modelScale;
+        modelMat.lvec.y = rotFwd.y * modelScale;
+        modelMat.lvec.z = rotFwd.z * modelScale;
+        modelMat.uvec.x = camUp.x * modelScale;
+        modelMat.uvec.y = camUp.y * modelScale;
+        modelMat.uvec.z = camUp.z * modelScale;
+        rdVector_Copy3(&modelMat.scale, &worldPos);
+
+        // Force hierarchy matrix rebuild per eye
+        pCache->rdThing.frameTrue = 0;
+        rdThing_Draw(&pCache->rdThing, &modelMat);
+        rdCache_Flush();
+    }
+
+    rdSetRenderOptions(savedRenderOptions);
+}
+
+// ============================================================================
+// Public: Free all cached model entries
+// ============================================================================
+void stdVR_WeaponWheel_ResetCache(void)
+{
+    for (int i = 0; i < SITHBIN_NUMBINS; i++) {
+        if (stdVR_aWheelModelCache[i].bInitialized) {
+            rdThing_FreeEntry(&stdVR_aWheelModelCache[i].rdThing);
+        }
+    }
+    _memset(stdVR_aWheelModelCache, 0, sizeof(stdVR_aWheelModelCache));
+    stdVR_wheelRotation = 0.0f;
 }
 
 #endif // PLATFORM_VR
