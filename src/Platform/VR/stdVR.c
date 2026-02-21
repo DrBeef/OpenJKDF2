@@ -1661,7 +1661,7 @@ void stdVR_UpdateMenuCursor(void)
     stdVR_ControllerState* pController = &stdVR_clientInfo.controllers[controllerIndex];
 
     stdVR_clientInfo.menuCursorX = -sinf(DEG2RAD(pController->orientation.y - stdVR_clientInfo.screenLayerSnapYaw)) + 0.5f;
-    stdVR_clientInfo.menuCursorY = (float)(-pController->orientation.x / 45.0f) + 1.5f;
+    stdVR_clientInfo.menuCursorY = (float)(-pController->orientation.x / 45.0f) + 0.5f;
 
     // Convert to screen pixel coordinates (assuming 640x480 menu resolution)
     stdVR_clientInfo.menuCursorScreenX = (int)(stdVR_clientInfo.menuCursorX * 640.0f);

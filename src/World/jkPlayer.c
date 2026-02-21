@@ -933,7 +933,6 @@ void jkPlayer_DrawPov()
     }
 
     // Don't render weapon when 3D map is visible
-    extern int stdVR_Map3D_IsVisible(void);
     if (stdVR_Map3D_IsVisible()) {
         return;
     }

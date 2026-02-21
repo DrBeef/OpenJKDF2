@@ -221,7 +221,7 @@ static void stdVR_WeaponWheel_GetControllerAngles(int hand, float* pYaw, float* 
     if (!pCtrl->bTracking) return;
 
     *pYaw = stdVR_clientInfo.hmdOrientation.y - pCtrl->orientation.y;
-    *pPitch = pCtrl->orientation.x - 50.f;
+    *pPitch = pCtrl->orientation.x;
 }
 
 // ============================================================================
@@ -240,7 +240,7 @@ static void stdVR_WeaponWheel_GetPointingAngle(int hand, float* pAngle, float* p
     float yawDev = yaw - stdVR_wheelInitialYaw;
 
     // Store normalized pointer position for cursor drawing
-    float maxAngle = 20.f;
+    float maxAngle = 30.f;
     stdVR_wheelPointerX = yawDev / maxAngle;
     stdVR_wheelPointerY = pitch / maxAngle;
 
@@ -266,8 +266,15 @@ void stdVR_WeaponWheel_Update(void)
         return;
     }
 
-    // Don't activate wheels while the holomap is showing
-    if (sithOverlayMap_bShowMap) {
+    // Don't activate wheels while the holomap is showing; dismiss any active wheel
+    if (stdVR_Map3D_IsVisible()) {
+        if (stdVR_wheelState.activeWheel != STDVR_WHEEL_NONE) {
+            stdVR_wheelState.activeWheel = STDVR_WHEEL_NONE;
+            stdVR_wheelState.numSegments = 0;
+            stdVR_wheelState.highlightedSegment = -1;
+            stdVR_wheelState.prevHighlightedSegment = -1;
+            stdVR_weaponWheelTimeScale = 1.0f;
+        }
         return;
     }
 
@@ -343,7 +350,7 @@ void stdVR_WeaponWheel_Update(void)
         stdVR_WeaponWheel_GetPointingAngle(controlHand, &angle, &magnitude);
 
         if (magnitude > STDVR_WHEEL_POINT_THRESHOLD) {
-            float segmentArc = (2.0f * STDVR_PI) / stdVR_wheelState.numSegments;
+            float segmentArc = (2.0f * STDVR_PI) / (float)stdVR_wheelState.numSegments;
             int segIdx = (int)(angle / segmentArc);
             if (segIdx >= stdVR_wheelState.numSegments) segIdx = stdVR_wheelState.numSegments - 1;
             stdVR_wheelState.highlightedSegment = segIdx;
@@ -371,7 +378,7 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight)
 {
     (void)hudWidth; (void)hudHeight;
 
-    if (stdVR_wheelState.activeWheel == STDVR_WHEEL_NONE || stdVR_wheelState.numSegments == 0) {
+    if (stdVR_wheelState.activeWheel == STDVR_WHEEL_NONE || stdVR_wheelState.numSegments == 0 || stdVR_Map3D_IsVisible()) {
         return;
     }
 
@@ -381,9 +388,9 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight)
     float coordH = (float)Video_menuBuffer.format.height;
     if (coordW < 1.0f || coordH < 1.0f) return;
 
-    float centerX = coordW * 0.54f;
+    float centerX = coordW * 0.5f;
     float centerY = coordH * 0.5f;
-    float radius = coordH * 0.35f;
+    float radius = coordH * 0.3f;
     int bWeaponWheel = (stdVR_wheelState.activeWheel == STDVR_WHEEL_WEAPON);
 
     // Draw full-screen semi-transparent dark background
@@ -425,9 +432,9 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight)
 
             stdBitmap* pIcon = stdVR_wheelState.aSegments[i].pIcon;
             if (pIcon && pIcon->mipSurfaces && pIcon->mipSurfaces[0]) {
-                float iconScale = bHighlighted ? (coordH / 160.0f) : (coordH / 240.0f);
+                float iconScale = bHighlighted ? (coordH / 240.0f) : (coordH / 320.0f);
                 uint8_t brightness = bHighlighted ? 255 : 180;
-                uint8_t alpha = bHighlighted ? 255 : 220;
+                uint8_t alpha = bHighlighted ? 240 : 200;
 
                 int iconW = pIcon->mipSurfaces[0]->format.width;
                 int iconH = pIcon->mipSurfaces[0]->format.height;

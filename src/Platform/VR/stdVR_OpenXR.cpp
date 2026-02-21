@@ -26,6 +26,7 @@ extern "C" {
 #ifdef __ANDROID__
 #include <EGL/egl.h>
 #include <unistd.h>  // For usleep
+#include <android/log.h>  // For logcat output in VR_Log
 
 #if defined(TARGET_ANDROID_NATIVE_GLES)
 // Native GLES3 for Quest VR - no gl4es translation layer
@@ -180,7 +181,10 @@ extern "C" void VR_Log(const char* fmt, ...)
     va_list args;
     va_start(args, fmt);
 
-#if VR_VERBOSE_CONSOLE_LOGGING
+#ifdef __ANDROID__
+    // On Android, always log to logcat since file paths may not be writable
+    __android_log_vprint(ANDROID_LOG_INFO, "stdVR_OpenXR", fmt, args);
+#elif VR_VERBOSE_CONSOLE_LOGGING
     // Print to console (disabled by default for performance)
     char buffer[1024];
     vsnprintf(buffer, sizeof(buffer), fmt, args);
@@ -415,7 +419,8 @@ extern "C" int stdVR_currentEye = -1;  // -1 = not in eye rendering, 0 = left, 1
 
 // Input state
 static XrActionSet xrActionSet = XR_NULL_HANDLE;
-static XrAction xrPoseAction = XR_NULL_HANDLE;
+static XrAction xrAimPoseAction = XR_NULL_HANDLE;
+static XrAction xrGripPoseAction = XR_NULL_HANDLE;
 static XrAction xrTriggerAction = XR_NULL_HANDLE;
 static XrAction xrGripAction = XR_NULL_HANDLE;
 static XrAction xrThumbstickAction = XR_NULL_HANDLE;
@@ -427,7 +432,8 @@ static XrAction xrButtonXAction = XR_NULL_HANDLE;
 static XrAction xrButtonYAction = XR_NULL_HANDLE;
 static XrAction xrMenuAction = XR_NULL_HANDLE;
 static XrAction xrHapticAction = XR_NULL_HANDLE;
-static XrSpace xrControllerSpaces[STDVR_CONTROLLER_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
+static XrSpace xrAimControllerSpaces[STDVR_CONTROLLER_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
+static XrSpace xrGripControllerSpaces[STDVR_CONTROLLER_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
 static XrPath xrHandPaths[STDVR_CONTROLLER_COUNT];
 
 // Runtime info
@@ -672,13 +678,17 @@ extern "C" int stdVR_OpenXR_Init(void)
 #ifdef __ANDROID__
     // Check for Android create instance extension (required for Pico and other Android runtimes)
     bool hasAndroidCreateInstance = false;
+    bool hasBDControllerInteraction = false;
     for (const auto& ext : extensions) {
         if (strcmp(ext.extensionName, XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME) == 0) {
             hasAndroidCreateInstance = true;
-            break;
+        }
+        if (strcmp(ext.extensionName, XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME) == 0) {
+            hasBDControllerInteraction = true;
         }
     }
     VR_Log("stdVR_OpenXR: XR_KHR_android_create_instance: %s\n", hasAndroidCreateInstance ? "YES" : "NO");
+    VR_Log("stdVR_OpenXR: XR_BD_controller_interaction: %s\n", hasBDControllerInteraction ? "YES" : "NO");
 #endif
 
     // Create instance
@@ -687,6 +697,11 @@ extern "C" int stdVR_OpenXR_Init(void)
 #ifdef __ANDROID__
     if (hasAndroidCreateInstance) {
         enabledExtensions.push_back(XR_KHR_ANDROID_CREATE_INSTANCE_EXTENSION_NAME);
+    }
+    // Added: Enable Pico controller interaction profile extension (required for
+    // bytedance/pico4_controller and bytedance/pico_neo3_controller profiles)
+    if (hasBDControllerInteraction) {
+        enabledExtensions.push_back(XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME);
     }
 #endif
 
@@ -794,7 +809,14 @@ static int CreateActionSet(void)
     actionInfo.countSubactionPaths = STDVR_CONTROLLER_COUNT;
     actionInfo.subactionPaths = xrHandPaths;
     strcpy(actionInfo.localizedActionName, "Aim Pose");
-    XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrPoseAction));
+    XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrAimPoseAction));
+
+    strcpy(actionInfo.actionName, "grip_pose");
+    actionInfo.actionType = XR_ACTION_TYPE_POSE_INPUT;
+    actionInfo.countSubactionPaths = STDVR_CONTROLLER_COUNT;
+    actionInfo.subactionPaths = xrHandPaths;
+    strcpy(actionInfo.localizedActionName, "Grip Pose");
+    XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrGripPoseAction));
 
     // Create trigger action
     strcpy(actionInfo.actionName, "trigger");
@@ -814,9 +836,11 @@ static int CreateActionSet(void)
     strcpy(actionInfo.localizedActionName, "Thumbstick");
     XR_CHECK(xrCreateAction(xrActionSet, &actionInfo, &xrThumbstickAction));
 
-    // Create button actions (no subaction paths for these)
-    actionInfo.countSubactionPaths = 0;
-    actionInfo.subactionPaths = nullptr;
+    // Create button actions (with subaction paths for Pico compatibility —
+    // Pico's OpenXR runtime requires actions to be created with subaction paths
+    // if their bindings reference hand-specific paths)
+    actionInfo.countSubactionPaths = STDVR_CONTROLLER_COUNT;
+    actionInfo.subactionPaths = xrHandPaths;
     actionInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
 
     strcpy(actionInfo.actionName, "button_a");
@@ -863,8 +887,10 @@ static int CreateActionSet(void)
     XrPath path;
 
     // Left controller
+    xrStringToPath(xrInstance, "/user/hand/left/input/aim/pose", &path);
+    bindings.push_back({ xrAimPoseAction, path });
     xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
-    bindings.push_back({ xrPoseAction, path });
+    bindings.push_back({ xrGripPoseAction, path });
     xrStringToPath(xrInstance, "/user/hand/left/input/trigger/value", &path);
     bindings.push_back({ xrTriggerAction, path });
     xrStringToPath(xrInstance, "/user/hand/left/input/squeeze/value", &path);
@@ -883,8 +909,10 @@ static int CreateActionSet(void)
     bindings.push_back({ xrHapticAction, path });
 
     // Right controller
+    xrStringToPath(xrInstance, "/user/hand/right/input/aim/pose", &path);
+    bindings.push_back({ xrAimPoseAction, path });
     xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
-    bindings.push_back({ xrPoseAction, path });
+    bindings.push_back({ xrGripPoseAction, path });
     xrStringToPath(xrInstance, "/user/hand/right/input/trigger/value", &path);
     bindings.push_back({ xrTriggerAction, path });
     xrStringToPath(xrInstance, "/user/hand/right/input/squeeze/value", &path);
@@ -904,7 +932,11 @@ static int CreateActionSet(void)
     suggestedBindings.interactionProfile = oculusTouchPath;
     suggestedBindings.suggestedBindings = bindings.data();
     suggestedBindings.countSuggestedBindings = (uint32_t)bindings.size();
-    xrSuggestInteractionProfileBindings(xrInstance, &suggestedBindings);
+    {
+        XrResult touchResult = xrSuggestInteractionProfileBindings(xrInstance, &suggestedBindings);
+        VR_Log("stdVR_OpenXR: Oculus Touch bindings: %s (result %d, %d bindings)\n",
+               XR_SUCCEEDED(touchResult) ? "OK" : "FAILED", (int)touchResult, (int)bindings.size());
+    }
 
     // Valve Index Controller bindings
     XrPath indexPath;
@@ -912,8 +944,10 @@ static int CreateActionSet(void)
         bindings.clear();
 
         // Left controller
+        xrStringToPath(xrInstance, "/user/hand/left/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/squeeze/value", &path);
@@ -930,8 +964,10 @@ static int CreateActionSet(void)
         bindings.push_back({ xrHapticAction, path });
 
         // Right controller
+        xrStringToPath(xrInstance, "/user/hand/right/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/squeeze/value", &path);
@@ -959,8 +995,10 @@ static int CreateActionSet(void)
         bindings.clear();
 
         // Left controller - Vive uses trackpad instead of thumbstick
+        xrStringToPath(xrInstance, "/user/hand/left/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/squeeze/click", &path);  // Vive grip is a button
@@ -975,8 +1013,10 @@ static int CreateActionSet(void)
         bindings.push_back({ xrHapticAction, path });
 
         // Right controller
+        xrStringToPath(xrInstance, "/user/hand/right/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/squeeze/click", &path);
@@ -1003,8 +1043,10 @@ static int CreateActionSet(void)
         bindings.clear();
 
         // Left controller
+        xrStringToPath(xrInstance, "/user/hand/left/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/squeeze/value", &path);
@@ -1023,8 +1065,10 @@ static int CreateActionSet(void)
         bindings.push_back({ xrHapticAction, path });
 
         // Right controller
+        xrStringToPath(xrInstance, "/user/hand/right/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/squeeze/value", &path);
@@ -1044,9 +1088,8 @@ static int CreateActionSet(void)
         suggestedBindings.suggestedBindings = bindings.data();
         suggestedBindings.countSuggestedBindings = (uint32_t)bindings.size();
         XrResult pico4Result = xrSuggestInteractionProfileBindings(xrInstance, &suggestedBindings);
-        if (XR_SUCCEEDED(pico4Result)) {
-            VR_Log("stdVR_OpenXR: Pico 4 controller bindings registered\n");
-        }
+        VR_Log("stdVR_OpenXR: Pico 4 bindings: %s (result %d, %d bindings)\n",
+               XR_SUCCEEDED(pico4Result) ? "OK" : "FAILED", (int)pico4Result, (int)bindings.size());
         // XR_ERROR_PATH_UNSUPPORTED is expected on non-Pico devices
     }
 
@@ -1056,8 +1099,10 @@ static int CreateActionSet(void)
         bindings.clear();
 
         // Left controller
+        xrStringToPath(xrInstance, "/user/hand/left/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/squeeze/value", &path);
@@ -1076,8 +1121,10 @@ static int CreateActionSet(void)
         bindings.push_back({ xrHapticAction, path });
 
         // Right controller
+        xrStringToPath(xrInstance, "/user/hand/right/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/trigger/value", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/squeeze/value", &path);
@@ -1109,8 +1156,10 @@ static int CreateActionSet(void)
         bindings.clear();
 
         // Left controller - only has select (trigger) and menu
+        xrStringToPath(xrInstance, "/user/hand/left/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/select/click", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/left/input/menu/click", &path);
@@ -1119,8 +1168,10 @@ static int CreateActionSet(void)
         bindings.push_back({ xrHapticAction, path });
 
         // Right controller
+        xrStringToPath(xrInstance, "/user/hand/right/input/aim/pose", &path);
+        bindings.push_back({ xrAimPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/grip/pose", &path);
-        bindings.push_back({ xrPoseAction, path });
+        bindings.push_back({ xrGripPoseAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/select/click", &path);
         bindings.push_back({ xrTriggerAction, path });
         xrStringToPath(xrInstance, "/user/hand/right/input/menu/click", &path);
@@ -1141,9 +1192,16 @@ static int CreateActionSet(void)
 static void DestroyActionSet(void)
 {
     for (int i = 0; i < STDVR_CONTROLLER_COUNT; i++) {
-        if (xrControllerSpaces[i] != XR_NULL_HANDLE) {
-            xrDestroySpace(xrControllerSpaces[i]);
-            xrControllerSpaces[i] = XR_NULL_HANDLE;
+        if (xrAimControllerSpaces[i] != XR_NULL_HANDLE) {
+            xrDestroySpace(xrAimControllerSpaces[i]);
+            xrAimControllerSpaces[i] = XR_NULL_HANDLE;
+        }
+    }
+
+    for (int i = 0; i < STDVR_CONTROLLER_COUNT; i++) {
+        if (xrGripControllerSpaces[i] != XR_NULL_HANDLE) {
+            xrDestroySpace(xrGripControllerSpaces[i]);
+            xrGripControllerSpaces[i] = XR_NULL_HANDLE;
         }
     }
 
@@ -1545,10 +1603,22 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
     // Create controller spaces
     for (int i = 0; i < STDVR_CONTROLLER_COUNT; i++) {
         XrActionSpaceCreateInfo spaceCreateInfo = { XR_TYPE_ACTION_SPACE_CREATE_INFO };
-        spaceCreateInfo.action = xrPoseAction;
+        spaceCreateInfo.action = xrAimPoseAction;
         spaceCreateInfo.poseInActionSpace.orientation.w = 1.0f;
         spaceCreateInfo.subactionPath = xrHandPaths[i];
-        result = xrCreateActionSpace(xrSession, &spaceCreateInfo, &xrControllerSpaces[i]);
+        result = xrCreateActionSpace(xrSession, &spaceCreateInfo, &xrAimControllerSpaces[i]);
+        if (XR_FAILED(result)) {
+            VR_Log("OpenXR error: xrCreateActionSpace(%d) returned %d\n", i, result);
+            goto cleanup_session;
+        }
+    }
+
+    for (int i = 0; i < STDVR_CONTROLLER_COUNT; i++) {
+        XrActionSpaceCreateInfo spaceCreateInfo = { XR_TYPE_ACTION_SPACE_CREATE_INFO };
+        spaceCreateInfo.action = xrGripPoseAction;
+        spaceCreateInfo.poseInActionSpace.orientation.w = 1.0f;
+        spaceCreateInfo.subactionPath = xrHandPaths[i];
+        result = xrCreateActionSpace(xrSession, &spaceCreateInfo, &xrGripControllerSpaces[i]);
         if (XR_FAILED(result)) {
             VR_Log("OpenXR error: xrCreateActionSpace(%d) returned %d\n", i, result);
             goto cleanup_session;
@@ -2815,30 +2885,32 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
     for (int hand = 0; hand < STDVR_CONTROLLER_COUNT; hand++) {
         // Chain velocity query to location query
         XrSpaceVelocity velocity = { XR_TYPE_SPACE_VELOCITY };
-        XrSpaceLocation location = { XR_TYPE_SPACE_LOCATION };
-        location.next = &velocity;  // Chain velocity struct
+        XrSpaceLocation aim_location = { XR_TYPE_SPACE_LOCATION };
+        XrSpaceLocation grip_location = { XR_TYPE_SPACE_LOCATION };
+        aim_location.next = &velocity;  // Chain velocity struct
+        grip_location.next = &velocity;  // Chain velocity struct
 
-        if (xrControllerSpaces[hand] != XR_NULL_HANDLE) {
-            xrLocateSpace(xrControllerSpaces[hand], xrLocalSpace, xrFrameState.predictedDisplayTime, &location);
+        if (xrAimControllerSpaces[hand] != XR_NULL_HANDLE && xrGripControllerSpaces[hand] != XR_NULL_HANDLE) {
+            xrLocateSpace(xrAimControllerSpaces[hand], xrLocalSpace, xrFrameState.predictedDisplayTime, &aim_location);
 
             stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
 
-            if (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) {
+            if (aim_location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) {
                 // Log raw OpenXR position before conversion
                 static int ctrlLogCounter = 0;
                 ctrlLogCounter++;
                 if (ctrlLogCounter % 60 == 1) {
                     VR_Log("Controller[%d] OpenXR raw=(%.4f, %.4f, %.4f)\n",
-                        hand, location.pose.position.x, location.pose.position.y, location.pose.position.z);
+                        hand, aim_location.pose.position.x, aim_location.pose.position.y, aim_location.pose.position.z);
                 }
 
                 // Convert from OpenXR coords to JKDF2 coords:
                 // OpenXR: X=right, Y=up, Z=back
                 // JKDF2:  X=right, Y=forward, Z=up
                 // JKDF2.x = OpenXR.x, JKDF2.y = -OpenXR.z, JKDF2.z = OpenXR.y
-                pCtrl->position.x = location.pose.position.x;
-                pCtrl->position.y = -location.pose.position.z;  // Forward = -back
-                pCtrl->position.z = location.pose.position.y;   // Up = up
+                pCtrl->position.x = aim_location.pose.position.x;
+                pCtrl->position.y = -aim_location.pose.position.z;  // Forward = -back
+                pCtrl->position.z = aim_location.pose.position.y;   // Up = up
                 pCtrl->bTracking = 1;
 
                 if (ctrlLogCounter % 60 == 1) {
@@ -2849,11 +2921,8 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
                 pCtrl->bTracking = 0;
             }
 
-            if (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) {
-                QuatToEuler(&location.pose.orientation, &pCtrl->orientation);
-                PoseToMatrix(&location.pose, &pCtrl->poseMatrix);
-                // Use grip pose as the grip matrix too (same pose currently)
-                PoseToMatrix(&location.pose, &pCtrl->gripPoseMatrix);
+            if (aim_location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) {
+                QuatToEuler(&aim_location.pose.orientation, &pCtrl->orientation);
             }
 
             // Store velocity data for motion controls
@@ -2884,6 +2953,13 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
                 pCtrl->motion.angularVelocity.y = 0.0f;
                 pCtrl->motion.angularVelocity.z = 0.0f;
             }
+
+            xrLocateSpace(xrGripControllerSpaces[hand], xrLocalSpace, xrFrameState.predictedDisplayTime, &grip_location);
+            if (grip_location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) {
+                // Use grip pose as the grip matrix too
+                PoseToMatrix(&grip_location.pose, &pCtrl->gripPoseMatrix);
+                PoseToMatrix(&grip_location.pose, &pCtrl->poseMatrix);
+            }
         }
     }
 }
@@ -2912,6 +2988,27 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
     syncInfo.countActiveActionSets = 1;
     syncInfo.activeActionSets = &activeActionSet;
     xrSyncActions(xrSession, &syncInfo);
+
+    // Log active interaction profile once for debugging Pico input issues
+    {
+        static int bProfileLogged = 0;
+        if (!bProfileLogged) {
+            bProfileLogged = 1;
+            for (int h = 0; h < STDVR_CONTROLLER_COUNT; h++) {
+                XrInteractionProfileState profileState = { XR_TYPE_INTERACTION_PROFILE_STATE };
+                if (XR_SUCCEEDED(xrGetCurrentInteractionProfile(xrSession, xrHandPaths[h], &profileState))
+                    && profileState.interactionProfile != XR_NULL_PATH)
+                {
+                    char profileStr[256] = {0};
+                    uint32_t len = 0;
+                    xrPathToString(xrInstance, profileState.interactionProfile, sizeof(profileStr), &len, profileStr);
+                    VR_Log("stdVR_OpenXR: Hand %d active profile: %s\n", h, profileStr);
+                } else {
+                    VR_Log("stdVR_OpenXR: Hand %d active profile: NONE\n", h);
+                }
+            }
+        }
+    }
 
     uint32_t prevButtonState = stdVR_clientInfo.buttonState;
     stdVR_clientInfo.buttonState = 0;
@@ -2978,51 +3075,65 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
         }
     }
 
-    // Get button states (no subaction)
-    XrActionStateGetInfo getInfo = { XR_TYPE_ACTION_STATE_GET_INFO };
-    getInfo.subactionPath = XR_NULL_PATH;
-    XrActionStateBoolean boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+    // Get button states per-hand (required for Pico compatibility —
+    // querying with XR_NULL_PATH fails on Pico's stricter OpenXR runtime)
+    for (int hand = 0; hand < STDVR_CONTROLLER_COUNT; hand++) {
+        XrActionStateGetInfo getInfo = { XR_TYPE_ACTION_STATE_GET_INFO };
+        getInfo.subactionPath = xrHandPaths[hand];
+        XrActionStateBoolean boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
 
-    getInfo.action = xrButtonAAction;
-    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
-    if (boolState.isActive && boolState.currentState) {
-        stdVR_clientInfo.buttonState |= STDVR_BTN_A;
-    }
+        if (hand == STDVR_CONTROLLER_RIGHT) {
+            // A and B are on the right controller
+            getInfo.action = xrButtonAAction;
+            boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+            if (boolState.isActive && boolState.currentState) {
+                stdVR_clientInfo.buttonState |= STDVR_BTN_A;
+            }
 
-    getInfo.action = xrButtonBAction;
-    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
-    if (boolState.isActive && boolState.currentState) {
-        stdVR_clientInfo.buttonState |= STDVR_BTN_B;
-    }
+            getInfo.action = xrButtonBAction;
+            boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+            if (boolState.isActive && boolState.currentState) {
+                stdVR_clientInfo.buttonState |= STDVR_BTN_B;
+            }
 
-    getInfo.action = xrButtonXAction;
-    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
-    if (boolState.isActive && boolState.currentState) {
-        stdVR_clientInfo.buttonState |= STDVR_BTN_X;
-    }
+            getInfo.action = xrThumbstickClickRAction;
+            boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+            if (boolState.isActive && boolState.currentState) {
+                stdVR_clientInfo.buttonState |= STDVR_BTN_THUMBSTICK_R;
+            }
+        } else {
+            // X, Y, and Menu are on the left controller
+            getInfo.action = xrButtonXAction;
+            boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+            if (boolState.isActive && boolState.currentState) {
+                stdVR_clientInfo.buttonState |= STDVR_BTN_X;
+            }
 
-    getInfo.action = xrButtonYAction;
-    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
-    if (boolState.isActive && boolState.currentState) {
-        stdVR_clientInfo.buttonState |= STDVR_BTN_Y;
-    }
+            getInfo.action = xrButtonYAction;
+            boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+            if (boolState.isActive && boolState.currentState) {
+                stdVR_clientInfo.buttonState |= STDVR_BTN_Y;
+            }
 
-    getInfo.action = xrMenuAction;
-    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
-    if (boolState.isActive && boolState.currentState) {
-        stdVR_clientInfo.buttonState |= STDVR_BTN_MENU;
-    }
+            getInfo.action = xrMenuAction;
+            boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+            if (boolState.isActive && boolState.currentState) {
+                stdVR_clientInfo.buttonState |= STDVR_BTN_MENU;
+            }
 
-    getInfo.action = xrThumbstickClickLAction;
-    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
-    if (boolState.isActive && boolState.currentState) {
-        stdVR_clientInfo.buttonState |= STDVR_BTN_THUMBSTICK_L;
-    }
-
-    getInfo.action = xrThumbstickClickRAction;
-    xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
-    if (boolState.isActive && boolState.currentState) {
-        stdVR_clientInfo.buttonState |= STDVR_BTN_THUMBSTICK_R;
+            getInfo.action = xrThumbstickClickLAction;
+            boolState = { XR_TYPE_ACTION_STATE_BOOLEAN };
+            xrGetActionStateBoolean(xrSession, &getInfo, &boolState);
+            if (boolState.isActive && boolState.currentState) {
+                stdVR_clientInfo.buttonState |= STDVR_BTN_THUMBSTICK_L;
+            }
+        }
     }
 
     // Compute pressed/released
