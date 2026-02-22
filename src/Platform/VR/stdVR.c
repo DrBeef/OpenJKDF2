@@ -351,26 +351,10 @@ void stdVR_KeepAlive(void)
         return;
     }
 
-    // If we have a pending frame, finish it
-    if (stdVR_bFramePending) {
-        if (keepAliveCount <= 20 || keepAliveCount % 50 == 0) {
-            stdPlatform_Printf("stdVR: KeepAlive #%d - submitting pending frame\n", keepAliveCount);
-        }
-        stdVR_SubmitEmptyFrame();
-    }
-
-    // Start and immediately finish a new frame to keep the headset alive
-    if (stdVR_OpenXR_WaitFrame()) {
-        stdVR_bFramePending = 1;  // Mark frame as pending so SubmitEmptyFrame works
-        if (keepAliveCount <= 20 || keepAliveCount % 50 == 0) {
-            stdPlatform_Printf("stdVR: KeepAlive #%d - submitting new empty frame\n", keepAliveCount);
-        }
-        stdVR_SubmitEmptyFrame();
-    } else {
-        if (keepAliveCount <= 20) {
-            stdPlatform_Printf("stdVR: KeepAlive #%d - WaitFrame failed\n", keepAliveCount);
-        }
-    }
+    // Don't submit empty frames during loading — they show as black flashes
+    // interleaved with the loading screen quad layer. The normal frame loop in
+    // Window.c keeps submitting loading screen frames, and event polling above
+    // keeps the session state machine alive.
 }
 
 int stdVR_PrepareEyeBuffer(int eye)
