@@ -1568,11 +1568,16 @@ void sithControl_PlayerMovement(sithThing *player)
     int vrMovementActive = 0;
 
     move_multiplier = 1.0;
+#ifdef PLATFORM_VR
+    // In VR, ignore the "Auto Run" setting (bit 1 of controlOptions) and use
+    // only the VR run toggle (left thumbstick click → INPUT_FUNC_FAST)
+    if ( (!stdVR_bEnabled && (sithWeapon_controlOptions & 2) != 0) || sithControl_ReadFunctionMap(INPUT_FUNC_FAST, 0) )
+#else
     if ( (sithWeapon_controlOptions & 2) != 0 || sithControl_ReadFunctionMap(INPUT_FUNC_FAST, 0) )
+#endif
         move_multiplier = 2.0;
     if ( sithControl_ReadFunctionMap(INPUT_FUNC_SLOW, 0) )
         move_multiplier = move_multiplier * 0.5;
-    // Note: VR run toggle feeds into INPUT_FUNC_FAST above via stdVR_Input_IsRunToggled()
     int old_state = player->physicsParams.physflags;
     if ( !sithControl_ReadFunctionMap(INPUT_FUNC_DUCK, 0) )
     {
