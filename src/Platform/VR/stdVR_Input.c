@@ -29,8 +29,8 @@ static int stdVR_menuButtonHeld = 0;
 static uint32_t stdVR_menuButtonHoldStart = 0;
 #define STDVR_MENU_LONGPRESS_MS 1000  // Hold menu 1 second to recenter
 
-// Walk/run toggle (left thumbstick click)
-static int stdVR_walkMode = 1;  // 0 = run (default), 1 = walk
+// Run toggle (off-hand thumbstick click)
+static int stdVR_runToggled = 0;  // 0 = walk (default), 1 = run
 
 // Weapon switching via dominant hand thumbstick up
 static int stdVR_weaponSwitchState = 0;  // 0 = neutral, 1 = up triggered, -1 = down triggered
@@ -344,16 +344,16 @@ void stdVR_Input_MapToGame(void)
         }
     }
 
-    // Left thumbstick click = toggle walk/run mode
+    // Off-hand thumbstick click = toggle run mode (INPUT_FUNC_FAST)
     if (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_L) {
-        stdVR_walkMode = !stdVR_walkMode;
-        // Haptic feedback: short pulse for run, double pulse for walk
-        if (stdVR_walkMode) {
-            // Walk mode: two short pulses
-            stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.3f, 0.1f, 100.0f);
-        } else {
+        stdVR_runToggled = !stdVR_runToggled;
+        // Haptic feedback: longer pulse for run, short pulse for walk
+        if (stdVR_runToggled) {
             // Run mode: one longer pulse
             stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.5f, 0.15f, 150.0f);
+        } else {
+            // Walk mode: short pulse
+            stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.3f, 0.1f, 100.0f);
         }
     }
 
@@ -450,13 +450,19 @@ float stdVR_Input_GetGrip(int hand)
     return (hand == STDVR_CONTROLLER_LEFT) ? stdVR_clientInfo.gripLeft : stdVR_clientInfo.gripRight;
 }
 
-// Check if walk mode is active (toggled via left thumbstick click)
-int stdVR_Input_IsWalkMode(void)
+// Check if run mode is toggled on (off-hand thumbstick click)
+int stdVR_Input_IsRunToggled(void)
 {
     if (!stdVR_bEnabled) {
         return 0;
     }
-    return stdVR_walkMode;
+    return stdVR_runToggled;
+}
+
+// Reset run toggle (e.g. on level load)
+void stdVR_Input_ResetRunToggle(void)
+{
+    stdVR_runToggled = 0;
 }
 
 // Check if next weapon was triggered this frame (thumbstick up flick)

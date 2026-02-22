@@ -205,6 +205,9 @@ typedef struct stdVR_Config {
     int snapTurnAngle;              // Snap turn angle in degrees (30, 45, 90)
     float smoothTurnSpeed;          // Smooth turn speed in degrees/sec
 
+    // Speed
+    float walkSpeedScale;           // Walk speed multiplier (default 1.0, applied to base thrust)
+
     // Scale and comfort
     float worldScale;               // World scale multiplier (default 1.0)
     float heightOffset;             // Player height offset in meters

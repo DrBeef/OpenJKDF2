@@ -503,7 +503,7 @@ extern FAST_FUNC void* __aeabi_memcpy8(void* dst, const void* src, size_t len);*
 //#define VR_QUICKSTART_MODE
 #ifdef VR_QUICKSTART_MODE
 #define VR_QUICKSTART_EPISODE "jk1"           // Episode GOB name (without .gob)
-#define VR_QUICKSTART_MAP     "04EscapeHouse"   // Level filename (without .jkl)
+#define VR_QUICKSTART_MAP     "02narshadda"   // Level filename (without .jkl)
 #endif
 
 // =============================================================================

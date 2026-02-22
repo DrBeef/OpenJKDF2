@@ -50,6 +50,7 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_config.turnMode = STDVR_TURN_SNAP;
     stdVR_config.snapTurnAngle = 45;
     stdVR_config.smoothTurnSpeed = 120.0f;
+    stdVR_config.walkSpeedScale = 1.0f;
     stdVR_config.worldScale = 0.09f;  // IPD/roomscale multiplier - reduced for less physical movement
     stdVR_config.heightOffset = 0.0f;
     stdVR_config.fixedHeightAdjustment = 0.11f;

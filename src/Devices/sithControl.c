@@ -757,7 +757,10 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 // Right thumbstick up flick = next weapon
                 vrInput = stdVR_Input_IsNextWeaponTriggered();
                 break;
-            // Left thumbstick click is used for walk/run toggle (handled in stdVR_Input_MapToGame)
+            case INPUT_FUNC_FAST:
+                // Off-hand thumbstick click = toggle run
+                vrInput = stdVR_Input_IsRunToggled();
+                break;
             // Right thumbstick down is crouch toggle (handled via INPUT_FUNC_DUCK above)
             default:
                 break;
@@ -1566,7 +1569,7 @@ void sithControl_PlayerMovement(sithThing *player)
         move_multiplier = 2.0;
     if ( sithControl_ReadFunctionMap(INPUT_FUNC_SLOW, 0) )
         move_multiplier = move_multiplier * 0.5;
-    // Note: VR walk mode is handled directly in VR movement section below
+    // Note: VR run toggle feeds into INPUT_FUNC_FAST above via stdVR_Input_IsRunToggled()
     int old_state = player->physicsParams.physflags;
     if ( !sithControl_ReadFunctionMap(INPUT_FUNC_DUCK, 0) )
     {
@@ -1638,10 +1641,17 @@ void sithControl_PlayerMovement(sithThing *player)
                 }
 
                 // Apply movement in world space (transformed by HMD yaw)
+                // Base speed uses walkSpeedScale config; INPUT_FUNC_FAST (run toggle) and
+                // other modifiers (crouch, water) are applied by move_multiplier below
                 flex_t thrust = player->actorParams.maxThrust + player->actorParams.extraSpeed;
-                flex_t walk = stdVR_Input_IsWalkMode() ? 0.6f : 1.1f;
-                player->physicsParams.acceleration.x = worldMoveY * thrust * walk;   // Forward/back
-                player->physicsParams.acceleration.y = -worldMoveX * thrust * walk;  // Strafe
+                player->physicsParams.acceleration.x = worldMoveY * thrust * stdVR_config.walkSpeedScale;   // Forward/back
+                player->physicsParams.acceleration.y = -worldMoveX * thrust * stdVR_config.walkSpeedScale;  // Strafe
+
+                // In VR, stop almost immediately when thumbstick is released (no slide)
+                if (moveX == 0.0f && moveY == 0.0f) {
+                    player->physicsParams.vel.x *= 0.5f;
+                    player->physicsParams.vel.y *= 0.5f;
+                }
             } else
 #endif // PLATFORM_VR
             {

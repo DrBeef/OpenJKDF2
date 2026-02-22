@@ -38,8 +38,9 @@ float stdVR_Input_GetGrip(int hand);
 // Menu button state (short press = menu/escape, long press = recenter)
 int stdVR_Input_IsMenuPressed(void);
 
-// Walk/run toggle (left thumbstick click to toggle)
-int stdVR_Input_IsWalkMode(void);
+// Run toggle (off-hand thumbstick click to toggle)
+int stdVR_Input_IsRunToggled(void);
+void stdVR_Input_ResetRunToggle(void);
 
 // Weapon switching via dominant hand thumbstick up/down flick
 int stdVR_Input_IsNextWeaponTriggered(void);
