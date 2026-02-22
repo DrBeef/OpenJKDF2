@@ -20,6 +20,7 @@
 #include "Engine/rdCamera.h"
 #include "Raster/rdCache.h"
 #include "World/sithModel.h"
+#include "Gameplay/jkSaber.h"
 #include "Main/Main.h"
 
 #include <math.h>
@@ -701,6 +702,29 @@ void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat)
         // Force hierarchy matrix rebuild per eye
         pCache->rdThing.frameTrue = 0;
         rdThing_Draw(&pCache->rdThing, &modelMat);
+
+        // Draw saber beam on the lightsaber model in the wheel
+        if ((binIdx == SITHBIN_LIGHTSABER || binIdx == SITHBIN_MOTS_LIGHTSABER)
+            && sithPlayer_pLocalPlayerThing)
+        {
+            jkPlayerInfo* pInfo = sithPlayer_pLocalPlayerThing->playerInfo;
+            if (pInfo && pInfo->polylineThing.model3
+                && pCache->rdThing.hierarchyNodeMatrices
+                && pCache->rdThing.model3
+                && pCache->rdThing.model3->numHierarchyNodes > 5)
+            {
+                // Temporarily force full blade length for the display
+                float savedLength = pInfo->polyline.length;
+                if (savedLength <= 0.0f)
+                    pInfo->polyline.length = pInfo->length > 0.0f ? pInfo->length : 0.15f;
+
+                jkSaber_PolylineRand(&pInfo->polylineThing);
+                rdThing_Draw(&pInfo->polylineThing, &pCache->rdThing.hierarchyNodeMatrices[5]);
+
+                pInfo->polyline.length = savedLength;
+            }
+        }
+
         rdCache_Flush();
     }
 

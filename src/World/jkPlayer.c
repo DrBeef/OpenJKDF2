@@ -1315,7 +1315,11 @@ void jkPlayer_DrawPov()
         // Added: we want the polyline to render in draw order so the spheres don't clip,
         // but we want the POV model to be aware of the depths still.
 #if defined(SDL2_RENDER) || defined(TARGET_TWL)
-        if (playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_SABERON)
+        if (playerThings[playerThingIdx].actorThing->jkFlags & JKFLAG_SABERON
+#ifdef PLATFORM_VR
+            && !stdVR_WeaponWheel_IsActive()
+#endif
+        )
         {
             rdSetZBufferMethod(RD_ZBUFFER_READ_NOWRITE);
             jkSaber_Draw(&viewMat);
