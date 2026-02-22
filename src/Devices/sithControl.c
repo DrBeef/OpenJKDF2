@@ -716,14 +716,12 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
     if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
         int dominantLeft = (stdVR_config.dominantHand == STDVR_CONTROLLER_LEFT);
         uint32_t btnFire1 = dominantLeft ? STDVR_BTN_TRIGGER_L : STDVR_BTN_TRIGGER_R;
-        uint32_t btnFire2 = dominantLeft ? STDVR_BTN_GRIP_L : STDVR_BTN_GRIP_R;
         uint32_t btnUseSkill = dominantLeft ? STDVR_BTN_TRIGGER_R : STDVR_BTN_TRIGGER_L;
         uint32_t btnUseInv = dominantLeft ? STDVR_BTN_GRIP_R : STDVR_BTN_GRIP_L;
         uint32_t btnJump = dominantLeft ? STDVR_BTN_X : STDVR_BTN_A;
         uint32_t btnActivate = dominantLeft ? STDVR_BTN_A : STDVR_BTN_X;
-        uint32_t btnDuck = dominantLeft ? STDVR_BTN_Y : STDVR_BTN_B;
-        uint32_t btnNextWeapon = dominantLeft ? STDVR_BTN_B : STDVR_BTN_Y;
-        uint32_t btnQuickSave = dominantLeft ? STDVR_BTN_THUMBSTICK_R : STDVR_BTN_THUMBSTICK_L;
+        uint32_t btnAltFire = dominantLeft ? STDVR_BTN_Y : STDVR_BTN_B;
+
         int vrInput = 0;
         switch (funcIdx) {
             case INPUT_FUNC_FIRE1:
@@ -731,9 +729,8 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 vrInput = stdVR_Input_IsButtonDown(btnFire1);
                 break;
             case INPUT_FUNC_FIRE2:
-                // Dominant grip = secondary fire (suppressed when weapon wheel active)
-                if (!stdVR_WeaponWheel_IsGripSuppressed(stdVR_config.dominantHand))
-                    vrInput = stdVR_Input_IsButtonDown(btnFire2);
+                // Dominant face button (B/Y) = secondary fire
+                vrInput = stdVR_Input_IsButtonDown(btnAltFire);
                 break;
             case INPUT_FUNC_JUMP:
                 // Dominant face button = jump (A or X)
@@ -744,8 +741,8 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 vrInput = stdVR_Input_IsButtonDown(btnActivate);
                 break;
             case INPUT_FUNC_DUCK:
-                // Dominant face button = duck/crouch (B or Y)
-                vrInput = stdVR_Input_IsButtonDown(btnDuck);
+                // Right thumbstick down = toggle crouch
+                vrInput = stdVR_Input_IsCrouchToggled();
                 break;
             case INPUT_FUNC_USESKILL:
                 // Offhand trigger = use force power
@@ -760,11 +757,8 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 // Right thumbstick up flick = next weapon
                 vrInput = stdVR_Input_IsNextWeaponTriggered();
                 break;
-            case INPUT_FUNC_PREVWEAPON:
-                // Right thumbstick down flick = previous weapon
-                vrInput = stdVR_Input_IsPrevWeaponTriggered();
-                break;
             // Left thumbstick click is used for walk/run toggle (handled in stdVR_Input_MapToGame)
+            // Right thumbstick down is crouch toggle (handled via INPUT_FUNC_DUCK above)
             default:
                 break;
         }

@@ -32,11 +32,15 @@ static uint32_t stdVR_menuButtonHoldStart = 0;
 // Walk/run toggle (left thumbstick click)
 static int stdVR_walkMode = 1;  // 0 = run (default), 1 = walk
 
-// Weapon switching via dominant hand thumbstick up/down
+// Weapon switching via dominant hand thumbstick up
 static int stdVR_weaponSwitchState = 0;  // 0 = neutral, 1 = up triggered, -1 = down triggered
 static int stdVR_nextWeaponTriggered = 0;
 static int stdVR_prevWeaponTriggered = 0;
 #define STDVR_WEAPON_SWITCH_THRESHOLD 0.7f
+
+// Crouch toggle via right thumbstick down
+static int stdVR_crouchToggled = 0;
+static int stdVR_crouchToggleState = 0;  // debounce: 0 = neutral, -1 = already toggled this push
 
 // Deadzone for thumbsticks
 #define STDVR_THUMBSTICK_DEADZONE 0.2f
@@ -191,15 +195,17 @@ void stdVR_Input_MapToGame(void)
                 stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
             }
         } else if (weaponSwitchY < -STDVR_WEAPON_SWITCH_THRESHOLD) {
-            // Thumbstick pushed down - previous weapon
-            if (stdVR_weaponSwitchState != -1) {
-                stdVR_prevWeaponTriggered = 1;
+            // Thumbstick pushed down - toggle crouch
+            if (stdVR_crouchToggleState != -1) {
+                stdVR_crouchToggled = !stdVR_crouchToggled;
+                stdVR_crouchToggleState = -1;
                 stdVR_weaponSwitchState = -1;
                 stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
             }
         } else if (weaponSwitchY > -0.3f && weaponSwitchY < 0.3f) {
             // Thumbstick returned to center - reset state
             stdVR_weaponSwitchState = 0;
+            stdVR_crouchToggleState = 0;
         }
     }
 
@@ -481,6 +487,22 @@ int stdVR_Input_IsPrevWeaponTriggered(void)
     }
 #endif
     return stdVR_prevWeaponTriggered;
+}
+
+// Check if crouch toggle is active
+int stdVR_Input_IsCrouchToggled(void)
+{
+    if (!stdVR_bEnabled) {
+        return 0;
+    }
+    return stdVR_crouchToggled;
+}
+
+// Reset crouch toggle (e.g. on level transitions)
+void stdVR_Input_ResetCrouchToggle(void)
+{
+    stdVR_crouchToggled = 0;
+    stdVR_crouchToggleState = 0;
 }
 
 #endif // PLATFORM_VR

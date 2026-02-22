@@ -7,6 +7,7 @@
 #include "World/sithThing.h"
 #include "World/sithSector.h"
 #include "World/jkPlayer.h"
+#include "Platform/VR/stdVR.h"
 #include "jk.h"
 
 void sithPhysics_FindFloor(sithThing *pThing, int a3)
@@ -212,12 +213,45 @@ void sithPhysics_ThingApplyForce(sithThing *pThing, rdVector3 *forceVec)
 
     if ( pThing->moveType == SITH_MT_PHYSICS && pThing->physicsParams.mass > 0.0 )
     {
+        rdVector3 adjustedForce;
+        rdVector3* pForce = forceVec;
+
+// Added: VR weapon kickback direction fix
+// COG scripts compute kickback as ApplyForce(player, -force * GetThingLVec(player)),
+// which uses the player's head direction. In VR, redirect the head-aligned component
+// to use the weapon (controller) direction instead.
+#ifdef PLATFORM_VR
+        if (stdVR_bEnabled && stdVR_motionConfig.bMotionAimEnabled &&
+            pThing == sithPlayer_pLocalPlayerThing)
+        {
+            rdVector3 headFwd;
+            rdVector_Copy3(&headFwd, &pThing->lookOrientation.lvec);
+            rdVector_Normalize3Acc(&headFwd);
+
+            flex_t dot = rdVector_Dot3(forceVec, &headFwd);
+
+            // Only redirect if force has a significant component along head forward
+            if (dot * dot > 0.01f)
+            {
+                rdVector3 weaponFwd;
+                stdVR_GetControllerAimDirection(stdVR_GetDominantHand(), &weaponFwd);
+                rdVector_Normalize3Acc(&weaponFwd);
+
+                // adjustedForce = forceVec - dot*headFwd + dot*weaponFwd
+                rdVector_Copy3(&adjustedForce, forceVec);
+                rdVector_MultAcc3(&adjustedForce, &headFwd, -dot);
+                rdVector_MultAcc3(&adjustedForce, &weaponFwd, dot);
+                pForce = &adjustedForce;
+            }
+        }
+#endif
+
         flex_t invMass = 1.0 / pThing->physicsParams.mass;
 
-        if ( forceVec->z * invMass > 0.5 ) // TODO verify
+        if ( pForce->z * invMass > 0.5 ) // TODO verify
             sithThing_DetachThing(pThing);
 
-        rdVector_MultAcc3(&pThing->physicsParams.vel, forceVec, invMass);
+        rdVector_MultAcc3(&pThing->physicsParams.vel, pForce, invMass);
         pThing->physicsParams.physflags |= SITH_PF_8000;
     }
 }

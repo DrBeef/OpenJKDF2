@@ -45,6 +45,10 @@ int stdVR_Input_IsWalkMode(void);
 int stdVR_Input_IsNextWeaponTriggered(void);
 int stdVR_Input_IsPrevWeaponTriggered(void);
 
+// Crouch toggle via right thumbstick down
+int stdVR_Input_IsCrouchToggled(void);
+void stdVR_Input_ResetCrouchToggle(void);
+
 #ifdef __cplusplus
 }
 #endif
