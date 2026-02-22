@@ -279,16 +279,26 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
                 jkGuiPlayer_menuNewElements[3].wstr = jkGuiPlayer_awTmp_555D28;
                 _memset(jkGuiPlayer_awTmp_555D28, 0, 16 * sizeof(wchar_t));
 #ifdef PLATFORM_VR
-                // VR: Pre-populate with default name since keyboard input is limited
-                jkGuiPlayer_awTmp_555D28[0] = 'V';
-                jkGuiPlayer_awTmp_555D28[1] = 'R';
-                jkGuiPlayer_awTmp_555D28[2] = 'P';
-                jkGuiPlayer_awTmp_555D28[3] = 'l';
-                jkGuiPlayer_awTmp_555D28[4] = 'a';
-                jkGuiPlayer_awTmp_555D28[5] = 'y';
-                jkGuiPlayer_awTmp_555D28[6] = 'e';
-                jkGuiPlayer_awTmp_555D28[7] = 'r';
-                jkGuiPlayer_awTmp_555D28[8] = 0;
+                // VR: Pre-populate with unique default name since keyboard input is limited
+                // Find next available name: VRPlayer, VRPlayer2, VRPlayer3, ...
+                {
+                    char vrNameBuf[32];
+                    char vrCheckPath[128];
+                    int vrSuffix = 1;
+                    while (vrSuffix <= 99) {
+                        if (vrSuffix == 1)
+                            stdString_snprintf(vrNameBuf, 32, "VRPlayer");
+                        else
+                            stdString_snprintf(vrNameBuf, 32, "VRPlayer%d", vrSuffix);
+                        stdString_snprintf(vrCheckPath, 128, "player%c%s%c%s.plr",
+                            LEC_PATH_SEPARATOR_CHR, vrNameBuf, LEC_PATH_SEPARATOR_CHR, vrNameBuf);
+                        if (!util_FileExistsLowLevel(vrCheckPath))
+                            break;
+                        vrSuffix++;
+                    }
+                    stdString_CharToWchar(jkGuiPlayer_awTmp_555D28, vrNameBuf, 255);
+                    jkGuiPlayer_awTmp_555D28[255] = 0;
+                }
 #endif
                 jkGuiPlayer_menuNewElements[3].selectedTextEntry = 16;
                 jkGuiPlayer_menuNewElements[8].unistr = 0;
