@@ -323,22 +323,76 @@ int rdCamera_BuildClipFrustum(rdCamera *camera, rdClipFrustum *outClip, signed i
     outClip->zFar = cameraClip->zFar;
 
 #ifdef PLATFORM_VR
-    // When VR projection is active, use asymmetric VR tangents for frustum
-    // Note: OpenXR tanLeft is typically negative, tanDown is typically negative
-    // So we check that tangents are set (non-zero) rather than > 0
+    // When VR projection is active, convert the portal's screen-space clip rect
+    // to tangent space using the asymmetric VR projection, then clamp to the
+    // full eye frustum. This preserves portal-based sector culling in VR.
+    // Without this, every portal traversal uses the full ~110-degree eye frustum,
+    // causing massive over-rendering when looking sideways at portals.
     if (rdCamera_bUsingVRProjection
         && (rdCamera_vrTanLeft != 0.0f || rdCamera_vrTanRight != 0.0f
         ||  rdCamera_vrTanUp != 0.0f || rdCamera_vrTanDown != 0.0f))
     {
-        // VR frustum uses asymmetric tangents directly
-        // tanLeft is negative (pointing left), so -tanLeft gives positive value for farLeft
-        // tanDown is negative (pointing down), so -tanDown gives positive value for bottom
-        outClip->farLeft = -rdCamera_vrTanLeft;
-        outClip->right = rdCamera_vrTanRight;
-        outClip->farTop = rdCamera_vrTanUp;
-        outClip->bottom = -rdCamera_vrTanDown;
-        outClip->nearLeft = outClip->farLeft;
-        outClip->nearTop = outClip->farTop;
+        // VR frustum tangent bounds
+        // Stored tanLeft/tanDown are positive; negate to get actual signed tangents
+        float tanL = -rdCamera_vrTanLeft;     // left boundary (negative)
+        float tanR = rdCamera_vrTanRight;     // right boundary (positive)
+        float tanT = rdCamera_vrTanUp;        // top boundary (positive)
+        float tanB = -rdCamera_vrTanDown;     // bottom boundary (negative)
+
+        // Get VR render dimensions for pixel-to-tangent conversion
+        float half_w, half_h;
+        if (rdCamera_vrRenderWidth > 0 && rdCamera_vrRenderHeight > 0) {
+            half_w = (float)rdCamera_vrRenderWidth * 0.5f;
+            half_h = (float)rdCamera_vrRenderHeight * 0.5f;
+        } else {
+            half_w = canvas->half_screen_width;
+            half_h = canvas->half_screen_height;
+        }
+
+        float rangeX = tanR - tanL;  // total horizontal tangent range
+        float rangeY = tanT - tanB;  // total vertical tangent range
+
+        if (rangeX <= 0.0f || rangeY <= 0.0f || half_w <= 0.0f || half_h <= 0.0f) {
+            // Degenerate frustum, return full eye bounds
+            outClip->farLeft = tanL;
+            outClip->right = tanR;
+            outClip->farTop = tanT;
+            outClip->bottom = tanB;
+            outClip->nearLeft = tanL;
+            outClip->nearTop = tanT;
+            return 1;
+        }
+
+        // Convert screen-space portal rectangle to tangent space
+        // Inverse of rdCamera_PerspProjectVR:
+        //   tangentX = tanL + px * rangeX / (2 * half_w)
+        //   tangentZ = tanT - py * rangeY / (2 * half_h)
+        float pixToTanX = rangeX / (2.0f * half_w);
+        float pixToTanY = rangeY / (2.0f * half_h);
+
+        // Apply sub-pixel expansion to avoid thin gaps at portal edges
+        float adjMinX = (float)minX - 1.0f;
+        float adjMaxX = (float)maxX + 1.0f;
+        float adjMinY = (float)minY - 1.0f;
+        float adjMaxY = (float)maxY + 1.0f;
+
+        float clipL = tanL + adjMinX * pixToTanX;
+        float clipR = tanL + adjMaxX * pixToTanX;
+        float clipT = tanT - adjMinY * pixToTanY;
+        float clipB = tanT - adjMaxY * pixToTanY;
+
+        // Clamp to full VR eye frustum bounds (intersect portal with eye)
+        if (clipL < tanL) clipL = tanL;
+        if (clipR > tanR) clipR = tanR;
+        if (clipT > tanT) clipT = tanT;
+        if (clipB < tanB) clipB = tanB;
+
+        outClip->farLeft = clipL;
+        outClip->right = clipR;
+        outClip->farTop = clipT;
+        outClip->bottom = clipB;
+        outClip->nearLeft = clipL;
+        outClip->nearTop = clipT;
         return 1;
     }
 #endif
