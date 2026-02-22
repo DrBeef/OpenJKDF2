@@ -32,6 +32,9 @@
 
 // Added
 static int sithControl_followingPlayer = 0;
+#ifdef PLATFORM_VR
+static int sithControl_vrWasMoving = 0;  // Was thumbstick active last frame
+#endif
 static int sithControl_curDebugCam = 0;
 static wchar_t sithControl_debugWStrTmp[256];
 
@@ -1647,11 +1650,16 @@ void sithControl_PlayerMovement(sithThing *player)
                 player->physicsParams.acceleration.x = worldMoveY * thrust * stdVR_config.walkSpeedScale;   // Forward/back
                 player->physicsParams.acceleration.y = -worldMoveX * thrust * stdVR_config.walkSpeedScale;  // Strafe
 
-                // In VR, stop almost immediately when thumbstick is released (no slide)
-                if (moveX == 0.0f && moveY == 0.0f) {
-                    player->physicsParams.vel.x *= 0.5f;
-                    player->physicsParams.vel.y *= 0.5f;
+                // In VR, kill movement velocity on the frame the thumbstick is released
+                // so the player doesn't slide. Only zero on the transition from moving to
+                // stopped — once stopped, leave velocity alone so external forces (weapon
+                // kickback, explosions, etc.) can push the player normally.
+                int vrIsMoving = (moveX != 0.0f || moveY != 0.0f);
+                if (!vrIsMoving && sithControl_vrWasMoving) {
+                    player->physicsParams.vel.x = 0.0f;
+                    player->physicsParams.vel.y = 0.0f;
                 }
+                sithControl_vrWasMoving = vrIsMoving;
             } else
 #endif // PLATFORM_VR
             {

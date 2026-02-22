@@ -218,8 +218,9 @@ void sithPhysics_ThingApplyForce(sithThing *pThing, rdVector3 *forceVec)
 
 // Added: VR weapon kickback direction fix
 // COG scripts compute kickback as ApplyForce(player, -force * GetThingLVec(player)),
-// which uses the player's head direction. In VR, redirect the head-aligned component
-// to use the weapon (controller) direction instead.
+// which uses the player's body forward. In VR, redirect to the weapon (controller)
+// direction so firing to the right pushes you left, etc. Only use the horizontal
+// component of the weapon direction so vertical aim doesn't send force into the ground.
 #ifdef PLATFORM_VR
         if (stdVR_bEnabled && stdVR_motionConfig.bMotionAimEnabled &&
             pThing == sithPlayer_pLocalPlayerThing)
@@ -233,8 +234,15 @@ void sithPhysics_ThingApplyForce(sithThing *pThing, rdVector3 *forceVec)
             // Only redirect if force has a significant component along head forward
             if (dot * dot > 0.01f)
             {
+                // Get weapon direction in WORLD space (same function used for fire direction)
+                rdMatrix34 weaponWorldMat;
+                stdVR_GetControllerWorldMatrix(stdVR_GetDominantHand(), &weaponWorldMat);
                 rdVector3 weaponFwd;
-                stdVR_GetControllerAimDirection(stdVR_GetDominantHand(), &weaponFwd);
+                rdVector_Copy3(&weaponFwd, &weaponWorldMat.lvec);
+
+                // Project weapon direction onto horizontal plane so vertical aim
+                // doesn't send kickback into the ground
+                weaponFwd.z = 0.0f;
                 rdVector_Normalize3Acc(&weaponFwd);
 
                 // adjustedForce = forceVec - dot*headFwd + dot*weaponFwd
