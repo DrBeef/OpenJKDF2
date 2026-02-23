@@ -383,6 +383,14 @@ void sithRender_Draw()
 
     // TODO: Verify this is expensive
 #ifndef TARGET_TWL
+#ifdef PLATFORM_VR
+    // In VR, skip the underwater FOV/aspect wobble effect — it causes the
+    // CPU clip frustum to shrink below the VR eye frustum, producing black
+    // bars at the top and bottom of the view.  The tint (set above) still
+    // provides the blue underwater colouring.
+    extern int stdVR_bEnabled;
+    if (!stdVR_bEnabled)
+#endif
     if ( (sithCamera_currentCamera->sector->flags & 2) != 0 )
     {
         flex_t fov = sithCamera_currentCamera->fov;
