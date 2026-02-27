@@ -486,6 +486,98 @@ int jkGame_Update()
                     // Resolve internal FBO to VR swapchain
                     std3D_DrawSceneFbo();
 
+                    // Added: Render HUD directly into each eye buffer for PCVR.
+                    // Quad layers don't reliably display on all PCVR/SteamVR runtimes,
+                    // so we composite the HUD on top of the 3D scene in the eye buffer.
+                    // The HUD is mapped to a sub-region of the eye buffer matching the
+                    // angular coverage of the original quad layer (2.4m x 1.8m at 2m depth).
+                    {
+                        int eyeFBO = stdVR_GetCurrentEyeFBO(eye);
+                        if (eyeFBO > 0) {
+                            glBindFramebuffer(GL_FRAMEBUFFER, eyeFBO);
+
+                            int rw = stdVR_clientInfo.renderWidth;
+                            int rh = stdVR_clientInfo.renderHeight;
+
+                            // Quad layer parameters (must match EndFrame submission)
+                            float quadHalfW = 1.2f;   // half of 2.4m width
+                            float quadHalfH = 0.9f;   // half of 1.8m height
+                            float quadDist  = 2.0f;   // 2m in front
+                            float quadYOff  = stdVR_WeaponWheel_IsActive() ? -0.6f : -1.0f;
+
+                            // Quad edges in tangent-angle space (view-relative)
+                            float quadTanL = -quadHalfW / quadDist;  // -0.6
+                            float quadTanR =  quadHalfW / quadDist;  // +0.6
+                            float quadTanT = (quadYOff + quadHalfH) / quadDist;
+                            float quadTanB = (quadYOff - quadHalfH) / quadDist;
+
+                            // Eye frustum tangent boundaries
+                            float fl = stdVR_clientInfo.eyes[eye].fovLeft;
+                            float fr = stdVR_clientInfo.eyes[eye].fovRight;
+                            float fu = stdVR_clientInfo.eyes[eye].fovUp;
+                            float fd = stdVR_clientInfo.eyes[eye].fovDown;
+
+                            // IPD stereo offset: shift quad position per-eye for convergence
+                            float ipdX = stdVR_clientInfo.eyes[eye].viewMatrix.scale.x
+                                       - stdVR_clientInfo.hmdPoseMatrix.scale.x;
+                            float ipdTanShift = -ipdX / quadDist;  // opposite direction for convergence
+
+                            // Map quad tangent edges to pixel coordinates in the eye buffer
+                            // pixelX = (tan + fovLeft) / (fovLeft + fovRight) * renderWidth
+                            // pixelY = (fovUp - tan)   / (fovUp + fovDown)   * renderHeight
+                            float hTotal = fl + fr;
+                            float vTotal = fu + fd;
+                            if (hTotal < 0.01f || vTotal < 0.01f) hTotal = vTotal = 2.0f;
+
+                            float dstX = ((quadTanL + ipdTanShift) + fl) / hTotal * (float)rw;
+                            float dstR = ((quadTanR + ipdTanShift) + fl) / hTotal * (float)rw;
+                            float dstY = (fu - (quadTanT)) / vTotal * (float)rh;
+                            float dstB = (fu - (quadTanB)) / vTotal * (float)rh;
+                            float dstW = dstR - dstX;
+                            float dstH = dstB - dstY;
+
+                            // Draw HUD elements (hidden when weapon/force wheel is active)
+                            if (!stdVR_WeaponWheel_IsActive()) {
+                                if (!Main_bMotsCompat) {
+                                    if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                                        jkHud_Draw();
+                                    }
+                                }
+                                else {
+                                    if (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_SCOPEHUD) {
+                                        jkHudScope_Draw();
+                                    }
+                                    if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_80000000) == 0) {
+                                        if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                                            jkHud_Draw();
+                                        }
+                                    }
+                                    else {
+                                        jkHudCameraView_Draw();
+                                    }
+                                }
+                                jkHudInv_Draw();
+                            }
+
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+                            if (stdVR_AlignmentTool_IsActive()) {
+                                stdVR_AlignmentTool_DrawOverlay();
+                            }
+#endif
+
+                            // Draw weapon/force wheel overlay
+                            if (stdVR_WeaponWheel_IsActive()) {
+                                stdVR_WeaponWheel_Draw(rw, rh);
+                            }
+
+                            // Flush UI render list to the sub-rect within the eye buffer
+                            std3D_DrawUIRenderListToCurrentFBO(rw, rh, dstX, dstY, dstW, dstH);
+
+                            // Overlay buffer (crosshair, target rings)
+                            std3D_DrawOverlayToCurrentFBO(rw, rh);
+                        }
+                    }
+
                     // Reset render lists per-eye; otherwise GL_tmpVertices accumulates and
                     // the second eye can exceed STD3D_MAX_VERTICES and render nothing.
                     rdCache_ResetRenderList();
@@ -505,8 +597,8 @@ int jkGame_Update()
         rdCache_ClearFrameCounters();
 
         // Added: Render HUD to dedicated VR HUD buffer (quad layer)
-        // This must happen AFTER eye rendering but BEFORE EndFrame
-        if (stdVR_IsHudEnabled()) {
+        // Only used on MultiView path (Quest) — PCVR renders HUD directly into eye buffers above
+        if (stdVR_IsMultiViewSupported() && stdVR_IsHudEnabled()) {
             int vrHudPrepared = stdVR_PrepareHudBuffer();
             if (vrHudPrepared) {
                 static int vrHudRenderCount = 0;
@@ -555,7 +647,7 @@ int jkGame_Update()
                 // HUD elements are queued via std3D_DrawUIBitmap and need to be flushed
                 int hudWidth, hudHeight;
                 stdVR_GetHudSize(&hudWidth, &hudHeight);
-                std3D_DrawUIRenderListToCurrentFBO(hudWidth, hudHeight);
+                std3D_DrawUIRenderListToCurrentFBO(hudWidth, hudHeight, 0.0f, 0.0f, (float)hudWidth, (float)hudHeight);
 
                 // Also blit the overlay buffer content (crosshair, target rings, overlay map)
                 // These are drawn via rdPrimit2 to Video_pCanvasOverlayMap

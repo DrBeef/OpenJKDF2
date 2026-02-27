@@ -143,8 +143,12 @@ void std3D_DebugSaveInternalFbo(const char* filename);
 void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight);
 // Mirror mode: flip front-face winding for rendering mirrored (left-handed) models
 void std3D_SetFrontFaceCW(int bCW);
-// VR HUD rendering - draws UI render list to currently bound FBO with specified dimensions
-void std3D_DrawUIRenderListToCurrentFBO(int width, int height);
+// VR HUD rendering - draws UI render list to currently bound FBO
+// fboWidth/fboHeight: total FBO dimensions (for orthographic projection)
+// dstX/dstY/dstW/dstH: destination rect within FBO where HUD should appear (pixels)
+// For quad layer path: dstX=0, dstY=0, dstW=fboWidth, dstH=fboHeight (fill entire FBO)
+// For per-eye path: sub-rect matching the quad layer's angular coverage
+void std3D_DrawUIRenderListToCurrentFBO(int fboWidth, int fboHeight, float dstX, float dstY, float dstW, float dstH);
 // MultiView UBO functions for single-pass stereo rendering
 void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices);
 void std3D_BindMultiViewUBOs(unsigned int program);

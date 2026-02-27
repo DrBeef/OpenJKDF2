@@ -33,6 +33,7 @@ extern sithItemDescriptor sithInventory_aDescriptors[];
 extern stdFont* jkHud_pMsgFontSft;
 extern stdVBuffer Video_menuBuffer;
 extern int sithOverlayMap_bShowMap;
+extern sithCamera* sithCamera_currentCamera;
 
 // Time scale variable (read by sithTime_SetDelta)
 float stdVR_weaponWheelTimeScale = 1.0f;
@@ -572,23 +573,24 @@ void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat)
         return;
     }
 
-    // Use the VR per-eye matrix so models track with head movement.
-    rdMatrix34 eyeMat;
-    if (stdVR_GetCurrentEyeViewMatrix(&eyeMat)) {
-        pCameraWorldMat = &eyeMat;
+    // Altered: Use HMD center matrix (no IPD offset) so both eyes compute the
+    // same world position for each model.  Natural stereo parallax then comes
+    // from the per-eye projection matrices applied later by the renderer.
+    // The old per-eye approach gave each eye a different world position, causing
+    // the models to appear stereoscopically divergent on PCVR.
+    rdMatrix34 centerMat;
+    if (sithCamera_currentCamera) {
+        stdVR_CombineCameraWithHMD(&sithCamera_currentCamera->viewMat, &centerMat);
+        pCameraWorldMat = &centerMat;
     }
 
-    // Get VR frustum tangents for inverse projection.
-    // These are set per-eye by sithCamera just before rendering:
-    //   nearLeft = -fovLeft (negative), right = fovRight (positive)
-    //   nearTop  = fovUp (positive),    bottom = -fovDown (negative)
-    if (!rdCamera_pCurCamera || !rdCamera_pCurCamera->pClipFrustum) return;
-    rdClipFrustum* pFrustum = rdCamera_pCurCamera->pClipFrustum;
-
-    float left   = pFrustum->nearLeft;   // negative (left boundary tangent)
-    float right  = pFrustum->right;      // positive (right boundary tangent)
-    float top    = pFrustum->nearTop;    // positive (top boundary tangent)
-    float bottom = pFrustum->bottom;     // negative (bottom boundary tangent)
+    // Use combined frustum tangents (union of both eyes) for inverse projection.
+    // This matches the MultiView path in sithCamera_SetVRViewMultiView and
+    // ensures the HUD-to-world mapping is eye-independent.
+    float left   = -stdVR_clientInfo.eyes[0].fovLeft;   // negative (left boundary)
+    float right  =  stdVR_clientInfo.eyes[1].fovRight;  // positive (right boundary)
+    float top    =  stdVR_clientInfo.eyes[0].fovUp;     // positive (top boundary)
+    float bottom = -stdVR_clientInfo.eyes[0].fovDown;   // negative (bottom boundary)
 
     // Sanity check: frustum must have non-zero extent
     float hExtent = right - left;

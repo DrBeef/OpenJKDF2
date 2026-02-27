@@ -3623,7 +3623,7 @@ void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
 
 // Added: Draw UI render list to the currently bound FBO with specified dimensions
 // This is a VR-specific version that doesn't bind std3D_windowFbo
-void std3D_DrawUIRenderListToCurrentFBO(int width, int height)
+void std3D_DrawUIRenderListToCurrentFBO(int fboWidth, int fboHeight, float dstX, float dstY, float dstW, float dstH)
 {
     extern void VR_Log(const char* fmt, ...);
 
@@ -3636,33 +3636,25 @@ void std3D_DrawUIRenderListToCurrentFBO(int width, int height)
         return;
     }
 
-    // The HUD elements are positioned for desktop resolution (Window_xSize x Window_ySize)
-    // but we're rendering to the VR HUD buffer (width x height).
-    // Scale the vertex positions to fit the target buffer.
+    // The HUD elements are positioned for desktop resolution (Window_xSize x Window_ySize).
+    // Scale and offset them into the destination rect within the FBO.
     float scaleFromX = (float)Window_xSize;
     float scaleFromY = (float)Window_ySize;
-    float scaleToX = (float)width;
-    float scaleToY = (float)height;
-    float scaleX_factor = scaleToX / scaleFromX;
-    float scaleY_factor = scaleToY / scaleFromY;
+    float scaleX_factor = dstW / scaleFromX;
+    float scaleY_factor = dstH / scaleFromY;
 
-    // Scale all vertex positions
+    // Scale vertex positions to destination rect
     D3DVERTEX* verts = GL_tmpUIVertices;
     for (int i = 0; i < GL_tmpUIVerticesAmt; i++) {
-        verts[i].x *= scaleX_factor;
-        verts[i].y *= scaleY_factor;
+        verts[i].x = dstX + verts[i].x * scaleX_factor;
+        verts[i].y = dstY + verts[i].y * scaleY_factor;
     }
 
     static int drawUILogCount = 0;
     if (++drawUILogCount <= 10) {
-        VR_Log("std3D_DrawUIRenderListToCurrentFBO: target=%dx%d, from=%dx%d, scale=(%.3f,%.3f), tris=%d verts=%d\n",
-            width, height, (int)scaleFromX, (int)scaleFromY, scaleX_factor, scaleY_factor,
+        VR_Log("std3D_DrawUIRenderListToCurrentFBO: fbo=%dx%d dst=(%.0f,%.0f,%.0f,%.0f) from=%dx%d tris=%d verts=%d\n",
+            fboWidth, fboHeight, dstX, dstY, dstW, dstH, (int)scaleFromX, (int)scaleFromY,
             GL_tmpUITrisAmt, GL_tmpUIVerticesAmt);
-        // Log scaled vertex positions
-        for (int i = 0; i < GL_tmpUIVerticesAmt && i < 8; i++) {
-            VR_Log("  vert[%d]: pos=(%.1f, %.1f, %.1f) uv=(%.2f, %.2f)\n",
-                i, verts[i].x, verts[i].y, verts[i].z, verts[i].tu, verts[i].tv);
-        }
     }
 
     // NOTE: We do NOT bind a specific FBO here - caller must have bound the target FBO already
@@ -3675,8 +3667,9 @@ void std3D_DrawUIRenderListToCurrentFBO(int width, int height)
     last_ui_tex = 0;
     last_ui_flags = -1;
 
-    float internalWidth = (float)width;
-    float internalHeight = (float)height;
+    // Ortho projection covers the full FBO
+    float internalWidth = (float)fboWidth;
+    float internalHeight = (float)fboHeight;
 
     float maxX = 1.0f;
     float maxY = 1.0f;
@@ -3694,11 +3687,11 @@ void std3D_DrawUIRenderListToCurrentFBO(int width, int height)
         maxX * scaleX, 0, 0, 0,
         0, -maxY * scaleY, 0, 0,
         0, 0, 1, 0,
-        -(width / 2.0f) * scaleX, (height / 2.0f) * scaleY, -1, 1
+        -(internalWidth / 2.0f) * scaleX, (internalHeight / 2.0f) * scaleY, -1, 1
     };
 
     glUniformMatrix4fv(std3D_uiProgram.uniform_mvp, 1, GL_FALSE, d3dmat);
-    glViewport(0, 0, width, height);
+    glViewport(0, 0, fboWidth, fboHeight);
     glUniform2f(std3D_uiProgram.uniform_iResolution, internalWidth, internalHeight);
 
     glUniform1f(std3D_uiProgram.uniform_param1, 1.0f);

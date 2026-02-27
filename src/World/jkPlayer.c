@@ -1130,7 +1130,7 @@ void jkPlayer_DrawPov()
         int bVRHideLeftArm = 0;
         if (stdVR_bEnabled && vrMotionWeapon) {
             sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
-            if (pActorThing->jkFlags & JKFLAG_SABERON)
+            if ((pActorThing->jkFlags & (JKFLAG_SABEREXTEND | JKFLAG_SABERRETRACT | JKFLAG_SABERON)))
                 bVRHideLeftArm = 1;
             if (sithInventory_GetCurWeapon(pActorThing) == SITHBIN_THERMAL_DETONATOR)
                 bVRHideLeftArm = 1;

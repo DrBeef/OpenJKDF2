@@ -79,7 +79,7 @@ extern int openjkdf2_bIsKVM;
 #define AUDIO_QUEUE_DEPTH (128)
 #define AUDIO_MAXIMUM_ALLOWED_SLOP_BYTES (0x800)
 #else
-#define AUDIO_BUFS_DEPTH (0x8000)
+#define AUDIO_BUFS_DEPTH (0x2000)
 #define AUDIO_QUEUE_DEPTH (128)
 #define AUDIO_MAXIMUM_ALLOWED_SLOP_BYTES (0x800)
 #endif
@@ -967,9 +967,10 @@ void jkCutscene_smacker_process_audio()
     }
 }
 
+// Altered: loop to fill buffers eagerly from multiple queue entries for lower latency
 void jkCutscene_smacker_smusher_audio_queue() {
-    if (jkCutscene_audio_queue_read_idx != jkCutscene_audio_queue_write_idx || jkCutscene_audio_len || jkCutscene_currentAudioWritten < jkCutscene_currentAudioBufSize) {
-        
+    while (jkCutscene_audio_queue_read_idx != jkCutscene_audio_queue_write_idx || jkCutscene_audio_len || (jkCutscene_currentAudio && jkCutscene_currentAudioWritten < jkCutscene_currentAudioBufSize)) {
+
         // If we ran through the queued samples, fetch new samples
         if (jkCutscene_audio_len <= 0) {
             if (jkCutscene_audio_buf) {
@@ -984,8 +985,6 @@ void jkCutscene_smacker_smusher_audio_queue() {
                 jkCutscene_audio_queue[jkCutscene_audio_queue_read_idx] = NULL;
                 jkCutscene_audio_queue_lens[jkCutscene_audio_queue_read_idx++] = 0;
                 jkCutscene_audio_queue_read_idx = jkCutscene_audio_queue_read_idx % AUDIO_QUEUE_DEPTH;
-
-                //stdPlatform_Printf("Next samples! %x\n", jkCutscene_audio_buf[0]);
             }
             else {
                 return;
@@ -997,7 +996,6 @@ void jkCutscene_smacker_smusher_audio_queue() {
         }
 
         if (!jkCutscene_currentAudio) {
-            //stdPlatform_Printf("Flip!\n");
             jkCutscene_audioFlip++;
             if (!jkCutscene_audioFlip) {
                 jkCutscene_audioFlip++;
@@ -1010,47 +1008,25 @@ void jkCutscene_smacker_smusher_audio_queue() {
             }
             jkCutscene_currentAudioWritten = 0;
 
-            //stdSound_BufferReset(jkCutscene_currentAudio);
             jkCutscene_currentAudioBuf = (uint8_t*)stdSound_BufferSetData(jkCutscene_currentAudio, AUDIO_BUFS_DEPTH, &jkCutscene_currentAudioBufSize);
             memset(jkCutscene_currentAudioBuf, 0, jkCutscene_currentAudioBufSize);
         }
 
-        
-
-        int32_t len = 0;
-        uint8_t* stream = jkCutscene_currentAudioBuf;
-        uint8_t* stream_iter = stream + jkCutscene_currentAudioWritten;
+        // Copy as much as fits from current queue entry into the buffer
         uint32_t stream_left = jkCutscene_currentAudioBufSize - jkCutscene_currentAudioWritten;
-        
-        int32_t written_len = 0;
-        while (written_len < stream_left) {
-            int32_t to_write = (stream_left > jkCutscene_audio_len ? jkCutscene_audio_len : stream_left);
-            if (to_write > 0 && jkCutscene_audio_pos) {
-                memcpy(stream_iter, jkCutscene_audio_pos, to_write);
-                stream_iter += to_write;
-                stream_left -= to_write;
-            }
-
-            //stdPlatform_Printf("write %x %x %p %x\n", to_write, stream_left, jkCutscene_audio_pos, jkCutscene_audio_len);
-
-            written_len += to_write;
+        int32_t to_write = (stream_left > (uint32_t)jkCutscene_audio_len ? jkCutscene_audio_len : stream_left);
+        if (to_write > 0 && jkCutscene_audio_pos) {
+            memcpy(jkCutscene_currentAudioBuf + jkCutscene_currentAudioWritten, jkCutscene_audio_pos, to_write);
             jkCutscene_audio_pos += to_write;
             jkCutscene_audio_len -= to_write;
             jkCutscene_currentAudioWritten += to_write;
-            //printf("%x %x %x %x\n", to_write, written_len, jkCutscene_audio_len, stream_left);
-
-            // Just in case?
-            if (to_write <= 0) break;
         }
-        //stdPlatform_Printf("Wrote %x, %x of %x\n", written_len, jkCutscene_currentAudioWritten, jkCutscene_currentAudioBufSize);
+        else {
+            return;
+        }
 
         if (jkCutscene_currentAudioWritten >= jkCutscene_currentAudioBufSize) {
-            //stdPlatform_Printf("Play!\n");
-            stdSound_BufferUnlock(jkCutscene_currentAudio, stream, len);
-            /*if (!stdSound_IsPlaying(jkCutscene_audio[0], NULL)) {
-                stdSound_BufferReset(jkCutscene_audio[0]);
-            }*/
-            //stdSound_BufferReset(jkCutscene_audio[0]);
+            stdSound_BufferUnlock(jkCutscene_currentAudio, jkCutscene_currentAudioBuf, 0);
             stdSound_BufferQueueAfterAnother(jkCutscene_audio[0], jkCutscene_currentAudio);
 
             last_audioUs = Linux_TimeUs();
