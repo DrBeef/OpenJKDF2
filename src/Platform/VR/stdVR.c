@@ -10,6 +10,11 @@
 #include "Platform/VR/stdVR_AlignmentTool.h"
 #include "Primitives/rdVector.h"
 #include "Primitives/rdMatrix.h"
+#include "Primitives/rdPrimit3.h"
+#include "Platform/std3D.h"
+#include "Engine/sithCollision.h"
+#include "World/sithThing.h"
+#include "World/sithTemplate.h"
 #include "Main/jkMain.h"
 #include "stdPlatform.h"
 
@@ -28,6 +33,9 @@ stdVR_MotionConfig stdVR_motionConfig;
 
 // Debug mode for shader testing (0=normal, 1=solid, 2=UV, 3=depth, 4=vertex color)
 int std3D_vrDebugMode = 0;
+
+// Weapon crosshair
+static sithThing* stdVR_pCrosshairThing = NULL;
 
 // Frame state tracking
 static int stdVR_bFramePending = 0;  // WaitFrame called but EndFrame not yet
@@ -1330,7 +1338,12 @@ static int stdVR_GetControllerViewMatrixInternal(int hand, rdMatrix34* pViewMat,
     combined.scale.y = pGameCamera->scale.y + hmdOffsetWorld.y + worldOffset.y;
     combined.scale.z = pGameCamera->scale.z + hmdOffsetWorld.z + worldOffset.z;
 
+    // Altered: Apply both fixed height adjustment and player height offset
+    // so the weapon model matches the camera viewpoint height
     combined.scale.z += stdVR_config.fixedHeightAdjustment * worldScale;
+    if (stdVR_config.heightOffset != 0.0f) {
+        combined.scale.z += stdVR_config.heightOffset * worldScale;
+    }
 
     rdMatrix_Copy34(pViewMat, &combined);
 
@@ -1364,6 +1377,64 @@ int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat)
 int stdVR_GetControllerViewMatrixRaw(int hand, rdMatrix34* pViewMat)
 {
     return stdVR_GetControllerViewMatrixInternal(hand, pViewMat, 0);
+}
+
+// ============================================================================
+// In-world weapon crosshair — casts a ray along the weapon aim direction
+// and draws a small dot at the hit point
+// ============================================================================
+void stdVR_DrawWeaponCrosshair(void)
+{
+    extern sithThing* sithPlayer_pLocalPlayerThing;
+
+    if (!stdVR_config.bWeaponCrosshair) return;
+    if (!sithPlayer_pLocalPlayerThing) return;
+    if (!sithPlayer_pLocalPlayerThing->sector) return;
+    if (!stdVR_motionConfig.bMotionAimEnabled) return;
+
+    sithThing* pPlayer = sithPlayer_pLocalPlayerThing;
+
+    // Get fire origin and aim direction
+    int hand = stdVR_GetDominantHand();
+    stdVR_ControllerState* pCtrl = stdVR_GetDominantController();
+    if (!pCtrl || !pCtrl->bTracking) return;
+
+    rdVector3 firePos;
+    stdVR_ControllerToWorld(hand, &firePos, 0);
+
+    rdMatrix34 aimMat;
+    stdVR_GetControllerWorldMatrix(hand, &aimMat);
+
+    // Simple raycast from player sector
+    float maxDist = 50.0f;
+    float hitDist = maxDist;
+    sithCollision_SearchRadiusForThings(pPlayer->sector, pPlayer, &firePos, &aimMat.lvec, maxDist, 0.0f, 0x1);
+    sithCollisionSearchEntry* pHit = sithCollision_NextSearchResult();
+    if (pHit) hitDist = pHit->distance;
+    sithCollision_SearchClose();
+    if (hitDist >= maxDist) return;
+
+    // Hit position
+    rdVector3 hitPos;
+    hitPos.x = firePos.x + aimMat.lvec.x * (hitDist - 0.003f);
+    hitPos.y = firePos.y + aimMat.lvec.y * (hitDist - 0.003f);
+    hitPos.z = firePos.z + aimMat.lvec.z * (hitDist - 0.003f);
+
+    // Find sector for hit position
+    sithSector* hitSector = sithCollision_GetSectorLookAt(pPlayer->sector, &firePos, &hitPos, 0.0f);
+    if (!hitSector) hitSector = pPlayer->sector;
+
+    // Destroy previous crosshair thing
+    if (stdVR_pCrosshairThing) {
+        sithThing_Destroy(stdVR_pCrosshairThing);
+        stdVR_pCrosshairThing = NULL;
+    }
+
+    // Create a twinkle at the hit position
+    sithThing* pTemplate = sithTemplate_GetEntryByName("+twinkle");
+    if (!pTemplate) return;
+
+    stdVR_pCrosshairThing = sithThing_Create(pTemplate, &hitPos, &rdroid_identMatrix34, hitSector, NULL);
 }
 
 // Debug: Draw controller axes at given world position using immediate mode GL
@@ -1459,6 +1530,7 @@ void stdVR_SyncConfigFromJkPlayer(void)
     extern float jkPlayer_vrWorldScale;
     extern float jkPlayer_vrHeightOffset;
     extern int jkPlayer_vrComfortVignette;
+    extern int jkPlayer_vrWeaponCrosshair;
     extern int jkPlayer_vrDominantHand;
     extern int jkPlayer_vrMoveDirection;
     extern float jkPlayer_vrSupersampling;
@@ -1483,6 +1555,7 @@ void stdVR_SyncConfigFromJkPlayer(void)
     // Scale and comfort
     stdVR_config.heightOffset = jkPlayer_vrHeightOffset;
     stdVR_config.bComfortVignette = jkPlayer_vrComfortVignette;
+    stdVR_config.bWeaponCrosshair = jkPlayer_vrWeaponCrosshair;
 
     // Handedness
     stdVR_config.dominantHand = jkPlayer_vrDominantHand;
@@ -1507,6 +1580,7 @@ void stdVR_SyncConfigToJkPlayer(void)
     extern float jkPlayer_vrWorldScale;
     extern float jkPlayer_vrHeightOffset;
     extern int jkPlayer_vrComfortVignette;
+    extern int jkPlayer_vrWeaponCrosshair;
     extern int jkPlayer_vrDominantHand;
     extern int jkPlayer_vrMoveDirection;
     extern float jkPlayer_vrSupersampling;
@@ -1521,6 +1595,7 @@ void stdVR_SyncConfigToJkPlayer(void)
     jkPlayer_vrSmoothTurnSpeed = (int)stdVR_config.smoothTurnSpeed;
     jkPlayer_vrHeightOffset = stdVR_config.heightOffset;
     jkPlayer_vrComfortVignette = stdVR_config.bComfortVignette;
+    jkPlayer_vrWeaponCrosshair = stdVR_config.bWeaponCrosshair;
     jkPlayer_vrDominantHand = stdVR_config.dominantHand;
     jkPlayer_vrSupersampling = stdVR_config.supersampling;
 

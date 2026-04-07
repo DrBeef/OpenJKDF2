@@ -89,7 +89,8 @@ int jkPlayer_vrSnapTurnAngle = 45;       // 0 = smooth turn, 30/45/90 = snap tur
 int jkPlayer_vrSmoothTurnSpeed = 120;   // degrees per second
 int jkPlayer_vrWeaponPitchAdjust = 0.f;
 float jkPlayer_vrHeightOffset = 0.0f;   // Player height offset in meters
-int jkPlayer_vrComfortVignette = 1;     // Enable comfort vignette (0/1)
+int jkPlayer_vrComfortVignette = 5;     // Comfort vignette intensity (0=off, 1-10=intensity)
+int jkPlayer_vrWeaponCrosshair = 0;     // Show in-world weapon crosshair (0/1)
 int jkPlayer_vrDominantHand = 1;        // 0=left, 1=right
 int jkPlayer_vrMoveDirection = 1;       // 0=head, 1=controller
 float jkPlayer_vrSupersampling = 1.0f;  // VR render scale multiplier
@@ -618,6 +619,7 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveInt(ext_fpath, "vrSmoothTurnSpeed", jkPlayer_vrSmoothTurnSpeed);
         stdJSON_SaveInt(ext_fpath, "vrWeaponPitchAdjust", jkPlayer_vrWeaponPitchAdjust);
         stdJSON_SaveInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
+        stdJSON_SaveInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
 #endif
         stdJSON_SaveBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         stdJSON_SaveBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
@@ -819,6 +821,7 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_vrSnapTurnAngle = stdJSON_GetInt(ext_fpath, "vrSnapTurnAngle", jkPlayer_vrSnapTurnAngle);
         jkPlayer_vrWeaponPitchAdjust = stdJSON_GetInt(ext_fpath, "vrWeaponPitchAdjust", jkPlayer_vrWeaponPitchAdjust);
         jkPlayer_vrDominantHand = stdJSON_GetInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
+        jkPlayer_vrWeaponCrosshair = stdJSON_GetInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
 #endif
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);

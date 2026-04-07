@@ -217,6 +217,9 @@ typedef struct stdVR_Config {
     // Handedness
     int dominantHand;               // 0=left, 1=right
 
+    // Crosshair
+    int bWeaponCrosshair;           // Show in-world weapon crosshair dot
+
     // Quality settings
     float supersampling;            // Render scale multiplier
 } stdVR_Config;

@@ -1,3 +1,7 @@
+#ifdef MULTIVIEW_ENABLED
+layout(num_views = 2) in;
+#endif
+
 in vec3 coord3d;
 in vec4 v_color;
 in vec2 v_uv;

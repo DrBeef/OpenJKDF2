@@ -1,4 +1,4 @@
-MSGS 102          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 124          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -95,6 +95,32 @@ MSGS 102          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
    "GUIEXT_50HZ_MIDAIR_PHYS"                    0 "Restore 50Hz midair player physics"
    "GUIEXT_50HZ_MIDAIR_PHYS_HINT"               0 "Step player physics and POV at 50Hz while midair?"
+
+#******************************
+#  VR Options
+#******************************
+   "GUIEXT_VR_OPTIONS"                             0 "VR Options"
+   "GUIEXT_VR_OPTIONS_HINT"                        0 "Configure VR settings"
+   "GUIEXT_VR_DOMINANT_HAND"                       0 "Right-Handed"
+   "GUIEXT_VR_DOMINANT_HAND_HINT"                  0 "Which hand holds the weapon"
+   "GUIEXT_VR_COMFORT_VIGNETTE"                    0 "Comfort Vignette"
+   "GUIEXT_VR_COMFORT_VIGNETTE_HINT"               0 "Darken edges during movement to reduce motion sickness"
+   "GUIEXT_VR_MOVE_DIRECTION"                      0 "Controller-Relative Move"
+   "GUIEXT_VR_MOVE_DIRECTION_HINT"                 0 "Move relative to controller instead of head direction"
+   "GUIEXT_VR_SNAP_TURN"                           0 "Snap Turn"
+   "GUIEXT_VR_SNAP_TURN_HINT"                      0 "Use snap turning instead of smooth turning"
+   "GUIEXT_VR_SNAP_ANGLE"                          0 "Snap Turn Angle"
+   "GUIEXT_VR_SNAP_ANGLE_HINT"                     0 "Angle of each snap turn step"
+   "GUIEXT_VR_SMOOTH_SPEED"                        0 "Smooth Turn Speed"
+   "GUIEXT_VR_SMOOTH_SPEED_HINT"                   0 "Speed of smooth turning in degrees per second"
+   "GUIEXT_VR_HEIGHT_OFFSET"                       0 "Height Offset"
+   "GUIEXT_VR_HEIGHT_OFFSET_HINT"                  0 "Adjust player height in meters"
+   "GUIEXT_VR_SUPERSAMPLING"                       0 "Supersampling:"
+   "GUIEXT_VR_SUPERSAMPLING_HINT"                  0 "Render scale multiplier (1.0 = native resolution)"
+   "GUIEXT_VR_CROUCH_MODE"                         0 "Toggle Crouch"
+   "GUIEXT_VR_CROUCH_MODE_HINT"                    0 "Use toggle crouch instead of hold to crouch"
+   "GUIEXT_VR_WEAPON_CROSSHAIR"                    0 "Weapon Crosshair"
+   "GUIEXT_VR_WEAPON_CROSSHAIR_HINT"               0 "Show a laser dot where the weapon is aimed"
 
 #******************************
 #  Controls

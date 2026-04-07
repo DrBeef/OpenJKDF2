@@ -1,8 +1,63 @@
 #include "jkStrings.h"
 
 #include "General/stdStrTable.h"
+#include "General/stdString.h"
+#include "General/stdHashTable.h"
 #include "Cog/jkCog.h"
 #include "../jk.h"
+
+// Added: Register a string directly into a string table without file loading.
+// This is used as a fallback when .uni files can't be loaded from the filesystem
+// (e.g., on Android where APK assets aren't accessible via fopen).
+#ifdef QOL_IMPROVEMENTS
+static void jkStrings_RegisterString(stdStrTable* pTable, const char* key, const wchar_t* value)
+{
+    if (!pTable || !key || !value) return;
+    if (!pTable->hashtable) return;
+
+    // Check if already registered
+    if (stdHashTable_GetKeyVal(pTable->hashtable, key)) return;
+
+    stdStrMsg* pMsg = (stdStrMsg*)std_pHS->alloc(sizeof(stdStrMsg));
+    if (!pMsg) return;
+    _memset(pMsg, 0, sizeof(stdStrMsg));
+
+    pMsg->key = (char*)std_pHS->alloc(_strlen(key) + 1);
+    if (!pMsg->key) { std_pHS->free(pMsg); return; }
+    _strcpy(pMsg->key, key);
+    pMsg->uniStr = stdString_FastWCopy(value);
+    pMsg->field_8 = 0;
+
+    stdHashTable_SetKeyVal(pTable->hashtable, pMsg->key, pMsg);
+    pTable->numMsgs++;
+}
+
+static void jkStrings_RegisterVRStrings(stdStrTable* pTable)
+{
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_OPTIONS",              L"VR Options");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_OPTIONS_HINT",         L"Configure VR settings");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_DOMINANT_HAND",        L"Right-Handed");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_DOMINANT_HAND_HINT",   L"Which hand holds the weapon");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_COMFORT_VIGNETTE",     L"Comfort Vignette");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_COMFORT_VIGNETTE_HINT",L"Darken edges during movement to reduce motion sickness");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_MOVE_DIRECTION",       L"Controller-Relative Move");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_MOVE_DIRECTION_HINT",  L"Move relative to controller instead of head direction");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SNAP_TURN",            L"Snap Turn");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SNAP_TURN_HINT",       L"Use snap turning instead of smooth turning");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SNAP_ANGLE",           L"Snap Turn Angle");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SNAP_ANGLE_HINT",      L"Angle of each snap turn step");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SMOOTH_SPEED",         L"Smooth Turn Speed");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SMOOTH_SPEED_HINT",    L"Speed of smooth turning in degrees per second");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_HEIGHT_OFFSET",        L"Height Offset");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_HEIGHT_OFFSET_HINT",   L"Adjust player height in meters");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SUPERSAMPLING",        L"Supersampling:");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_SUPERSAMPLING_HINT",   L"Render scale multiplier (1.0 = native resolution)");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_CROUCH_MODE",          L"Toggle Crouch");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_CROUCH_MODE_HINT",     L"Use toggle crouch instead of hold to crouch");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_WEAPON_CROSSHAIR",     L"Weapon Crosshair");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_WEAPON_CROSSHAIR_HINT",L"Show a laser dot where the weapon is aimed");
+}
+#endif
 
 static int jkStrings_bInitialized = 0;
 static stdStrTable jkStrings_table;
@@ -27,6 +82,18 @@ int jkStrings_Startup()
 
     stdStrTable_Load(&jkStrings_tableExtOver, "ui\\openjkdf2_i8n.uni");
     stdStrTable_Load(&jkStrings_tableExt, "ui\\openjkdf2.uni");
+
+    // Altered: If the extension string table failed to load (e.g., Android where APK
+    // assets aren't accessible via fopen), register VR strings directly in code.
+    // This ensures VR option labels always work regardless of filesystem access.
+#ifdef PLATFORM_VR
+    if (!jkStrings_tableExt.hashtable) {
+        // Create a hash table for the extension strings
+        jkStrings_tableExt.hashtable = stdHashTable_New(64);
+        jkStrings_tableExt.magic_sTbl = 0x5454626c; // sTbl
+    }
+    jkStrings_RegisterVRStrings(&jkStrings_tableExt);
+#endif
 #endif // QOL_IMPROVEMENTS
 
     jkStrings_bInitialized = 1;

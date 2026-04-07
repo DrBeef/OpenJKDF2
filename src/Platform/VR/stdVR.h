@@ -123,6 +123,9 @@ float stdVR_GetSwingSpeed(void);
 int stdVR_GetControllerViewMatrix(int hand, rdMatrix34* pViewMat);
 int stdVR_GetControllerViewMatrixRaw(int hand, rdMatrix34* pViewMat);
 
+// In-world weapon crosshair (laser dot at aim point)
+void stdVR_DrawWeaponCrosshair(void);
+
 // Debug visualization
 void stdVR_DrawDebugControllerAxes(int hand);
 

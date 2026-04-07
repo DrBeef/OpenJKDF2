@@ -29,6 +29,90 @@ enum jkGuiDecisionButton_t
     GUI_ADVANCED = 105,
 };
 
+static int slider_images[2] = {JKGUI_BM_SLIDER_BACK, JKGUI_BM_SLIDER_THUMB};
+
+#ifdef PLATFORM_VR
+// ============================================================================
+// VR Options menu (replaces Display settings in VR builds)
+// ============================================================================
+static wchar_t vr_vignette_text[16] = {0};
+static wchar_t vr_snap_angle_text[8] = {0};
+static wchar_t vr_smooth_speed_text[8] = {0};
+static wchar_t vr_height_text[16] = {0};
+static wchar_t vr_ss_text[256] = {0};
+
+void jkGuiDisplay_VRVignetteDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
+void jkGuiDisplay_VRSnapAngleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
+void jkGuiDisplay_VRSmoothSpeedDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
+void jkGuiDisplay_VRHeightDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
+
+// Element indices for VR Options menu
+enum {
+    VR_EL_HINT = 0, VR_EL_TITLE, VR_EL_TAB_GENERAL, VR_EL_TAB_GAMEPLAY,
+    VR_EL_TAB_VROPTIONS, VR_EL_TAB_SOUND, VR_EL_TAB_CONTROLS,
+    VR_EL_OK, VR_EL_CANCEL,
+    VR_EL_DOMINANT_HAND,     // 9
+    VR_EL_WEAPON_CROSSHAIR,  // 10
+    VR_EL_MOVE_DIRECTION,    // 11
+    VR_EL_SNAP_TURN,         // 12
+    VR_EL_VIGNETTE_LABEL,    // 12
+    VR_EL_VIGNETTE_SLIDER,   // 13
+    VR_EL_VIGNETTE_VAL,      // 14
+    VR_EL_SNAP_ANGLE_LABEL,  // 15
+    VR_EL_SNAP_ANGLE_SLIDER, // 15
+    VR_EL_SNAP_ANGLE_VAL,    // 16
+    VR_EL_SMOOTH_SPEED_LABEL,// 17
+    VR_EL_SMOOTH_SPEED_SLIDER,// 18
+    VR_EL_SMOOTH_SPEED_VAL,  // 19
+    VR_EL_HEIGHT_LABEL,      // 20
+    VR_EL_HEIGHT_SLIDER,     // 21
+    VR_EL_HEIGHT_VAL,        // 22
+    VR_EL_SS_LABEL,          // 23
+    VR_EL_SS_TEXTBOX,        // 24
+    VR_EL_END,
+};
+
+static jkGuiElement jkGuiDisplay_aElements[VR_EL_END + 1] = {
+    { ELEMENT_TEXT,        0,            0, NULL,                        3, {0, 410, 640, 20},   1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,        0,            6, "GUI_SETUP",                 3, {20, 20, 600, 40},   1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON,  GUI_GENERAL,  2, "GUI_GENERAL",              3, {20, 80, 120, 40},   1, 0, "GUI_GENERAL_HINT",                0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON,  GUI_GAMEPLAY, 2, "GUI_GAMEPLAY",             3, {140, 80, 120, 40},  1, 0, "GUI_GAMEPLAY_HINT",               0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON,  GUI_DISPLAY,  2, "GUIEXT_VR_OPTIONS",        3, {260, 80, 120, 40},  1, 0, "GUIEXT_VR_OPTIONS_HINT",          0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON,  GUI_SOUND,    2, "GUI_SOUND",                3, {380, 80, 120, 40},  1, 0, "GUI_SOUND_HINT",                  0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON,  GUI_CONTROLS, 2, "GUI_CONTROLS",             3, {500, 80, 120, 40},  1, 0, "GUI_CONTROLS_HINT",               0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON,  1,            2, "GUI_OK",                   3, {440, 430, 200, 40}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON, -1,            2, "GUI_CANCEL",               3, {0, 430, 200, 40},   1, 0, NULL,                              0, 0, 0, {0}, 0},
+
+    // Left column: checkboxes (y=140..230)
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_DOMINANT_HAND",   0, {30, 140, 270, 20},  1, 0, "GUIEXT_VR_DOMINANT_HAND_HINT",    0, 0, 0, {0}, 0},
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_WEAPON_CROSSHAIR",0, {30, 170, 270, 20},  1, 0, "GUIEXT_VR_WEAPON_CROSSHAIR_HINT", 0, 0, 0, {0}, 0},
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_MOVE_DIRECTION",  0, {30, 200, 270, 20},  1, 0, "GUIEXT_VR_MOVE_DIRECTION_HINT",   0, 0, 0, {0}, 0},
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_SNAP_TURN",       0, {30, 230, 270, 20},  1, 0, "GUIEXT_VR_SNAP_TURN_HINT",        0, 0, 0, {0}, 0},
+    // Left column: vignette slider (y=240..300)
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_COMFORT_VIGNETTE",0, {30, 240, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)10,             0, {30, 260, 270, 30},  1, 0, "GUIEXT_VR_COMFORT_VIGNETTE_HINT", jkGuiDisplay_VRVignetteDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_vignette_text,            3, {30, 290, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+    // Right column: sliders (x=330..620)
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SNAP_ANGLE",      0, {330, 130, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)2,              0, {330, 150, 280, 30}, 1, 0, "GUIEXT_VR_SNAP_ANGLE_HINT",       jkGuiDisplay_VRSnapAngleDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_snap_angle_text,          3, {330, 180, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SMOOTH_SPEED",    0, {330, 210, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)280,            0, {330, 230, 280, 30}, 1, 0, "GUIEXT_VR_SMOOTH_SPEED_HINT",     jkGuiDisplay_VRSmoothSpeedDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_smooth_speed_text,        3, {330, 260, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_HEIGHT_OFFSET",   0, {330, 290, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)100,            0, {330, 310, 280, 30}, 1, 0, "GUIEXT_VR_HEIGHT_OFFSET_HINT",    jkGuiDisplay_VRHeightDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_height_text,              3, {330, 340, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SUPERSAMPLING",   2, {330, 370, 150, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBOX,     0,            0, NULL,                        100,{490, 370, 80, 20}, 1, 0, "GUIEXT_VR_SUPERSAMPLING_HINT",    0, 0, 0, {0}, 0},
+
+    { ELEMENT_END,         0,            0, NULL,                        0, {0},                 0, 0, NULL,                              0, 0, 0, {0}, 0},
+};
+
+#else // !PLATFORM_VR — Desktop Display settings
+
 static wchar_t render_level[256] = {0};
 static wchar_t gamma_level[256] = {0};
 static wchar_t hud_level[256] = {0};
@@ -37,12 +121,10 @@ static wchar_t vr_render_level[256] = {0};
 static wchar_t slider_val_text[5] = {0};
 static wchar_t slider_val_text_2[5] = {0};
 
-static int slider_images[2] = {JKGUI_BM_SLIDER_BACK, JKGUI_BM_SLIDER_THUMB};
-
 void jkGuiDisplay_FovDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_FramelimitDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 
-static jkGuiElement jkGuiDisplay_aElements[31] = { 
+static jkGuiElement jkGuiDisplay_aElements[31] = {
     { ELEMENT_TEXT,        0,            0, NULL,                   3, {0, 410, 640, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
     { ELEMENT_TEXT,        0,            6, "GUI_SETUP",            3, {20, 20, 600, 40},   1, 0, NULL,                        0, 0, 0, {0}, 0},
     { ELEMENT_TEXTBUTTON,  GUI_GENERAL,  2, "GUI_GENERAL",          3, {20, 80, 120, 40},   1, 0, "GUI_GENERAL_HINT",          0, 0, 0, {0}, 0},
@@ -92,9 +174,12 @@ static jkGuiElement jkGuiDisplay_aElements[31] = {
     { ELEMENT_END,         0,            0, NULL,                   0, {0},                 0, 0, NULL,                        0, 0, 0, {0}, 0},
 };
 
+#endif // !PLATFORM_VR
+
 static jkGuiMenu jkGuiDisplay_menu = { jkGuiDisplay_aElements, 0, 0xFF, 0xE1, 0x0F, 0, 0, jkGui_stdBitmaps, jkGui_stdFonts, 0, 0, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0, 0 };
 
-static jkGuiElement jkGuiDisplay_aElementsAdvanced[22] = { 
+#ifndef PLATFORM_VR
+static jkGuiElement jkGuiDisplay_aElementsAdvanced[22] = {
     { ELEMENT_TEXT,        0,            0, NULL,                   3, {0, 410, 640, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
     { ELEMENT_TEXT,        0,            6, "GUI_SETUP",            3, {20, 20, 600, 40},   1, 0, NULL,                        0, 0, 0, {0}, 0},
     { ELEMENT_TEXTBUTTON,  GUI_GENERAL,  2, "GUI_GENERAL",          3, {20, 80, 120, 40},   1, 0, "GUI_GENERAL_HINT",          0, 0, 0, {0}, 0},
@@ -116,32 +201,32 @@ static jkGuiElement jkGuiDisplay_aElementsAdvanced[22] = {
 };
 
 static jkGuiMenu jkGuiDisplay_menuAdvanced = { jkGuiDisplay_aElementsAdvanced, 0, 0xFF, 0xE1, 0x0F, 0, 0, jkGui_stdBitmaps, jkGui_stdFonts, 0, 0, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0, 0 };
+#endif // !PLATFORM_VR
 
 
 void jkGuiDisplay_Startup()
 {
-    flex32_t ftmp;
     jkGui_InitMenu(&jkGuiDisplay_menu, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
+
+#ifdef PLATFORM_VR
+    // VR Options: set up supersampling textbox
+    jkGuiDisplay_aElements[VR_EL_SS_TEXTBOX].wstr = vr_ss_text;
+    jk_snwprintf(vr_ss_text, 255, L"%.2f", (flex32_t)jkPlayer_vrSupersampling);
+#else
+    // Desktop Display: set up textboxes and advanced menu
     jkGui_InitMenu(&jkGuiDisplay_menuAdvanced, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
     jkGuiDisplay_aElements[24].wstr = render_level;
-
     jkGuiDisplay_aElements[26].wstr = gamma_level;
-
     jkGuiDisplay_aElements[28].wstr = hud_level;
-
     jkGuiDisplay_aElementsAdvanced[12].wstr = vr_render_level;
 
+    flex32_t ftmp;
     ftmp = jkPlayer_ssaaMultiple;
     jk_snwprintf(render_level, 255, L"%.2f", ftmp);
     ftmp = jkPlayer_gamma;
     jk_snwprintf(gamma_level, 255, L"%.2f", ftmp);
     ftmp = jkPlayer_hudScale;
     jk_snwprintf(hud_level, 255, L"%.2f", ftmp);
-
-#ifdef PLATFORM_VR
-    ftmp = jkPlayer_vrSupersampling;
-    jk_snwprintf(vr_render_level, 255, L"%.2f", ftmp);
-#else
     jk_snwprintf(vr_render_level, 255, L"%.2f", 1.0f);
 #endif
 }
@@ -150,6 +235,55 @@ void jkGuiDisplay_Shutdown()
 {
     ;
 }
+
+#ifdef PLATFORM_VR
+// ============================================================================
+// VR Options slider draw functions
+// ============================================================================
+
+void jkGuiDisplay_VRVignetteDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
+{
+    int val = jkGuiDisplay_aElements[VR_EL_VIGNETTE_SLIDER].selectedTextEntry;
+    if (val == 0)
+        jk_snwprintf(vr_vignette_text, 16, L"Off");
+    else
+        jk_snwprintf(vr_vignette_text, 16, L"%d", val);
+    jkGuiDisplay_aElements[VR_EL_VIGNETTE_VAL].wstr = vr_vignette_text;
+    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
+    jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_VIGNETTE_VAL], menu, 1);
+}
+
+void jkGuiDisplay_VRSnapAngleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
+{
+    static const int angles[] = {30, 45, 90};
+    int idx = jkGuiDisplay_aElements[VR_EL_SNAP_ANGLE_SLIDER].selectedTextEntry;
+    if (idx < 0) idx = 0;
+    if (idx > 2) idx = 2;
+    jk_snwprintf(vr_snap_angle_text, 8, L"%d", angles[idx]);
+    jkGuiDisplay_aElements[VR_EL_SNAP_ANGLE_VAL].wstr = vr_snap_angle_text;
+    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
+    jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_SNAP_ANGLE_VAL], menu, 1);
+}
+
+void jkGuiDisplay_VRSmoothSpeedDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
+{
+    int speed = 20 + jkGuiDisplay_aElements[VR_EL_SMOOTH_SPEED_SLIDER].selectedTextEntry;
+    jk_snwprintf(vr_smooth_speed_text, 8, L"%d", speed);
+    jkGuiDisplay_aElements[VR_EL_SMOOTH_SPEED_VAL].wstr = vr_smooth_speed_text;
+    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
+    jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_SMOOTH_SPEED_VAL], menu, 1);
+}
+
+void jkGuiDisplay_VRHeightDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
+{
+    float height = ((float)jkGuiDisplay_aElements[VR_EL_HEIGHT_SLIDER].selectedTextEntry / 100.0f) - 0.5f;
+    jk_snwprintf(vr_height_text, 16, L"%.2f m", height);
+    jkGuiDisplay_aElements[VR_EL_HEIGHT_VAL].wstr = vr_height_text;
+    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
+    jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_HEIGHT_VAL], menu, 1);
+}
+
+#else // !PLATFORM_VR
 
 void jkGuiDisplay_FovDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
 {
@@ -179,6 +313,9 @@ void jkGuiDisplay_FramelimitDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuf
     jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[19], menu, 1);
 }
 
+#endif // !PLATFORM_VR (desktop draw functions)
+
+#ifndef PLATFORM_VR
 int jkGuiDisplay_ShowAdvanced()
 {
     int v0; // esi
@@ -237,10 +374,104 @@ int jkGuiDisplay_ShowAdvanced()
     return v0;
 }
 
+#endif // !PLATFORM_VR (ShowAdvanced)
+
 int jkGuiDisplay_Show()
 {
+#ifdef PLATFORM_VR
+    // ========================================================================
+    // VR Options menu
+    // ========================================================================
+    int v0;
+
+    jkGui_sub_412E20(&jkGuiDisplay_menu, 100, 104, 102);
+    jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiDisplay_menu, &jkGuiDisplay_aElements[VR_EL_OK]);
+    jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiDisplay_menu, &jkGuiDisplay_aElements[VR_EL_CANCEL]);
+    jkGuiSetup_sub_412EF0(&jkGuiDisplay_menu, 0);
+
+    // Load current VR settings into elements
+    jkGuiDisplay_aElements[VR_EL_DOMINANT_HAND].selectedTextEntry     = jkPlayer_vrDominantHand;
+    jkGuiDisplay_aElements[VR_EL_WEAPON_CROSSHAIR].selectedTextEntry = jkPlayer_vrWeaponCrosshair;
+    jkGuiDisplay_aElements[VR_EL_MOVE_DIRECTION].selectedTextEntry    = jkPlayer_vrMoveDirection;
+    jkGuiDisplay_aElements[VR_EL_SNAP_TURN].selectedTextEntry         = (jkPlayer_vrSnapTurnAngle > 0) ? 1 : 0;
+
+    // Vignette slider: 0=off, 1-10=intensity
+    {
+        int vigVal = jkPlayer_vrComfortVignette;
+        if (vigVal < 0) vigVal = 0;
+        if (vigVal > 10) vigVal = 10;
+        jkGuiDisplay_aElements[VR_EL_VIGNETTE_SLIDER].selectedTextEntry = vigVal;
+    }
+
+    // Snap angle: map 30->0, 45->1, 90->2
+    {
+        int snapIdx = 0;
+        if (jkPlayer_vrSnapTurnAngle == 45) snapIdx = 1;
+        else if (jkPlayer_vrSnapTurnAngle >= 90) snapIdx = 2;
+        jkGuiDisplay_aElements[VR_EL_SNAP_ANGLE_SLIDER].selectedTextEntry = snapIdx;
+    }
+
+    // Smooth speed: offset from 20 minimum
+    jkGuiDisplay_aElements[VR_EL_SMOOTH_SPEED_SLIDER].selectedTextEntry = jkPlayer_vrSmoothTurnSpeed - 20;
+    if (jkGuiDisplay_aElements[VR_EL_SMOOTH_SPEED_SLIDER].selectedTextEntry < 0)
+        jkGuiDisplay_aElements[VR_EL_SMOOTH_SPEED_SLIDER].selectedTextEntry = 0;
+
+    // Height: map float -0.5..+0.5 to slider 0..100
+    jkGuiDisplay_aElements[VR_EL_HEIGHT_SLIDER].selectedTextEntry = (int)((jkPlayer_vrHeightOffset + 0.5f) * 100.0f);
+
+    // Supersampling textbox
+    jk_snwprintf(vr_ss_text, 255, L"%.2f", (flex32_t)jkPlayer_vrSupersampling);
+
+    v0 = jkGuiRend_DisplayAndReturnClicked(&jkGuiDisplay_menu);
+    if (v0 != -1)
+    {
+        // Write values back to jkPlayer globals
+        jkPlayer_vrDominantHand    = jkGuiDisplay_aElements[VR_EL_DOMINANT_HAND].selectedTextEntry;
+        jkPlayer_vrWeaponCrosshair = jkGuiDisplay_aElements[VR_EL_WEAPON_CROSSHAIR].selectedTextEntry;
+        jkPlayer_vrMoveDirection   = jkGuiDisplay_aElements[VR_EL_MOVE_DIRECTION].selectedTextEntry;
+        jkPlayer_vrComfortVignette = jkGuiDisplay_aElements[VR_EL_VIGNETTE_SLIDER].selectedTextEntry;
+
+        // Snap turn mode
+        if (jkGuiDisplay_aElements[VR_EL_SNAP_TURN].selectedTextEntry) {
+            static const int angles[] = {30, 45, 90};
+            int idx = jkGuiDisplay_aElements[VR_EL_SNAP_ANGLE_SLIDER].selectedTextEntry;
+            if (idx < 0) idx = 0;
+            if (idx > 2) idx = 2;
+            jkPlayer_vrSnapTurnAngle = angles[idx];
+        } else {
+            jkPlayer_vrSnapTurnAngle = 0;
+        }
+
+        // Smooth turn speed (20-300 deg/sec)
+        jkPlayer_vrSmoothTurnSpeed = 20 + jkGuiDisplay_aElements[VR_EL_SMOOTH_SPEED_SLIDER].selectedTextEntry;
+
+        // Height offset (-0.5 to +0.5 meters)
+        jkPlayer_vrHeightOffset = ((float)jkGuiDisplay_aElements[VR_EL_HEIGHT_SLIDER].selectedTextEntry / 100.0f) - 0.5f;
+
+        // Supersampling (parse textbox)
+        {
+            char tmp[256];
+            flex32_t ftmp;
+            stdString_WcharToChar(tmp, vr_ss_text, 255);
+            if (_sscanf(tmp, "%f", &ftmp) != 1 || ftmp <= 0.0f) {
+                jkPlayer_vrSupersampling = 1.0f;
+            } else {
+                jkPlayer_vrSupersampling = ftmp;
+            }
+        }
+
+        // Apply and save
+        stdVR_SyncConfigFromJkPlayer();
+        jkPlayer_WriteConf(jkPlayer_playerShortName);
+    }
+    return v0;
+
+#else
+    // ========================================================================
+    // Desktop Display settings
+    // ========================================================================
     flex32_t ftmp;
-    int v0; // esi
+    int v0;
 
     jkGui_sub_412E20(&jkGuiDisplay_menu, 102, 104, 102);
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiDisplay_menu, &jkGuiDisplay_aElements[7]);
@@ -322,6 +553,7 @@ continue_menu:
         std3D_UpdateSettings();
     }
     return v0;
+#endif // PLATFORM_VR
 }
 
 void jkGuiDisplay_sub_4149C0(){}

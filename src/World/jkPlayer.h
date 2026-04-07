@@ -184,7 +184,8 @@ extern int jkPlayer_vrSnapTurnAngle;     // Snap turn angle: 0, 30, 45, 90 degre
 extern int jkPlayer_vrSmoothTurnSpeed;   // Smooth turn speed in deg/sec
 extern int jkPlayer_vrWeaponPitchAdjust;   //
 extern float jkPlayer_vrHeightOffset;    // Player height offset in meters
-extern int jkPlayer_vrComfortVignette;   // Enable comfort vignette (0/1)
+extern int jkPlayer_vrComfortVignette;   // Comfort vignette intensity (0=off, 1-10)
+extern int jkPlayer_vrWeaponCrosshair;   // Show in-world weapon crosshair (0/1)
 extern int jkPlayer_vrDominantHand;      // 0=left, 1=right
 extern int jkPlayer_vrMoveDirection;     // 0=head, 1=controller
 extern float jkPlayer_vrSupersampling;   // VR render scale multiplier

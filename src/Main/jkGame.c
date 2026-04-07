@@ -40,6 +40,9 @@
 #include "SDL2_helper.h"
 extern sithThing* sithPlayer_pLocalPlayerThing;
 extern flex_t sithTime_deltaSeconds;
+
+// Comfort vignette state — smooth intensity ramp
+static float jkGame_vignetteIntensity = 0.0f;
 #endif
 
 int jkGame_Startup()
@@ -403,6 +406,10 @@ int jkGame_Update()
                     // Advance render tick
                     sithMain_sub_4C4D80();
 
+                    // Added: Update weapon crosshair position (creates/moves a sithThing)
+                    // Must be before sithRender_Draw so the thing is visible this frame
+                    stdVR_DrawWeaponCrosshair();
+
                     // Render scene once - GPU renders to both eye layers
                     sithRender_Draw();
                     jkPlayer_DrawPov();
@@ -410,12 +417,46 @@ int jkGame_Update()
                     // Added: Render 3D map overlay (uses custom shader for VR stereo)
                     stdVR_Map3D_Render(-1);  // -1 = MultiView mode, shader uses gl_ViewID_OVR
 
-                    // Flush render cache
+                    // Flush render cache (includes crosshair sprite)
                     rdCache_Flush();
 					sithCamera_RestoreVRView();
 
                     // Resolve to VR swapchain (both eyes)
+                    // (In MultiView mode this is a no-op — scene already rendered to swapchain)
                     std3D_DrawSceneFbo();
+
+                    // Added: Comfort vignette for MultiView path
+                    // In MultiView, the scene renders directly to the swapchain FBO (not
+                    // the internal FBO), so we draw the vignette to the swapchain after
+                    // the scene.
+                    // bComfortVignette: 0=off, 1-10=intensity level
+                    if (stdVR_config.bComfortVignette > 0 && !stdVR_clientInfo.bUseScreenLayer) {
+                        float dt = sithTime_deltaSeconds;
+                        if (dt <= 0.0f || dt > 0.1f) dt = 0.014f;
+
+                        float vignetteScale = (float)stdVR_config.bComfortVignette / 10.0f;
+                        float targetIntensity = 0.0f;
+                        if (sithPlayer_pLocalPlayerThing) {
+                            rdVector3* pVel = &sithPlayer_pLocalPlayerThing->physicsParams.vel;
+                            float speedSq = pVel->x * pVel->x + pVel->y * pVel->y;
+                            if (speedSq > 0.001f) {
+                                targetIntensity = vignetteScale;
+                            }
+                        }
+                        if (targetIntensity > jkGame_vignetteIntensity) {
+                            jkGame_vignetteIntensity += 10.0f * dt;
+                            if (jkGame_vignetteIntensity > targetIntensity)
+                                jkGame_vignetteIntensity = targetIntensity;
+                        } else {
+                            jkGame_vignetteIntensity -= 4.0f * dt;
+                            if (jkGame_vignetteIntensity < 0.0f)
+                                jkGame_vignetteIntensity = 0.0f;
+                        }
+                        if (jkGame_vignetteIntensity > 0.01f) {
+                            glViewport(0, 0, stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
+                            std3D_DrawVignetteToCurrentFBO(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight, jkGame_vignetteIntensity);
+                        }
+                    }
 
                     // Reset render lists
                     rdCache_ResetRenderList();
@@ -444,6 +485,9 @@ int jkGame_Update()
                     // The render system uses sithRender_lastRenderTick to mark sectors as "already rendered"
                     // Without this, the second eye would skip all sectors because they were rendered for the first eye
                     sithMain_sub_4C4D80();
+
+                    // Added: Update weapon crosshair position before scene render
+                    stdVR_DrawWeaponCrosshair();
 
                     // Render scene for this eye
                     sithRender_Draw();
@@ -485,6 +529,43 @@ int jkGame_Update()
 
                     // Resolve internal FBO to VR swapchain
                     std3D_DrawSceneFbo();
+
+                    // Added: Comfort vignette — darkens screen edges during movement
+                    if (stdVR_config.bComfortVignette > 0 && !stdVR_clientInfo.bUseScreenLayer) {
+                        // Only update vignette state on the first eye to avoid double-stepping
+                        if (eye == 0) {
+                            float dt = sithTime_deltaSeconds;
+                            if (dt <= 0.0f || dt > 0.1f) dt = 0.014f;
+
+                            float vignetteScale = (float)stdVR_config.bComfortVignette / 10.0f;
+                            float targetIntensity = 0.0f;
+                            if (sithPlayer_pLocalPlayerThing) {
+                                rdVector3* pVel = &sithPlayer_pLocalPlayerThing->physicsParams.vel;
+                                float speedSq = pVel->x * pVel->x + pVel->y * pVel->y;
+                                if (speedSq > 0.001f) {
+                                    targetIntensity = vignetteScale;
+                                }
+                            }
+                            if (targetIntensity > jkGame_vignetteIntensity) {
+                                jkGame_vignetteIntensity += 10.0f * dt;
+                                if (jkGame_vignetteIntensity > targetIntensity)
+                                    jkGame_vignetteIntensity = targetIntensity;
+                            } else {
+                                jkGame_vignetteIntensity -= 4.0f * dt;
+                                if (jkGame_vignetteIntensity < 0.0f)
+                                    jkGame_vignetteIntensity = 0.0f;
+                            }
+                        }
+
+                        // Draw vignette on every eye
+                        if (jkGame_vignetteIntensity > 0.01f) {
+                            int eyeFBO = stdVR_GetCurrentEyeFBO(eye);
+                            if (eyeFBO > 0) {
+                                glBindFramebuffer(GL_FRAMEBUFFER, eyeFBO);
+                                std3D_DrawVignetteToCurrentFBO(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight, jkGame_vignetteIntensity);
+                            }
+                        }
+                    }
 
                     // Added: Render HUD directly into each eye buffer for PCVR.
                     // Quad layers don't reliably display on all PCVR/SteamVR runtimes,

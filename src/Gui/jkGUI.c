@@ -150,6 +150,11 @@ void jkGui_InitMenu(jkGuiMenu *menu, stdBitmap *bgBitmap)
                 iter->wHintText = stdString_FastWCopy(text);
                 iter->wHintTextAlloced = iter->wHintText;
             }
+            // Altered: Fallback to prevent narrow-as-wide string misinterpretation
+            else {
+                iter->wHintText = stdString_CstrCopy(iter->hintText);
+                iter->wHintTextAlloced = iter->wHintText;
+            }
         }
 
         if ( !iter->type || iter->type == ELEMENT_TEXT || iter->type == ELEMENT_CHECKBOX )
@@ -159,6 +164,14 @@ void jkGui_InitMenu(jkGuiMenu *menu, stdBitmap *bgBitmap)
                 wchar_t* text = jkStrings_GetUniString(iter->str);
                 if ( text ) {
                     iter->wstr = stdString_FastWCopy(text);
+                    iter->strAlloced = (const char*)iter->wstr;
+                }
+                // Altered: If lookup fails, convert the narrow key name to a wide string.
+                // Without this, wstr (same union as str) points to a const char* which is
+                // misinterpreted as wchar_t* on platforms where wchar_t > 1 byte, producing
+                // garbage rendering (squares) that reads far past the string boundary.
+                else {
+                    iter->wstr = stdString_CstrCopy(iter->str);
                     iter->strAlloced = (const char*)iter->wstr;
                 }
             }
