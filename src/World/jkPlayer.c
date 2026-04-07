@@ -1133,11 +1133,14 @@ void jkPlayer_DrawPov()
         int bVRHideLeftArm = 0;
         if (stdVR_bEnabled && vrMotionWeapon) {
             sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
-            if ((pActorThing->jkFlags & (JKFLAG_SABEREXTEND | JKFLAG_SABERRETRACT | JKFLAG_SABERON)))
+            // Altered: Check weapon ID, not saber jkFlags — the flags persist after
+            // switching away from the saber, causing arm amputation on the wrong weapon model.
+            int curWeap = sithInventory_GetCurWeapon(pActorThing);
+            if (curWeap == SITHBIN_LIGHTSABER || curWeap == SITHBIN_MOTS_LIGHTSABER)
                 bVRHideLeftArm = 1;
-            if (sithInventory_GetCurWeapon(pActorThing) == SITHBIN_THERMAL_DETONATOR)
+            if (curWeap == SITHBIN_THERMAL_DETONATOR)
                 bVRHideLeftArm = 1;
-            if (sithInventory_GetCurWeapon(pActorThing) == SITHBIN_FISTS)
+            if (curWeap == SITHBIN_FISTS)
                 bVRHideLeftArm = 1;
         }
         if (bVRHideLeftArm
