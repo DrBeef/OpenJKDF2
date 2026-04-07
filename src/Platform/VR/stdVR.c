@@ -1392,6 +1392,21 @@ void stdVR_DrawWeaponCrosshair(void)
     if (!sithPlayer_pLocalPlayerThing->sector) return;
     if (!stdVR_motionConfig.bMotionAimEnabled) return;
 
+    // Don't show crosshair for fists or lightsaber
+    extern sithPlayerInfo* sithPlayer_pLocalPlayer;
+    if (sithPlayer_pLocalPlayer) {
+        int weap = sithPlayer_pLocalPlayer->curWeapon;
+        if (weap == SITHBIN_FISTS || weap == SITHBIN_LIGHTSABER
+            || weap == SITHBIN_MOTS_FISTS || weap == SITHBIN_MOTS_LIGHTSABER) {
+            // Destroy any existing crosshair thing
+            if (stdVR_pCrosshairThing) {
+                sithThing_Destroy(stdVR_pCrosshairThing);
+                stdVR_pCrosshairThing = NULL;
+            }
+            return;
+        }
+    }
+
     sithThing* pPlayer = sithPlayer_pLocalPlayerThing;
 
     // Get fire origin and aim direction
@@ -1405,13 +1420,47 @@ void stdVR_DrawWeaponCrosshair(void)
     rdMatrix34 aimMat;
     stdVR_GetControllerWorldMatrix(hand, &aimMat);
 
-    // Simple raycast from player sector
+    // Multi-sector raycast — step through adjoins (sector portals) to hit solid walls
     float maxDist = 50.0f;
     float hitDist = maxDist;
-    sithCollision_SearchRadiusForThings(pPlayer->sector, pPlayer, &firePos, &aimMat.lvec, maxDist, 0.0f, 0x1);
-    sithCollisionSearchEntry* pHit = sithCollision_NextSearchResult();
-    if (pHit) hitDist = pHit->distance;
-    sithCollision_SearchClose();
+    rdVector3 rayOrigin;
+    rdVector_Copy3(&rayOrigin, &firePos);
+    sithSector* raySector = pPlayer->sector;
+    float accumulated = 0.0f;
+
+    for (int i = 0; i < 20 && raySector; i++) {
+        float remaining = maxDist - accumulated;
+        if (remaining <= 0.001f) break;
+
+        sithCollision_SearchRadiusForThings(raySector, pPlayer, &rayOrigin, &aimMat.lvec, remaining, 0.0f, 0x1);
+        sithCollisionSearchEntry* pHit = sithCollision_NextSearchResult();
+
+        if (!pHit) {
+            // No hit in this sector — ray exits into void
+            sithCollision_SearchClose();
+            break;
+        }
+
+        // Check if we hit an adjoin (sector portal)
+        if (pHit->surface && pHit->surface->adjoin) {
+            float d = pHit->distance;
+            sithSector* nextSector = pHit->surface->adjoin->sector;
+            sithCollision_SearchClose();
+
+            // Advance ray origin past the portal
+            accumulated += d + 0.001f;
+            rayOrigin.x = firePos.x + aimMat.lvec.x * accumulated;
+            rayOrigin.y = firePos.y + aimMat.lvec.y * accumulated;
+            rayOrigin.z = firePos.z + aimMat.lvec.z * accumulated;
+            raySector = nextSector;
+            continue;
+        }
+
+        // Solid hit
+        hitDist = accumulated + pHit->distance;
+        sithCollision_SearchClose();
+        break;
+    }
     if (hitDist >= maxDist) return;
 
     // Hit position
@@ -1424,17 +1473,28 @@ void stdVR_DrawWeaponCrosshair(void)
     sithSector* hitSector = sithCollision_GetSectorLookAt(pPlayer->sector, &firePos, &hitPos, 0.0f);
     if (!hitSector) hitSector = pPlayer->sector;
 
-    // Destroy previous crosshair thing
-    if (stdVR_pCrosshairThing) {
-        sithThing_Destroy(stdVR_pCrosshairThing);
-        stdVR_pCrosshairThing = NULL;
+    // Get the bolt template (once) — we only need its rdThing/model, not a full sithThing
+    static sithThing* sBoltTemplate = NULL;
+    static int sBoltSearched = 0;
+    if (!sBoltSearched) {
+        sBoltSearched = 1;
+        sBoltTemplate = sithTemplate_GetEntryByName("+bryarbolt");
+        if (!sBoltTemplate) sBoltTemplate = sithTemplate_GetEntryByName("+stlaser");
     }
+    if (!sBoltTemplate) return;
 
-    // Create a twinkle at the hit position
-    sithThing* pTemplate = sithTemplate_GetEntryByName("+twinkle");
-    if (!pTemplate) return;
+    // Orient along aim direction and scale down
+    rdMatrix34 xhairMat;
+    rdMatrix_Copy34(&xhairMat, &aimMat);
+    float modelScale = 0.6f;
+    xhairMat.rvec.x *= modelScale; xhairMat.rvec.y *= modelScale; xhairMat.rvec.z *= modelScale;
+    xhairMat.uvec.x *= modelScale; xhairMat.uvec.y *= modelScale; xhairMat.uvec.z *= modelScale;
+    xhairMat.lvec.x *= modelScale; xhairMat.lvec.y *= modelScale; xhairMat.lvec.z *= modelScale;
+    rdVector_Copy3(&xhairMat.scale, &hitPos);
 
-    stdVR_pCrosshairThing = sithThing_Create(pTemplate, &hitPos, &rdroid_identMatrix34, hitSector, NULL);
+    // Draw the model directly via rdThing_Draw — bypasses sithThing system entirely,
+    // so no dynamic lighting, no physics, no collision, no weapon processing.
+    rdThing_Draw(&sBoltTemplate->rdthing, &xhairMat);
 }
 
 // Debug: Draw controller axes at given world position using immediate mode GL
