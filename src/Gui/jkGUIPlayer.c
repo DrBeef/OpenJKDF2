@@ -279,25 +279,43 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
                 jkGuiPlayer_menuNewElements[3].wstr = jkGuiPlayer_awTmp_555D28;
                 _memset(jkGuiPlayer_awTmp_555D28, 0, 16 * sizeof(wchar_t));
 #ifdef PLATFORM_VR
-                // VR: Pre-populate with unique default name since keyboard input is limited
-                // Find next available name: VRPlayer, VRPlayer2, VRPlayer3, ...
+                // VR: Pre-populate the textbox with the first unused "VRPlayerN" name.
+                // The stack and destination buffers are fully zeroed first to avoid
+                // any chance of uninitialised bytes leaking into filenames (an earlier
+                // version of this code produced dirs like "VRPlayer$\xd7qQs" on Quest).
                 {
                     char vrNameBuf[32];
                     char vrCheckPath[128];
-                    int vrSuffix = 1;
+                    int  vrSuffix = 1;
+                    int  vrLen;
+                    _memset(vrNameBuf, 0, sizeof(vrNameBuf));
+                    _memset(vrCheckPath, 0, sizeof(vrCheckPath));
+                    _memset(jkGuiPlayer_awTmp_555D28, 0, sizeof(jkGuiPlayer_awTmp_555D28));
+
                     while (vrSuffix <= 99) {
                         if (vrSuffix == 1)
-                            stdString_snprintf(vrNameBuf, 32, "VRPlayer");
+                            stdString_snprintf(vrNameBuf, sizeof(vrNameBuf), "VRPlayer");
                         else
-                            stdString_snprintf(vrNameBuf, 32, "VRPlayer%d", vrSuffix);
-                        stdString_snprintf(vrCheckPath, 128, "player%c%s%c%s.plr",
-                            LEC_PATH_SEPARATOR_CHR, vrNameBuf, LEC_PATH_SEPARATOR_CHR, vrNameBuf);
+                            stdString_snprintf(vrNameBuf, sizeof(vrNameBuf), "VRPlayer%d", vrSuffix);
+                        vrNameBuf[sizeof(vrNameBuf) - 1] = 0; // defensive null terminator
+
+                        stdString_snprintf(vrCheckPath, sizeof(vrCheckPath),
+                                           "player%c%s%c%s.plr",
+                                           LEC_PATH_SEPARATOR_CHR, vrNameBuf,
+                                           LEC_PATH_SEPARATOR_CHR, vrNameBuf);
+                        vrCheckPath[sizeof(vrCheckPath) - 1] = 0;
+
                         if (!util_FileExistsLowLevel(vrCheckPath))
                             break;
                         vrSuffix++;
                     }
-                    stdString_CharToWchar(jkGuiPlayer_awTmp_555D28, vrNameBuf, 255);
-                    jkGuiPlayer_awTmp_555D28[255] = 0;
+
+                    // Copy only strlen bytes and null-terminate explicitly. Using a
+                    // count of 255 previously risked running past whatever terminator
+                    // stdString_CharToWchar stopped at on a 4-byte-wchar_t platform.
+                    vrLen = (int)_strlen(vrNameBuf);
+                    stdString_CharToWchar(jkGuiPlayer_awTmp_555D28, vrNameBuf, vrLen);
+                    jkGuiPlayer_awTmp_555D28[vrLen] = 0;
                 }
 #endif
                 jkGuiPlayer_menuNewElements[3].selectedTextEntry = 16;
@@ -314,8 +332,11 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
                 {
                     stdString_WcharToChar(v20, a2, 127);
                     v20[127] = 0;
+                    // Altered: removed redundant snprintf that clobbered the result
+                    // of stdFnames_MakePath. Both produced the same "player/<name>"
+                    // path, but keeping two separate constructions risked divergence
+                    // on platforms with different separators.
                     stdFnames_MakePath(PathName, 128, "player", v20);
-                    stdString_snprintf(PathName, 128, "player%c%s", LEC_PATH_SEPARATOR_CHR, v20);
                     stdFileUtil_Deltree(PathName);
                 }
                 v14 = 1;
@@ -327,8 +348,11 @@ void jkGuiPlayer_ShowNewPlayer(int a1)
         {
             v6 = 0;
             jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiPlayer_menuNew, &jkGuiPlayer_menuNewElements[10]);
-            if ( !v15 )
-                jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiPlayer_menuNew, &jkGuiPlayer_menuNewElements[9]);
+            // Altered: always allow escape/cancel. Previously this was skipped when
+            // the dialog was auto-opened from an empty list (v15 == 1), which left
+            // users stuck unable to cancel on platforms without a mouse — exactly
+            // the scenario that caused the VRPlayer profile cascade.
+            jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiPlayer_menuNew, &jkGuiPlayer_menuNewElements[9]);
             v7 = jkGuiRend_DisplayAndReturnClicked(&jkGuiPlayer_menuNew);
             if ( v7 == 1 )
             {
