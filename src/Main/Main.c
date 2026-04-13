@@ -55,6 +55,7 @@
 #include "Main/jkHudInv.h"
 #include "Main/jkCutscene.h"
 #include "Main/jkCredits.h"
+#include "Gui/jkGuiPatrons.h" // Added: patron credits on exit
 #include "Main/jkControl.h"
 #include "Main/jkSmack.h"
 #include "Main/smack.h"
@@ -507,6 +508,9 @@ int Main_Startup(const char *cmdline)
         jkDSS_Startup();
         jkCutscene_Startup("ui\\cutStrings.uni");
         jkCredits_Startup("ui\\credits.uni");
+#ifdef QOL_IMPROVEMENTS
+        jkGuiPatrons_Startup("patrons.txt"); // Added: patron credits on exit
+#endif
         jkSmack_Startup();
 
         std3D_Startup(); // Added
@@ -593,6 +597,9 @@ void Main_Shutdown()
     jkCog_Shutdown();
     sithMain_Free();
     jkCredits_Shutdown();
+#ifdef QOL_IMPROVEMENTS
+    jkGuiPatrons_Shutdown(); // Added: patron credits on exit
+#endif
     jkCutscene_Shutdown();
     jkDSS_Shutdown();
     jkControl_Shutdown(); // Added

@@ -1,0 +1,67 @@
+# OpenJKDF2 patrons list.
+# Shown briefly on exit. Edit this file to update names between releases.
+#
+# Format:
+#   [title]    - optional single-line title override
+#   [gold]     - one Gold Patron name per line (large font)
+#   [other]    - thank-you footer lines (small font)
+#
+# Lines starting with '#' and blank lines are ignored.
+
+[title]
+Thank You To Our Gold Patrons
+
+[gold]
+David Price
+Igor Diachkov
+Tna Mas
+Jwill2real2raw
+NilClass
+LeRightgous1
+Zombie Squad
+Damien Ruffy
+Skill Fur
+XQuader
+Hat
+SatanSlayerUK
+WarGrey-sama
+cramyzarc
+Dead Romeo
+DOOMEDMarine89
+Joe90
+Esther Felicies [Rehtse]
+4MatC
+Seven Synz
+BOB
+Snackulus
+Stephan Kaufmann
+Mike Höllner
+J.T. Karis
+Ivan Kamakin
+John Carmack
+Guilt Seeker
+Jellin
+Guy Incognito
+Chris Scott
+Wicked-Devils
+David Gohman
+GD Dragon
+Benjamin Dowswell
+Jamie
+Braxus
+Alex Closs
+Albert Valiev
+Markus Dickmann
+AG4VR
+Elite 1984
+Russel Jones
+Saeed Al-Ali
+Luc Lowndes
+valedurandal
+friendly neighbor
+Stephen Sayles
+BayesianBroccoli
+
+[other]
+And thank you to all our other patrons
+for your continued support.

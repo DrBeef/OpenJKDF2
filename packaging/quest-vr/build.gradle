@@ -120,4 +120,11 @@ task copyUI(type: Copy) {
     into 'assets/ui'
 }
 
-preBuild.dependsOn copyShaders, copySSL, copyUI
+// Added: patron credits on exit. SDL_RWFromFile on Android resolves bare
+// filenames against assets/, so ship at assets root.
+task copyPatrons(type: Copy) {
+    from '../../resource/patrons.txt'
+    into 'assets'
+}
+
+preBuild.dependsOn copyShaders, copySSL, copyUI, copyPatrons

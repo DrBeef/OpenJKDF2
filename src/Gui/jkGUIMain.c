@@ -15,6 +15,7 @@
 #include "Gui/jkGUISingleplayer.h"
 #include "Gui/jkGUIMultiplayer.h"
 #include "Gui/jkGUIDialog.h"
+#include "Gui/jkGuiPatrons.h" // Added: patron credits on exit
 #include "Gui/jkGUIPlayer.h"
 #include "Gui/jkGUISetup.h"
 #include "Gui/jkGUIMods.h"
@@ -185,6 +186,9 @@ void jkGuiMain_Show()
 #else
                     sithCvar_SaveGlobals();
                     jkPlayer_WriteConf(jkPlayer_playerShortName); // Added
+#ifdef QOL_IMPROVEMENTS
+                    jkGuiPatrons_ShowAndWait(); // Added: patron credits on exit
+#endif
                     g_should_exit = 1;
                     //exit(0);
                     return;
