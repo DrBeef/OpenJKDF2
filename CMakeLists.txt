@@ -276,7 +276,9 @@ if(TARGET_USE_OPENAL AND NOT OPENAL_COMPILING_FROM_SRC)
 endif()
 
 # All of the base sources
-file(GLOB ENGINE_SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/*.c
+# Added: CONFIGURE_DEPENDS so new source files are picked up without manual reconfigure
+file(GLOB ENGINE_SOURCE_FILES CONFIGURE_DEPENDS
+                       ${PROJECT_SOURCE_DIR}/src/*.c
                        ${PROJECT_SOURCE_DIR}/src/*/*.c
                        ${PROJECT_SOURCE_DIR}/src/General/*.cpp
                        ${PROJECT_SOURCE_DIR}/src/Platform/Common/*.c

@@ -207,16 +207,25 @@ void jkGuiPatrons_Shutdown(void)
     jkGuiPatrons_numOther = 0;
 }
 
-// Per-frame tick called from jkGuiRend_DisplayAndReturnClicked via menu->idkFunc.
-// During the grace period (JKPATRONS_GRACE_MS), any user dismissal is reverted
-// so the viewer has time to read the list. After the grace period, normal
-// menu escape/click handling takes over.
+// Per-frame tick. Left as a no-op; the menu's idkFunc is only called while
+// lastClicked==0, so it can't veto a click that already committed. The grace
+// period is enforced in the dismiss button's click handler below instead.
 static void jkGuiPatrons_TickFn(jkGuiMenu* menu)
 {
+    (void)menu;
+}
+
+// Click handler for the full-screen dismiss button. Called by jkGuiRend on
+// mouse click, VR trigger, Esc, or Return. Returning 0 leaves the menu active;
+// returning a non-zero hoverId (-1) causes jkGuiRend_DisplayAndReturnClicked
+// to exit. During the grace window we reject the click entirely.
+static int jkGuiPatrons_DismissClickFn(jkGuiElement* element, jkGuiMenu* menu,
+                                       int32_t mouseX, int32_t mouseY, BOOL redraw)
+{
+    (void)menu; (void)mouseX; (void)mouseY; (void)redraw;
     if (pHS->getTimerTick() - jkGuiPatrons_startMs < JKPATRONS_GRACE_MS)
-    {
-        menu->lastClicked = 0;
-    }
+        return 0;
+    return element->hoverId;
 }
 
 // Build the element list for this session, auto-laying out gold names into
@@ -264,6 +273,8 @@ static void jkGuiPatrons_BuildElements(void)
     // Empty string -> stdFont_Draw3 renders nothing, so no visual artefact,
     // but the element remains clickable (mouse / VR trigger) and serves as the
     // escape-key / return-key shortcut target so Esc dismisses as well.
+    // The clickHandlerFunc enforces the grace period by returning 0 (menu
+    // stays active) for the first JKPATRONS_GRACE_MS ms.
     {
         jkGuiElement* e = &jkGuiPatrons_elements[idx++];
         e->type = ELEMENT_TEXTBUTTON;
@@ -276,6 +287,7 @@ static void jkGuiPatrons_BuildElements(void)
         e->rect.height = screenH;
         e->bIsVisible = 1;
         e->enableHover = 0;
+        e->clickHandlerFunc = jkGuiPatrons_DismissClickFn;
     }
 
     // Title (spans full width)

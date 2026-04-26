@@ -718,12 +718,18 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
 #ifdef PLATFORM_VR
     if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
         int dominantLeft = (stdVR_config.dominantHand == STDVR_CONTROLLER_LEFT);
-        uint32_t btnFire1 = dominantLeft ? STDVR_BTN_TRIGGER_L : STDVR_BTN_TRIGGER_R;
+        // Trigger / grip swap with dominant hand (they live on the weapon hand
+        // vs the off hand). Face buttons do NOT swap — A is always jump, X is
+        // always activate, B is always alt-fire, Y is always the menu button.
+        // Swapping face buttons by hand would collide with Y's menu role and
+        // generally surprises users who expect labelled buttons to keep their
+        // function across hand modes.
+        uint32_t btnFire1    = dominantLeft ? STDVR_BTN_TRIGGER_L : STDVR_BTN_TRIGGER_R;
         uint32_t btnUseSkill = dominantLeft ? STDVR_BTN_TRIGGER_R : STDVR_BTN_TRIGGER_L;
-        uint32_t btnUseInv = dominantLeft ? STDVR_BTN_GRIP_R : STDVR_BTN_GRIP_L;
-        uint32_t btnJump = dominantLeft ? STDVR_BTN_X : STDVR_BTN_A;
-        uint32_t btnActivate = dominantLeft ? STDVR_BTN_A : STDVR_BTN_X;
-        uint32_t btnAltFire = dominantLeft ? STDVR_BTN_Y : STDVR_BTN_B;
+        uint32_t btnUseInv   = dominantLeft ? STDVR_BTN_GRIP_R    : STDVR_BTN_GRIP_L;
+        uint32_t btnJump     = STDVR_BTN_A;
+        uint32_t btnActivate = STDVR_BTN_X;
+        uint32_t btnAltFire  = STDVR_BTN_B;
 
         int vrInput = 0;
         switch (funcIdx) {

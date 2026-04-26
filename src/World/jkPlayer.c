@@ -620,6 +620,11 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveInt(ext_fpath, "vrWeaponPitchAdjust", jkPlayer_vrWeaponPitchAdjust);
         stdJSON_SaveInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
         stdJSON_SaveInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
+        // Added: these three were modifiable in the VR options menu but never
+        // written back, so they reverted to defaults every session.
+        stdJSON_SaveInt(ext_fpath, "vrMoveDirection", jkPlayer_vrMoveDirection);
+        stdJSON_SaveInt(ext_fpath, "vrComfortVignette", jkPlayer_vrComfortVignette);
+        stdJSON_SaveFloat(ext_fpath, "vrHeightOffset", jkPlayer_vrHeightOffset);
 #endif
         stdJSON_SaveBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         stdJSON_SaveBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
@@ -822,6 +827,12 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_vrWeaponPitchAdjust = stdJSON_GetInt(ext_fpath, "vrWeaponPitchAdjust", jkPlayer_vrWeaponPitchAdjust);
         jkPlayer_vrDominantHand = stdJSON_GetInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
         jkPlayer_vrWeaponCrosshair = stdJSON_GetInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
+        // Added: mirror the write-side additions. vrSmoothTurnSpeed was also
+        // missing here even though the writer already saved it.
+        jkPlayer_vrSmoothTurnSpeed = stdJSON_GetInt(ext_fpath, "vrSmoothTurnSpeed", jkPlayer_vrSmoothTurnSpeed);
+        jkPlayer_vrMoveDirection = stdJSON_GetInt(ext_fpath, "vrMoveDirection", jkPlayer_vrMoveDirection);
+        jkPlayer_vrComfortVignette = stdJSON_GetInt(ext_fpath, "vrComfortVignette", jkPlayer_vrComfortVignette);
+        jkPlayer_vrHeightOffset = stdJSON_GetFloat(ext_fpath, "vrHeightOffset", jkPlayer_vrHeightOffset);
 #endif
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);

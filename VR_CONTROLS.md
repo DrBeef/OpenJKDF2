@@ -1,12 +1,15 @@
 # OpenJKDF2 VR Controls
 
-Default layout is right-handed (dominant hand = right controller).
+Default layout is right-handed (dominant hand = right controller). A left-handed
+layout is available — set **Dominant Hand = Left** in the VR options menu and
+all dominant/off-hand actions swap controllers; the weapon model aligns to the
+left controller and projectiles spawn from the left-hand barrel.
 
 ```
 LEFT CONTROLLER (Off-Hand)                RIGHT CONTROLLER (Dominant Hand)
 ==============================            ================================
 
-    [Y] (unused)                              [B] Alt Fire
+    [Y] Open Menu                             [B] Alt Fire
     [X] Activate / Use                        [A] Jump / Swim Up
 
     [Trigger] Use Force Power                 [Trigger] Primary Fire
@@ -46,16 +49,20 @@ LEFT CONTROLLER (Off-Hand)                RIGHT CONTROLLER (Dominant Hand)
 | **Trigger** | Use Force Power |
 | **Grip** | Force Wheel (hold to open, point to select, release to confirm) |
 | **X Button** | Activate / Use |
-| **Y Button** | (unused) |
+| **Y Button** | Open Menu / Escape |
 | **Thumbstick** | Move (forward/back/strafe) |
 | **Thumbstick Click** | Toggle Walk/Run |
 
 ## Menu Button
 
+The Quest's system menu button is intercepted by the OS, so the in-game menu
+can also be opened with the **Y button** at any time during gameplay.
+
 | Input | Action |
 |-------|--------|
-| **Short Press** | Open Menu / Escape |
-| **Long Press (1 sec)** | Recenter View |
+| **Short Press (system menu button)** | Open Menu / Escape |
+| **Long Press (1 sec, system menu button)** | Recenter View |
+| **Y Button** | Open Menu / Escape (alternative; no recenter) |
 
 ## Weapon & Force Wheels
 

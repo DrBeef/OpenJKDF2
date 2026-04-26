@@ -1040,6 +1040,12 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
     float weapOffY = useOffsets && pWeaponOffset ? pWeaponOffset->offsetY : stdVR_motionConfig.weaponOffsetY;
     float weapOffZ = useOffsets && pWeaponOffset ? pWeaponOffset->offsetZ : stdVR_motionConfig.weaponOffsetZ;
 
+    // Added: mirror palm-out X for left hand so fire position matches the
+    // visible weapon. Must stay in sync with stdVR_GetControllerViewMatrixInternal.
+    if (hand == STDVR_CONTROLLER_LEFT) {
+        weapOffX = -weapOffX;
+    }
+
     if (weapOffX != 0.0f || weapOffY != 0.0f || weapOffZ != 0.0f) {
         rdVector3 localOffset;
         localOffset.x = weapOffX;
@@ -1086,7 +1092,11 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
         stdVR_motionConfig.fireOffsetY != 0.0f ||
         stdVR_motionConfig.fireOffsetZ != 0.0f) {
         rdVector3 fireOffset;
-        fireOffset.x = stdVR_motionConfig.fireOffsetX * worldScale;
+        // Added: mirror palm-out X for left hand (same reason as weapOffX above).
+        float mirroredFireX = (hand == STDVR_CONTROLLER_LEFT)
+                              ? -stdVR_motionConfig.fireOffsetX
+                              : stdVR_motionConfig.fireOffsetX;
+        fireOffset.x = mirroredFireX * worldScale;
         fireOffset.y = stdVR_motionConfig.fireOffsetY * worldScale;
         fireOffset.z = stdVR_motionConfig.fireOffsetZ * worldScale;
 
@@ -1296,6 +1306,14 @@ static int stdVR_GetControllerViewMatrixInternal(int hand, rdMatrix34* pViewMat,
         float weapOffX = pWeaponOffset ? pWeaponOffset->offsetX : 0.f;
         float weapOffY = pWeaponOffset ? pWeaponOffset->offsetY : 0.f;
         float weapOffZ = pWeaponOffset ? pWeaponOffset->offsetZ : 0.f;
+
+        // Added: mirror the palm-out (X) component for the left hand so weapon
+        // offsets calibrated against the right hand align correctly. OpenXR grip
+        // pose +X is "palm normal" — a body-mirrored axis — while +Y and +Z are
+        // not mirrored, so only X needs flipping.
+        if (hand == STDVR_CONTROLLER_LEFT) {
+            weapOffX = -weapOffX;
+        }
 
         if (weapOffX != 0.0f || weapOffY != 0.0f || weapOffZ != 0.0f) {
             rdVector3 localOffset;
