@@ -484,6 +484,16 @@ int stdVR_GetMultiViewFBO(void)
     return stdVR_OpenXR_GetMultiViewFBO();
 }
 
+// Mirror the last-rendered VR buffer to the desktop window (debug aid). The caller is
+// responsible for the subsequent SDL_GL_SwapWindow.
+void stdVR_MirrorToWindow(int windowWidth, int windowHeight)
+{
+    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
+        return;
+    }
+    stdVR_OpenXR_MirrorToWindow(windowWidth, windowHeight);
+}
+
 // Compute and upload both eye view/projection matrices for MultiView rendering
 // Uses symmetric IPD offset for proper stereo
 void stdVR_SetMultiViewMatrices(float zNear, float zFar)

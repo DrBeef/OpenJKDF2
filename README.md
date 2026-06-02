@@ -21,6 +21,10 @@ OpenJKDF2 supports the following configurations:
 | ARM64 Android | OpenGL ES 3 | ARMv8 Android compilation with SDL2 and OpenAL Soft. |
 | Nintendo DSi | Custom | Nintendo DSi port with hardware rendering, software audio. Extremely RAM-limited, supports emissive palettes. |
 | Emscripten/WebAssembly | WebGL 2/OpenGL ES 3 | WebAssembly with SDL2 and OpenAL. Runs in a web browser. Since WASM only supports 32-bit pointers, this will likely be less buggy than 64-bit, but less performant. |
+| PC VR (Windows) | OpenGL 3.3 + OpenXR | 64-bit Windows VR build via OpenXR. Per-eye rendering; works with SteamVR, Oculus, and other OpenXR runtimes. Build with `-DTARGET_USE_VR=ON`. |
+| Standalone VR (Quest/Pico) | OpenGL ES 3 + OpenXR | ARM64 Android VR build for Meta Quest 2/Pro/3 and Pico 4/Neo3. Single-pass stereo via MultiView. |
+
+VR builds use the Khronos OpenXR loader. See the [VR Build Guide](docs/VR_BUILD_GUIDE.md) for PC VR, [packaging/quest-vr](packaging/quest-vr/README.md) for standalone headsets, and [VR_CONTROLS.md](VR_CONTROLS.md) for the controller layout.
 
 The following implementations are in-progress or planned:
 

@@ -34,6 +34,11 @@ include_directories(${OPENXR_INCLUDE_DIR})
 # Add compile definitions for VR support
 add_compile_definitions(PLATFORM_VR)
 add_compile_definitions(TARGET_USE_OPENXR)
+# Single-pass stereo via OpenGL MultiView (GL_OVR_multiview2) is now the unified VR
+# rendering path on both Android/Quest and desktop PCVR. This global definition lets all
+# translation units (std3D.c, sithCamera.c, jkGame.c, stdVR*.c) gate the shared multiview
+# code on MULTIVIEW_ENABLED instead of the platform-specific TARGET_ANDROID_NATIVE_GLES.
+add_compile_definitions(MULTIVIEW_ENABLED)
 
 # Link OpenXR library
 macro(plat_vr_link_deps)

@@ -6,7 +6,7 @@ This folder contains the Android Studio project for building OpenJKDF2 VR for Me
 
 1. **Android Studio** (Arctic Fox 2020.3.1 or newer)
 2. **Android SDK** (API level 32+)
-3. **Android NDK** (version 25.1.8937393 recommended)
+3. **Android NDK** (version 26.1.10909125 — pinned by `build.gradle`'s `ndkVersion`)
 4. **CMake** (3.22.1+, install via Android Studio SDK Manager)
 
 ## Setup
@@ -30,13 +30,13 @@ This folder contains the Android Studio project for building OpenJKDF2 VR for Me
 3. Select `Build > Build Bundle(s) / APK(s) > Build APK(s)`
 
 The APK will be generated at:
-`build/outputs/apk/debug/quest-vr-debug.apk`
+`build/outputs/apk/debug/OpenJKDF2-VR-debug.apk`
 
 ## Installing on Quest 3
 
 ### Via ADB
 ```bash
-adb install build/outputs/apk/debug/quest-vr-debug.apk
+adb install build/outputs/apk/debug/OpenJKDF2-VR-debug.apk
 ```
 
 ### Via SideQuest
@@ -58,7 +58,7 @@ Copy these folders from your Jedi Knight installation:
 
 ### Build fails with CMake errors
 - Make sure CMake 3.22.1 is installed via Android Studio SDK Manager
-- Check that NDK 25.1.8937393 is installed
+- Check that NDK 26.1.10909125 is installed
 
 ### App crashes on startup
 - Check logcat for errors: `adb logcat | grep -i openjkdf2`

@@ -69,7 +69,20 @@ pip3 install cogapp
 | Visual Studio | 2022 (17.0) | 2022 (17.8+) |
 | Python | 3.8 | 3.10+ |
 | Windows SDK | 10.0.19041.0 | 10.0.22621.0 |
-| OpenXR SDK | 1.0.34 | 1.0.34 (auto-fetched) |
+| OpenXR loader SDK | 1.1.54 | 1.1.54 (auto-fetched) |
+| OpenXR **runtime API** | 1.0 | 1.0 (requested at `xrCreateInstance`) |
+
+> **OpenXR 1.1 vs 1.0 — important:** The *loader source* that gets compiled in is
+> OpenXR-SDK `release-1.1.54` (set in `cmake_modules/build_openxr.cmake`), but the
+> application always **requests API version 1.0** at runtime
+> (`createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0` in
+> `src/Platform/VR/stdVR_OpenXR.cpp`). This is deliberate: SteamVR does not yet support
+> OpenXR 1.1, so requesting 1.0 keeps PCVR working across SteamVR, Oculus, and other
+> runtimes. The 1.1.54 loader is backward-compatible and honors the 1.0 request. Do **not**
+> change this to `XR_CURRENT_API_VERSION` (which the 1.1 headers define as 1.1) — that
+> reproduces the `LoaderInstance::CreateInstance ... CreateInstance call failed` error on
+> SteamVR. On desktop, CMake also prefers a system-installed OpenXR (≥1.0) via
+> `find_package` and only fetches 1.1.54 if none is found.
 
 ### C++ Standard Requirements
 - C11 for C code
@@ -82,9 +95,9 @@ pip3 install cogapp
 ### Step 1: Clone the Repository
 
 ```powershell
-git clone https://github.com/elliotttate/OpenJKDF2.git
+git clone https://github.com/Team-Beef-Studios/OpenJKDF2.git
 cd OpenJKDF2
-git checkout vr-support
+git checkout standalone-support
 ```
 
 ### Step 2: Initialize Submodules
@@ -186,7 +199,7 @@ Required DLLs will be in the same directory:
 
 VR support is enabled by setting `TARGET_USE_VR=ON`. This:
 1. Adds `PLATFORM_VR` and `TARGET_USE_OPENXR` compile definitions
-2. Fetches OpenXR SDK 1.0.34 automatically via FetchContent
+2. Provides the OpenXR loader: on desktop, uses a system-installed OpenXR (≥1.0) if found, otherwise auto-fetches OpenXR-SDK 1.1.54 via FetchContent. The app requests **API version 1.0** at runtime regardless (see the OpenXR 1.1 vs 1.0 note above).
 3. Includes VR source files from `src/Platform/VR/`
 4. Links the OpenXR loader library
 
@@ -349,4 +362,5 @@ OpenJKDF2/
 
 | Date | Changes |
 |------|---------|
+| 2026-06-02 | Updated OpenXR SDK to 1.1.54; corrected clone URL/branch to Team-Beef-Studios `standalone-support`. Note: 1.1.54 defaults `XR_CURRENT_API_VERSION` to 1.1, but SteamVR only supports OpenXR 1.0 — `xrCreateInstance` requests `XR_API_VERSION_1_0`. |
 | 2026-01-19 | Initial VR build guide |

@@ -68,6 +68,7 @@ int Window_ShowCursorUnwindowed(int a1);
 int Window_MessageLoop();
 void Window_SdlUpdate();
 void Window_SdlVblank();
+void Window_VRMirrorPresent();  // Present the VR desktop mirror (blit eye buffer + swap)
 void Window_RecreateSDL2Window();
 #endif
 

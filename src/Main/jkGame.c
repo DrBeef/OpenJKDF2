@@ -38,6 +38,7 @@
 #include "World/sithThing.h"
 #include "Gameplay/sithTime.h"
 #include "SDL2_helper.h"
+#include "Win95/Window.h"  // For Window_VRMirrorPresent (desktop VR mirror)
 extern sithThing* sithPlayer_pLocalPlayerThing;
 extern flex_t sithTime_deltaSeconds;
 
@@ -387,10 +388,12 @@ int jkGame_Update()
             // Added: Update 3D map geometry (collects sector edges once per frame)
             stdVR_Map3D_Update();
 
-#if defined(TARGET_ANDROID_NATIVE_GLES)  // MultiView for Quest VR
+#if defined(MULTIVIEW_ENABLED)  // Single-pass MultiView stereo (desktop PCVR + Quest)
             // === MultiView Path (single-pass stereo rendering) ===
             // Uses GL_OVR_multiview2 to render both eyes in a single draw call.
             // Since engine uses CPU projection, shader applies IPD offset in screen-space.
+            // On desktop this is the only supported path (VR init hard-errors without
+            // GL_OVR_multiview2); on Android the per-eye else below remains as a fallback.
             if (stdVR_IsMultiViewSupported()) {
                 if (stdVR_PrepareMultiViewBuffer()) {
                     // Clear internal render target
@@ -458,16 +461,67 @@ int jkGame_Update()
                         }
                     }
 
+                    // Bake the HUD into the multiview eye buffer (BOTH eyes), instead of a
+                    // separate quad layer — not all OpenXR runtimes (e.g. SteamVR) composite
+                    // the quad, but they all show what's in the projection. std3D_multiViewActive
+                    // is still set and the multiview FBO is still bound, so the UI flush uses
+                    // the MultiView UI program (num_views=2) to reach both eye layers.
+                    {
+                        int hudW = stdVR_clientInfo.renderWidth;
+                        int hudH = stdVR_clientInfo.renderHeight;
+
+                        // Draw HUD elements (hidden when weapon/force wheel is active)
+                        if (!stdVR_WeaponWheel_IsActive()) {
+                            if (!Main_bMotsCompat) {
+                                if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                                    jkHud_Draw();
+                                }
+                            }
+                            else {
+                                if (playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_SCOPEHUD) {
+                                    jkHudScope_Draw();
+                                }
+                                if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_80000000) == 0) {
+                                    if ((playerThings[playerThingIdx].actorThing->actorParams.typeflags & SITH_AF_NOHUD) == 0) {
+                                        jkHud_Draw();
+                                    }
+                                }
+                                else {
+                                    jkHudCameraView_Draw();
+                                }
+                            }
+                            jkHudInv_Draw();
+                        }
+
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+                        if (stdVR_AlignmentTool_IsActive()) {
+                            stdVR_AlignmentTool_DrawOverlay();
+                        }
+#endif
+
+                        // Draw weapon/force wheel overlay
+                        if (stdVR_WeaponWheel_IsActive()) {
+                            stdVR_WeaponWheel_Draw(hudW, hudH);
+                        }
+
+                        // Flush queued UI + overlay into the (bound) multiview eye buffer
+                        std3D_DrawUIRenderListToCurrentFBO(hudW, hudH, 0.0f, 0.0f, (float)hudW, (float)hudH);
+                        std3D_DrawOverlayToCurrentFBO(hudW, hudH);
+                    }
+
                     // Reset render lists
                     rdCache_ResetRenderList();
 
                     // Release MultiView buffer
                     stdVR_FinishMultiViewBuffer();
                 }
-            } else
-#endif
+            }
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+            else
             {
-                // === Per-Eye Path (fallback, always used for now) ===
+                // === Per-Eye Path (Android fallback only) ===
+                // Desktop PCVR never reaches here: VR init hard-errors without MultiView,
+                // so stdVR_IsMultiViewSupported() is always true on desktop.
                 // Render each eye separately
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     if (!stdVR_PrepareEyeBuffer(eye)) {
@@ -667,6 +721,8 @@ int jkGame_Update()
                     stdVR_FinishEyeBuffer(eye);
                 }
             }
+#endif // TARGET_ANDROID_NATIVE_GLES (per-eye fallback else)
+#endif // MULTIVIEW_ENABLED
         }
 
         // Clear VR projection state before potentially falling through to non-VR code
@@ -677,9 +733,10 @@ int jkGame_Update()
         rdCache_Flush();
         rdCache_ClearFrameCounters();
 
-        // Added: Render HUD to dedicated VR HUD buffer (quad layer)
-        // Only used on MultiView path (Quest) — PCVR renders HUD directly into eye buffers above
-        if (stdVR_IsMultiViewSupported() && stdVR_IsHudEnabled()) {
+        // HUD is now baked directly into the multiview eye buffer (see the MultiView block
+        // above), which every OpenXR runtime composites. The old dedicated HUD quad layer is
+        // disabled because some runtimes (SteamVR) don't reliably composite/update it.
+        if (0 && stdVR_IsMultiViewSupported() && stdVR_IsHudEnabled()) {
             int vrHudPrepared = stdVR_PrepareHudBuffer();
             if (vrHudPrepared) {
                 static int vrHudRenderCount = 0;
@@ -734,49 +791,18 @@ int jkGame_Update()
                 // These are drawn via rdPrimit2 to Video_pCanvasOverlayMap
                 std3D_DrawOverlayToCurrentFBO(hudWidth, hudHeight);
 
-                // Debug: Save HUD FBO content to file for inspection
-#if 0
-                {
-                    extern int32_t Main_bVRTest;
-                    extern int32_t Main_vrTestFrameCount;
-                    static int hudSaveCount = 0;
-                    if (Main_bVRTest && Main_vrTestFrameCount == 59 && hudSaveCount == 0) {
-                        hudSaveCount++;
-                        int hudFbo = stdVR_GetHudFBO();
-                        if (hudFbo > 0) {
-                            VR_Log("Saving HUD FBO content: fbo=%d size=%dx%d\n", hudFbo, hudWidth, hudHeight);
-                            // Read pixels from HUD FBO
-                            glBindFramebuffer(GL_FRAMEBUFFER, hudFbo);
-                            uint8_t* pixels = (uint8_t*)malloc(hudWidth * hudHeight * 4);
-                            if (pixels) {
-                                glReadPixels(0, 0, hudWidth, hudHeight, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-                                // Save as PPM
-                                FILE* fp = fopen("vrtest_hud.ppm", "wb");
-                                if (fp) {
-                                    fprintf(fp, "P6\n%d %d\n255\n", hudWidth, hudHeight);
-                                    for (int y = hudHeight - 1; y >= 0; y--) {
-                                        for (int x = 0; x < hudWidth; x++) {
-                                            int idx = (y * hudWidth + x) * 4;
-                                            fputc(pixels[idx], fp);     // R
-                                            fputc(pixels[idx+1], fp);   // G
-                                            fputc(pixels[idx+2], fp);   // B
-                                        }
-                                    }
-                                    fclose(fp);
-                                    VR_Log("Saved vrtest_hud.ppm\n");
-                                }
-                                free(pixels);
-                            }
-                        }
-                    }
-                }
-#endif
                 stdVR_FinishHudBuffer();
             }
         }
 
         // End VR frame
         stdVR_EndFrame();
+
+        // Present the desktop mirror for the in-game path. In VR the normal window swap is
+        // skipped (OpenXR composits to the HMD), and in-game does not go through
+        // Window_SdlUpdate, so without this the desktop window would keep showing the last
+        // menu frame.
+        Window_VRMirrorPresent();
 
         // VR automated test mode - count frames and screenshot/exit
         {

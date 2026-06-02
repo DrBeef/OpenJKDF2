@@ -1,5 +1,15 @@
 # MP4 Video Player Integration Plan
 
+> **Status: IMPLEMENTED (historical design doc).** The MP4/FFmpeg integration described
+> below has since been built and shipped. This document is kept as the original design
+> rationale; for the current build/usage instructions and what actually shipped, see
+> [MP4_VIDEO_TESTING.md](MP4_VIDEO_TESTING.md).
+>
+> **What shipped vs. this plan:** the implementation uses **Option A** (FFmpeg decodes to
+> RGB24, which is then quantized to an 8-bit palette for the existing VBuffer pipeline),
+> *not* the "Option B" native-RGB VBuffer path recommended later in this document. The
+> Option B discussion is retained as a possible future optimization.
+
 ## Overview
 
 This document outlines how to integrate modern MP4 video playback into OpenJKDF2, replacing or supplementing the existing Smacker (.SMK) and SMUSH (.SAN) video decoders.

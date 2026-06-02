@@ -3,7 +3,12 @@
 
 #ifdef PLATFORM_VR
 
+// MULTIVIEW_ENABLED is now a global compile definition (see cmake_modules/plat_feat_vr.cmake)
+// so that std3D.c and other translation units share the same multiview gate. Keep a local
+// fallback define in case this file is ever built without that definition.
+#ifndef MULTIVIEW_ENABLED
 #define MULTIVIEW_ENABLED
+#endif
 
 // Include game headers first (they have correct Windows include order)
 extern "C" {
@@ -108,6 +113,7 @@ extern void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha);
 #ifdef _WIN32
 #include <GL/wglew.h>
 #endif
+#include <SDL.h>  // For SDL_ShowSimpleMessageBox (fatal VR init errors)
 #endif
 
 #ifndef GL_FRAMEBUFFER_SRGB
@@ -247,6 +253,26 @@ static bool vrHudEnabled = true;
 static bool vrHudRenderActive = false;
 static bool vrHudFrameStarted = false;
 
+// MultiView swapchain layer layout.
+// Desktop PCVR follows the golden-source (RealRTCWXR/TBXR) VDXR-safe layout: a 3-layer
+// array swapchain that skips layer 0 (renders to layers 1 and 2), which is required for
+// robust behaviour under Virtual Desktop / VDXR streaming. Android/Quest keeps the standard
+// 2-layer layout (layers 0 and 1) to match the shipping Quest build. This is a
+// constant-level difference only; the code path is identical (gated on MULTIVIEW_ENABLED).
+// Desktop PCVR uses the golden-source (RealRTCWXR/TBXR) 3-layer array swapchain that skips
+// layer 0 (render to layers 1,2; submit imageArrayIndex eye+1). This is what the desktop
+// Oculus runtime expects — the standard 2-layer/layer-0 layout renders the projection wrong
+// per eye on Oculus. Android/Quest keeps the standard 2/0/0.
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+#define VR_MV_ARRAY_SIZE      2
+#define VR_MV_BASE_VIEW_INDEX 0
+#define VR_MV_LAYER_OFFSET    0
+#else
+#define VR_MV_ARRAY_SIZE      3
+#define VR_MV_BASE_VIEW_INDEX 1
+#define VR_MV_LAYER_OFFSET    1
+#endif
+
 // MultiView state (GL_OVR_multiview2 for single-pass stereo rendering)
 static bool vrMultiViewSupported = false;
 static bool vrMultiViewEnabled = false;
@@ -257,6 +283,60 @@ static uint32_t xrMultiViewSwapchainImageIndex = 0;
 static std::vector<GLuint> vrMultiViewFBOs;
 static std::vector<GLuint> vrMultiViewDepthTextures;
 static bool vrMultiViewRenderActive = false;
+
+// Desktop mirror: blit a VR buffer to the SDL window so the screen shows what's in VR.
+// stdVR_mirrorMode: 0 = left-eye scene (whatever was last rendered: in-game multiview layer
+// OR menu per-eye buffer), 1 = HUD FBO (debug the 2D/HUD quad-layer content).
+static GLuint vrMirrorFBO = 0;
+// Owned copy of the last HUD FBO content, captured in FinishHudBuffer. Used by the F8 HUD
+// mirror so we never read an OpenXR-owned swapchain image at the wrong time (that hangs).
+static GLuint vrHudMirrorTex = 0;
+static int    vrHudMirrorW = 0;
+static int    vrHudMirrorH = 0;
+static bool   vrHudMirrorValid = false;
+int stdVR_mirrorMode = 0;
+// Mirror orientation (cycled at runtime with F9): 0 = no flip, 1 = flip Y, 2 = flip X,
+// 3 = flip X+Y. Default 0 (no flip) — verified correct for this swapchain convention.
+int stdVR_mirrorFlip = 0;
+// Owned 2D copy of the last left-eye buffer, captured during Finish*Buffer WHILE the
+// swapchain image is still acquired. The mirror blits THIS, never the live swapchain image
+// (reading a released swapchain image intermittently hangs the GL driver / whole app).
+static GLuint vrMirrorEyeTex = 0;
+static int    vrMirrorEyeW = 0;
+static int    vrMirrorEyeH = 0;
+static bool   vrMirrorEyeValid = false;
+
+// Copy a left-eye color source (2D texture, or one layer of a 2D array texture) into the
+// owned vrMirrorEyeTex. Call only while the source swapchain image is still acquired.
+static void stdVR_OpenXR_CaptureEyeMirror(GLuint srcTex, bool isArray, int layer, int w, int h)
+{
+    if (srcTex == 0 || w <= 0 || h <= 0) return;
+    if (vrMirrorEyeTex == 0 || vrMirrorEyeW != w || vrMirrorEyeH != h) {
+        if (vrMirrorEyeTex == 0) glGenTextures(1, &vrMirrorEyeTex);
+        glBindTexture(GL_TEXTURE_2D, vrMirrorEyeTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        vrMirrorEyeW = w;
+        vrMirrorEyeH = h;
+    }
+    if (vrMirrorFBO == 0) glGenFramebuffers(1, &vrMirrorFBO);
+    GLint prevRead = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, vrMirrorFBO);
+    if (isArray) {
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcTex, 0, layer);
+    } else {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
+    }
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindTexture(GL_TEXTURE_2D, vrMirrorEyeTex);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevRead);
+    vrMirrorEyeValid = true;
+}
 
 // MultiView function pointers (loaded dynamically)
 #if defined(TARGET_ANDROID_NATIVE_GLES)
@@ -278,18 +358,29 @@ static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* la
     }
 
     XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
-    waitInfo.timeout = 1000000000; // 1 second
+    waitInfo.timeout = 100000000; // 100 ms per attempt
 
     XrResult result = xrWaitSwapchainImage(swapchain, &waitInfo);
     int retryCount = 0;
-    while (result == XR_TIMEOUT_EXPIRED) {
+    // CAP the retries: previously this looped forever on XR_TIMEOUT_EXPIRED, which hangs the
+    // main thread ("Not Responding", frozen headset frame) if an image never becomes ready —
+    // e.g. during the menu<->gameplay swapchain transition. Give up after ~1s total and drop
+    // the frame; the caller releases the acquired image and the next frame retries, which lets
+    // the app recover instead of deadlocking.
+    const int maxRetries = 10;
+    while (result == XR_TIMEOUT_EXPIRED && retryCount < maxRetries) {
         retryCount++;
-        stdPlatform_Printf("stdVR_OpenXR_WaitSwapchainImage: TIMEOUT, retry #%d\n", retryCount);
         result = xrWaitSwapchainImage(swapchain, &waitInfo);
     }
 
     if (waitSwapchainCount <= 20 || waitSwapchainCount % 100 == 0) {
         stdPlatform_Printf("stdVR_OpenXR_WaitSwapchainImage: result=%d\n", result);
+    }
+
+    if (result == XR_TIMEOUT_EXPIRED) {
+        VR_Log("stdVR_OpenXR: xrWaitSwapchainImage gave up after %d retries for %s eye %d (dropping frame)\n",
+            retryCount, label ? label : "swapchain", eye);
+        return 0;
     }
 
     if (XR_FAILED(result)) {
@@ -1427,7 +1518,12 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
     {
         XrSwapchainCreateInfo hudSwapchainInfo = { XR_TYPE_SWAPCHAIN_CREATE_INFO };
         hudSwapchainInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-        hudSwapchainInfo.format = GL_RGBA8;  // Use RGBA8 for HUD (non-sRGB for clean UI)
+        // Use the runtime-supported swapchain format (same as the scene). GL_RGBA8 was
+        // hardcoded here, but desktop runtimes (e.g. SteamVR) may not support it for
+        // swapchains and return XR_ERROR_SWAPCHAIN_FORMAT_UNSUPPORTED (-26), which silently
+        // disabled the entire HUD/weapon-wheel quad layer on PCVR. selectedFormat is the
+        // format the runtime advertised and the scene swapchain already uses.
+        hudSwapchainInfo.format = selectedFormat;
         hudSwapchainInfo.sampleCount = 1;
         hudSwapchainInfo.width = vrHudWidth;
         hudSwapchainInfo.height = vrHudHeight;
@@ -1469,11 +1565,11 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
     }
 
     // Check for MultiView extension support (single-pass stereo rendering)
-    // Supported on: Meta Quest (Adreno 650/740), Pico 4/Neo3 (Adreno 650), and other XR2-based devices
-#if defined(TARGET_ANDROID_NATIVE_GLES)
-
+    // Supported on: Meta Quest (Adreno 650/740), Pico 4/Neo3 (Adreno 650), other XR2-based
+    // devices, and desktop GL (NVIDIA/Intel; AMD support varies).
 #if defined(MULTIVIEW_ENABLED)
     {
+#if defined(TARGET_ANDROID_NATIVE_GLES)
         const char* extensions = (const char*)glGetString(GL_EXTENSIONS);
         bool hasMultiView2 = extensions && strstr(extensions, "GL_OVR_multiview2") != nullptr;
         bool hasMultiViewMSAA = extensions && strstr(extensions, "GL_OVR_multiview_multisampled_render_to_texture") != nullptr;
@@ -1483,7 +1579,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         VR_Log("  GL_OVR_multiview_multisampled_render_to_texture: %s\n", hasMultiViewMSAA ? "YES" : "NO");
 
         if (hasMultiView2) {
-            // Load MultiView function pointers
+            // GLES: load MultiView function pointers via eglGetProcAddress
             glFramebufferTextureMultiviewOVR = (PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC)
                 eglGetProcAddress("glFramebufferTextureMultiviewOVR");
             glFramebufferTextureMultisampleMultiviewOVR = (PFNGLFRAMEBUFFERTEXTUREMULTISAMPLEMULTIVIEWOVRPROC)
@@ -1496,8 +1592,21 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
                 VR_Log("stdVR_OpenXR: MultiView extension present but function pointer load failed\n");
             }
         }
-    }
+#else
+        // Desktop GL: GLEW declares and loads the GL_OVR_multiview2 entry points during
+        // glewInit(), so we use them directly (no manual SDL_GL_GetProcAddress needed).
+        bool hasMultiView2 = (GLEW_OVR_multiview2 != 0) && (glFramebufferTextureMultiviewOVR != nullptr);
+
+        VR_Log("stdVR_OpenXR: MultiView extension check (desktop/GLEW):\n");
+        VR_Log("  GLEW_OVR_multiview2: %s\n", (GLEW_OVR_multiview2 != 0) ? "YES" : "NO");
+        VR_Log("  glFramebufferTextureMultiviewOVR: %s\n", glFramebufferTextureMultiviewOVR ? "loaded" : "NULL");
+
+        if (hasMultiView2) {
+            vrMultiViewSupported = true;
+            VR_Log("stdVR_OpenXR: MultiView supported (desktop GLEW)\n");
+        }
 #endif
+    }
 
     // Create MultiView swapchain if supported (single swapchain with arraySize=2 for both eyes)
     if (vrMultiViewSupported) {
@@ -1511,7 +1620,7 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
         mvSwapchainInfo.width = mvWidth;
         mvSwapchainInfo.height = mvHeight;
         mvSwapchainInfo.faceCount = 1;
-        mvSwapchainInfo.arraySize = 2;  // Standard MultiView: layers 0 and 1 (like RazeXR)
+        mvSwapchainInfo.arraySize = VR_MV_ARRAY_SIZE;  // Android: 2 (layers 0,1); desktop: 3 (skip layer 0 for VDXR)
         mvSwapchainInfo.mipCount = 1;
 
         result = xrCreateSwapchain(xrSession, &mvSwapchainInfo, &xrMultiViewSwapchain);
@@ -1544,17 +1653,20 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
                 glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
-                // Create depth texture array for this swapchain image
+                // Create depth texture array for this swapchain image.
+                // Layer count matches the color swapchain's arraySize so that
+                // baseViewIndex+numViews stays within bounds on both layouts.
                 glBindTexture(GL_TEXTURE_2D_ARRAY, vrMultiViewDepthTextures[i]);
-                glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH_COMPONENT24, mvWidth, mvHeight, 2);
+                glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH_COMPONENT24, mvWidth, mvHeight, VR_MV_ARRAY_SIZE);
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 
-                // Create FBO with both color and depth permanently attached (like RazeXR)
+                // Create FBO with both color and depth permanently attached (like RazeXR).
+                // baseViewIndex is 0 on Android (layers 0,1) and 1 on desktop (layers 1,2).
                 glBindFramebuffer(GL_DRAW_FRAMEBUFFER, vrMultiViewFBOs[i]);
                 glFramebufferTextureMultiviewOVR(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                    vrMultiViewDepthTextures[i], 0, 0, 2);
+                    vrMultiViewDepthTextures[i], 0, VR_MV_BASE_VIEW_INDEX, 2);
                 glFramebufferTextureMultiviewOVR(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                    colorTexture, 0, 0, 2);
+                    colorTexture, 0, VR_MV_BASE_VIEW_INDEX, 2);
 
                 GLenum fboStatus = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
                 if (fboStatus != GL_FRAMEBUFFER_COMPLETE) {
@@ -1580,7 +1692,21 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
             }
         }
     }
-#endif // TARGET_ANDROID_NATIVE_GLES
+
+#if !defined(TARGET_ANDROID_NATIVE_GLES)
+    // Desktop PCVR is MultiView-only (no per-eye fallback). If the GL/driver does not
+    // expose GL_OVR_multiview2, fail loudly here rather than rendering incorrectly.
+    // (On Android/GLES the per-eye path is retained as a safety net, so we don't abort.)
+    if (!vrMultiViewEnabled) {
+        VR_Log("stdVR_OpenXR: FATAL - GL_OVR_multiview2 is required for VR but is unavailable.\n");
+        VR_Log("stdVR_OpenXR: Your GPU/driver must support OpenGL MultiView (GL_OVR_multiview2).\n");
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "OpenJKDF2 VR",
+            "This GPU/driver does not support OpenGL MultiView (GL_OVR_multiview2), "
+            "which is required for VR rendering.", nullptr);
+        goto cleanup_session;
+    }
+#endif
+#endif // MULTIVIEW_ENABLED
 
     // Create action set
     if (!CreateActionSet()) {
@@ -2051,11 +2177,10 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             layers.push_back((XrCompositionLayerBaseHeader*)&quadLayer);
         } else {
             // Normal stereo projection mode for 3D gameplay
-#if defined(TARGET_ANDROID_NATIVE_GLES)
-            // Use MultiView swapchain if available and render was done via MultiView
+#if defined(MULTIVIEW_ENABLED)
+            // MultiView: single array swapchain (single-pass stereo). On desktop this is the
+            // only path; on Android it is preferred, with the per-eye fallback below.
             if (vrMultiViewEnabled && xrMultiViewSwapchain != XR_NULL_HANDLE) {
-                // MultiView: single swapchain with array layers
-
                 //Calculate an average FOV used for both eyes
                 XrFovf fov;
                 fov.angleLeft = xrViews[0].fov.angleLeft;
@@ -2074,12 +2199,14 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
                         (int32_t)xrConfigViews[eye].recommendedImageRectWidth,
                         (int32_t)xrConfigViews[eye].recommendedImageRectHeight
                     };
-                    projectionViews[eye].subImage.imageArrayIndex = eye;  // 0 for left, 1 for right
+                    // +VR_MV_LAYER_OFFSET skips layer 0 on desktop (VDXR-safe layout); 0 on Android
+                    projectionViews[eye].subImage.imageArrayIndex = eye + VR_MV_LAYER_OFFSET;
                 }
-            } else
-#endif
+            }
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+            else
             {
-                // Per-eye swapchains (fallback path)
+                // Per-eye swapchains (Android fallback only)
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     // Ensure proper initialization
                     projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
@@ -2095,6 +2222,8 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
                     projectionViews[eye].subImage.imageArrayIndex = 0;
                 }
             }
+#endif
+#endif // MULTIVIEW_ENABLED
 
             projectionLayer.space = xrLocalSpace;
             projectionLayer.viewCount = STDVR_EYE_COUNT;
@@ -2135,6 +2264,27 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
     endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     endInfo.layerCount = (uint32_t)layers.size();
     endInfo.layers = layers.data();
+
+    // Debug: log the layer composition periodically so we can see exactly what is submitted
+    // (screen-layer/menu quad vs projection + HUD quad) per frame.
+    {
+        static int endFrameLogCount = 0;
+        static long screenLayerSubmits = 0;   // cumulative frames submitted as screen-layer (briefing)
+        static long projectionSubmits = 0;     // cumulative frames submitted as gameplay projection
+        endFrameLogCount++;
+        if (stdVR_clientInfo.bUseScreenLayer) screenLayerSubmits++; else projectionSubmits++;
+        // Log every 30 frames: screen-layer vs projection cumulative submits, AND the
+        // predictedDisplayTime delta (if it's frozen, WaitFrame is being skipped and SteamVR
+        // discards our frames, showing the last good one = the briefing).
+        static long long prevDisplayTime = 0;
+        long long dt = (long long)xrFrameState.predictedDisplayTime;
+        if (endFrameLogCount <= 20 || endFrameLogCount % 30 == 0) {
+            VR_Log("stdVR_OpenXR_EndFrame #%d: bUseScreenLayer=%d layerCount=%u cum[screenLayer=%ld proj=%ld] displayTimeDelta=%lldms\n",
+                endFrameLogCount, stdVR_clientInfo.bUseScreenLayer, (unsigned)layers.size(),
+                screenLayerSubmits, projectionSubmits, (dt - prevDisplayTime) / 1000000);
+        }
+        prevDisplayTime = dt;
+    }
 
     XrResult result = xrEndFrame(xrSession, &endInfo);
     if (XR_FAILED(result)) {
@@ -2314,6 +2464,7 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     int height = xrConfigViews[eye].recommendedImageRectHeight;
     glViewport(0, 0, width, height);
 
+
     // Update tracked state
     trackedFBO = fbo;
     trackedViewport[0] = 0;
@@ -2393,6 +2544,15 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
         }
     }
 
+    // Capture the left-eye content for the desktop mirror while the swapchain image is still
+    // acquired (per-eye / menu path).
+    if (eye == 0 && !xrSwapchainImages[eye].empty()) {
+        stdVR_OpenXR_CaptureEyeMirror(xrSwapchainImages[eye][xrSwapchainImageIndex[eye]].image,
+            false, 0,
+            xrConfigViews[eye].recommendedImageRectWidth,
+            xrConfigViews[eye].recommendedImageRectHeight);
+    }
+
     // Restore std3D's window FBO routing
     std3D_ClearVRTargetFBO();
 
@@ -2453,7 +2613,7 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
 // MultiView Buffer Functions - Single-pass stereo rendering for Quest VR
 // ============================================================================
 
-#if defined(TARGET_ANDROID_NATIVE_GLES)
+#if defined(MULTIVIEW_ENABLED)
 extern "C" int stdVR_OpenXR_IsMultiViewSupported(void)
 {
     return vrMultiViewSupported && vrMultiViewEnabled ? 1 : 0;
@@ -2515,6 +2675,7 @@ extern "C" int stdVR_OpenXR_PrepareMultiViewBuffer(void)
     int height = xrConfigViews[0].recommendedImageRectHeight;
     glViewport(0, 0, width, height);
 
+
     // Update tracked state
     trackedFBO = fbo;
     trackedViewport[0] = 0;
@@ -2551,9 +2712,32 @@ extern "C" int stdVR_OpenXR_FinishMultiViewBuffer(void)
     // Get current FBO
     GLuint fbo = vrMultiViewFBOs[xrMultiViewSwapchainImageIndex];
 
-    // Discard depth buffer so tiler doesn't need to write it back (like RazeXR)
+    // Capture the left-eye layer for the desktop mirror while the image is still acquired.
+    if (xrMultiViewSwapchainImageIndex < xrMultiViewSwapchainImages.size()) {
+        stdVR_OpenXR_CaptureEyeMirror(xrMultiViewSwapchainImages[xrMultiViewSwapchainImageIndex].image,
+            true, VR_MV_LAYER_OFFSET,
+            xrConfigViews[0].recommendedImageRectWidth,
+            xrConfigViews[0].recommendedImageRectHeight);
+        // Debug: periodically dump the projection/eye buffer (see DumpEyeMirror) to determine
+        // whether the obscuring briefing is in the projection layer.
+        static int eyeAutoDumpCount = 0;
+        if ((++eyeAutoDumpCount % 300) == 60) {
+            stdVR_OpenXR_DumpEyeMirror();
+        }
+    }
+
+    // Discard depth buffer so the tiler doesn't need to write it back (tiled-GPU
+    // optimization). GLES3 core on Android; on desktop only present with GL 4.3+, so guard
+    // on the (GLEW-loaded) function pointer to stay safe on a 3.3 context.
+#if defined(TARGET_ANDROID_NATIVE_GLES)
     const GLenum depthAttachment[1] = {GL_DEPTH_ATTACHMENT};
     glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 1, depthAttachment);
+#else
+    if (glInvalidateFramebuffer) {
+        const GLenum depthAttachment[1] = {GL_DEPTH_ATTACHMENT};
+        glInvalidateFramebuffer(GL_DRAW_FRAMEBUFFER, 1, depthAttachment);
+    }
+#endif
 
     // Unbind FBO (like RazeXR - don't detach textures, they stay permanently attached)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
@@ -2587,6 +2771,159 @@ extern "C" int stdVR_OpenXR_GetMultiViewFBO(void)
         return 0;
     }
     return (int)vrMultiViewFBOs[xrMultiViewSwapchainImageIndex];
+}
+
+// Desktop mirror: blit the last-rendered VR content to the SDL window's default framebuffer,
+// followed by an SDL_GL_SwapWindow in the caller. Blits owned 2D copies (vrMirrorEyeTex /
+// vrHudMirrorTex) captured during Finish*Buffer while the swapchain image was still acquired
+// — NOT the live swapchain image, which intermittently hangs the GL driver if read after
+// release. NOTE: the eye-buffer mirror shows only the 3D scene, not the HUD/menu quad layers
+// (those are composited by the runtime); use stdVR_mirrorMode = 1 to mirror the HUD FBO.
+extern "C" void stdVR_OpenXR_MirrorToWindow(int windowWidth, int windowHeight)
+{
+#if defined(MULTIVIEW_ENABLED)
+    if (windowWidth <= 0 || windowHeight <= 0) return;
+
+    GLuint srcColorTex = 0;
+    GLint  srcLayer = 0;
+    int    srcW = 0, srcH = 0;
+    bool   srcIsArray = false;
+
+    if (stdVR_mirrorMode == 1 && vrHudMirrorValid && vrHudMirrorTex != 0) {
+        // Owned copy of the HUD FBO (captured in FinishHudBuffer) — safe to read anytime.
+        srcColorTex = vrHudMirrorTex;
+        srcLayer = 0;
+        srcW = vrHudMirrorW;
+        srcH = vrHudMirrorH;
+        srcIsArray = false;
+    } else if (vrMirrorEyeValid && vrMirrorEyeTex != 0) {
+        // Owned 2D copy of the last left-eye buffer (captured in Finish*Buffer). Works for
+        // both the in-game multiview path and the menu per-eye path.
+        srcColorTex = vrMirrorEyeTex;
+        srcLayer = 0;
+        srcW = vrMirrorEyeW;
+        srcH = vrMirrorEyeH;
+        srcIsArray = false;
+    }
+
+    if (srcColorTex == 0 || srcW <= 0 || srcH <= 0) return;
+
+    if (vrMirrorFBO == 0) {
+        glGenFramebuffers(1, &vrMirrorFBO);
+    }
+
+    // Bind the color texture as the read source. Array textures (multiview) need a layer
+    // selected via glFramebufferTextureLayer; plain 2D textures use glFramebufferTexture2D.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, vrMirrorFBO);
+    if (srcIsArray) {
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, srcColorTex, 0, srcLayer);
+    } else {
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcColorTex, 0);
+    }
+
+    // Blit to the window's default framebuffer, applying the selected flip (F9 cycles it).
+    // Destination rectangle endpoints are swapped per-axis to mirror in X and/or Y.
+    int dx0 = 0, dy0 = 0, dx1 = windowWidth, dy1 = windowHeight;
+    if (stdVR_mirrorFlip & 2) { dx0 = windowWidth; dx1 = 0; }   // flip X
+    if (stdVR_mirrorFlip & 1) { dy0 = windowHeight; dy1 = 0; }  // flip Y
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glDisable(GL_FRAMEBUFFER_SRGB);  // avoid double sRGB encoding on the mirror
+    glViewport(0, 0, windowWidth, windowHeight);
+    glBlitFramebuffer(0, 0, srcW, srcH,
+                      dx0, dy0, dx1, dy1,
+                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+#else
+    (void)windowWidth; (void)windowHeight;
+#endif
+}
+
+// Debug (F7): read back the captured HUD FBO copy, log an opacity analysis (menu/briefing =
+// mostly opaque; correct sparse HUD = mostly transparent), and write it to vrtest_hud.ppm.
+extern "C" void stdVR_OpenXR_DumpHudMirror(void)
+{
+    if (!vrHudMirrorValid || vrHudMirrorTex == 0 || vrHudMirrorW <= 0 || vrHudMirrorH <= 0) {
+        VR_Log("DumpHudMirror: no valid HUD mirror texture yet\n");
+        return;
+    }
+    int w = vrHudMirrorW, h = vrHudMirrorH;
+    if (vrMirrorFBO == 0) glGenFramebuffers(1, &vrMirrorFBO);
+    GLint prevRead = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, vrMirrorFBO);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, vrHudMirrorTex, 0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    uint8_t* pixels = (uint8_t*)malloc((size_t)w * h * 4);
+    if (pixels) {
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        long total = (long)w * h, opaque = 0, nonblack = 0;
+        for (long i = 0; i < total; i++) {
+            if (pixels[i*4 + 3] > 128) opaque++;
+            if (pixels[i*4] | pixels[i*4+1] | pixels[i*4+2]) nonblack++;
+        }
+        VR_Log("DumpHudMirror: %dx%d opaque(a>128)=%ld (%.1f%%) nonblack=%ld (%.1f%%)\n",
+            w, h, opaque, 100.0*opaque/total, nonblack, 100.0*nonblack/total);
+        FILE* fp = fopen("vrtest_hud.ppm", "wb");
+        if (fp) {
+            fprintf(fp, "P6\n%d %d\n255\n", w, h);
+            for (int y = h - 1; y >= 0; y--) {
+                for (int x = 0; x < w; x++) {
+                    int idx = (y*w + x) * 4;
+                    fputc(pixels[idx], fp);
+                    fputc(pixels[idx+1], fp);
+                    fputc(pixels[idx+2], fp);
+                }
+            }
+            fclose(fp);
+            VR_Log("DumpHudMirror: wrote vrtest_hud.ppm\n");
+        }
+        free(pixels);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevRead);
+}
+
+// Debug: dump the captured left-eye/projection buffer copy to vrtest_eye.ppm + opacity log,
+// so we can tell whether the obscuring briefing is in the projection layer (eye buffer).
+extern "C" void stdVR_OpenXR_DumpEyeMirror(void)
+{
+    if (!vrMirrorEyeValid || vrMirrorEyeTex == 0 || vrMirrorEyeW <= 0 || vrMirrorEyeH <= 0) {
+        VR_Log("DumpEyeMirror: no valid eye mirror texture yet\n");
+        return;
+    }
+    int w = vrMirrorEyeW, h = vrMirrorEyeH;
+    if (vrMirrorFBO == 0) glGenFramebuffers(1, &vrMirrorFBO);
+    GLint prevRead = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, vrMirrorFBO);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, vrMirrorEyeTex, 0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    uint8_t* pixels = (uint8_t*)malloc((size_t)w * h * 4);
+    if (pixels) {
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        long total = (long)w * h, nonblack = 0;
+        for (long i = 0; i < total; i++) {
+            if (pixels[i*4] | pixels[i*4+1] | pixels[i*4+2]) nonblack++;
+        }
+        VR_Log("DumpEyeMirror: %dx%d nonblack=%ld (%.1f%%)\n", w, h, nonblack, 100.0*nonblack/total);
+        FILE* fp = fopen("vrtest_eye.ppm", "wb");
+        if (fp) {
+            fprintf(fp, "P6\n%d %d\n255\n", w, h);
+            for (int y = h - 1; y >= 0; y--) {
+                for (int x = 0; x < w; x++) {
+                    int idx = (y*w + x) * 4;
+                    fputc(pixels[idx], fp);
+                    fputc(pixels[idx+1], fp);
+                    fputc(pixels[idx+2], fp);
+                }
+            }
+            fclose(fp);
+            VR_Log("DumpEyeMirror: wrote vrtest_eye.ppm\n");
+        }
+        free(pixels);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, prevRead);
 }
 
 // Get stereo eye offsets for MultiView rendering
@@ -2723,6 +3060,37 @@ extern "C" int stdVR_OpenXR_FinishHudBuffer(void)
 {
     if (!vrHudRenderActive) {
         return 0;
+    }
+
+    // Capture the HUD FBO content into an owned 2D texture for the F8 debug mirror, while the
+    // swapchain color is still attached. (The mirror must not read the OpenXR-owned swapchain
+    // image directly outside its acquire window — doing so hangs the app.)
+    {
+        if (vrHudMirrorTex == 0) {
+            glGenTextures(1, &vrHudMirrorTex);
+            glBindTexture(GL_TEXTURE_2D, vrHudMirrorTex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, vrHudWidth, vrHudHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            vrHudMirrorW = vrHudWidth;
+            vrHudMirrorH = vrHudHeight;
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, vrHudFBO);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glBindTexture(GL_TEXTURE_2D, vrHudMirrorTex);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, vrHudMirrorW, vrHudMirrorH);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        vrHudMirrorValid = true;
+
+        // Debug: periodically dump the HUD FBO + opacity automatically (keypresses often
+        // don't reach the desktop window while the headset has focus). Lets us see the HUD
+        // FBO content during gameplay without any user interaction.
+        static int hudAutoDumpCount = 0;
+        if ((++hudAutoDumpCount % 300) == 60) {
+            stdVR_OpenXR_DumpHudMirror();
+        }
     }
 
     // Detach color texture from FBO

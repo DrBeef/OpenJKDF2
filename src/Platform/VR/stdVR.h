@@ -55,6 +55,10 @@ int stdVR_FinishMultiViewBuffer(void);  // Release MultiView swapchain
 int stdVR_GetMultiViewFBO(void);        // Get the MultiView FBO (0 if not active)
 void stdVR_SetMultiViewMatrices(float zNear, float zFar);  // Upload both eye view/proj matrices to UBOs
 
+// Desktop mirror (debug aid): blit the last-rendered VR buffer to the SDL window.
+// Caller does the SDL_GL_SwapWindow afterwards. See stdVR_mirrorMode in stdVR_OpenXR.h.
+void stdVR_MirrorToWindow(int windowWidth, int windowHeight);
+
 // HUD rendering (dedicated quad layer for in-game HUD)
 int stdVR_PrepareHudBuffer(void);       // Acquire HUD swapchain and bind FBO
 int stdVR_FinishHudBuffer(void);        // Release HUD swapchain image

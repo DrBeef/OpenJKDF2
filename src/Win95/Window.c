@@ -849,6 +849,23 @@ void Window_SdlUpdate()
             case SDL_KEYDOWN:
                 //stdPlatform_Printf("scancode %d\n", event.key.keysym.scancode);
                 //handleKey(&event.key.keysym, WM_KEYDOWN, 0x1);
+#ifdef PLATFORM_VR
+                // F8 toggles the desktop VR mirror source: left-eye scene <-> HUD FBO (debug)
+                if (event.key.keysym.sym == SDLK_F8 && !event.key.repeat) {
+                    extern int stdVR_mirrorMode;
+                    stdVR_mirrorMode = (stdVR_mirrorMode + 1) % 2;
+                }
+                // F9 cycles the mirror flip: 0=none,1=flipY,2=flipX,3=flipXY
+                if (event.key.keysym.sym == SDLK_F9 && !event.key.repeat) {
+                    extern int stdVR_mirrorFlip;
+                    stdVR_mirrorFlip = (stdVR_mirrorFlip + 1) % 4;
+                }
+                // F7 dumps the current HUD FBO to vrtest_hud.ppm + an opacity analysis (debug)
+                if (event.key.keysym.sym == SDLK_F7 && !event.key.repeat) {
+                    extern void stdVR_OpenXR_DumpHudMirror(void);
+                    stdVR_OpenXR_DumpHudMirror();
+                }
+#endif
                 if (event.key.keysym.sym == SDLK_ESCAPE)
                 {
                     Window_msg_main_handler(g_hWnd, WM_KEYFIRST, VK_ESCAPE, event.key.repeat & 0xFFFF);
@@ -1350,7 +1367,9 @@ void Window_SdlUpdate()
                     stdPlatform_Printf("Window_SdlUpdate: BeginFrame FAILED\n");
                 }
             }
-            // Skip SDL swap - VR compositor handles presentation
+            // OpenXR compositor handles HMD presentation; mirror the VR view to the desktop
+            // window so the monitor shows what's in the headset (debug aid).
+            Window_VRMirrorPresent();
         }
         else
 #endif
@@ -1450,14 +1469,28 @@ void Window_SdlUpdate()
 #endif
 }
 
+// Present the VR desktop mirror (blit the last-rendered VR eye buffer to the window and swap).
+// Called once per VR frame from the menu path (Window_SdlUpdate) and the in-game path
+// (jkGame, after stdVR_EndFrame), since in VR the normal Window_SdlVblank swap is skipped.
+void Window_VRMirrorPresent()
+{
+#ifdef PLATFORM_VR
+    if (Main_bHeadless) return;
+    if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+        stdVR_MirrorToWindow(Window_xSize, Window_ySize);
+        SDL_GL_SwapWindow(displayWindow);
+    }
+#endif
+}
+
 void Window_SdlVblank()
 {
     if (Main_bHeadless) return;
 
-// Added: Skip SDL swap in VR mode - OpenXR handles frame presentation
+// In VR mode the OpenXR compositor handles HMD presentation; the desktop mirror is presented
+// separately via Window_VRMirrorPresent() (called from the menu and in-game frame paths).
 #ifdef PLATFORM_VR
     if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
-        // Don't swap - OpenXR compositor handles presentation
         if (Window_needsRecreate)
             Window_RecreateSDL2Window();
         return;

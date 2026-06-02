@@ -60,6 +60,15 @@ void stdVR_OpenXR_StopHaptic(int hand);
 void stdVR_OpenXR_RecenterView(void);
 const char* stdVR_OpenXR_GetRuntimeName(void);
 
+// Desktop mirror: blit the last-rendered VR content to the SDL window default framebuffer.
+// stdVR_mirrorMode: 0 = left-eye scene buffer, 1 = HUD FBO (debug the 2D/HUD overlay).
+// stdVR_mirrorFlip: 0=none,1=flipY,2=flipX,3=flipXY (cycled with F9).
+extern int stdVR_mirrorMode;
+extern int stdVR_mirrorFlip;
+void stdVR_OpenXR_MirrorToWindow(int windowWidth, int windowHeight);
+void stdVR_OpenXR_DumpHudMirror(void);  // Debug: dump HUD FBO to vrtest_hud.ppm + opacity log
+void stdVR_OpenXR_DumpEyeMirror(void);  // Debug: dump eye/projection buffer to vrtest_eye.ppm
+
 #ifdef __cplusplus
 }
 #endif

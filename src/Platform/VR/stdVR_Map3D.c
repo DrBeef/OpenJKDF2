@@ -152,34 +152,29 @@ static void stdVR_Map3D_UpdateCachedGeometry(void);
 static void stdVR_Map3D_Draw3DDiamond(rdVector3* pCenter, float size, uint32_t color, float rotationRad);
 static int stdVR_Map3D_IsSectorVisited(sithSector* pSector);
 
-// Vertex shader for colored lines - MultiView compatible with per-eye MVP
+// Vertex shader for colored lines - single-pass MultiView (renders both eyes via
+// gl_ViewID_OVR into the multiview array FBO). Used on Quest and desktop PCVR alike; only
+// the GLSL #version (and GLES precision qualifier) differ by platform.
 static const char* stdVR_map3DVertexShaderSrc =
 #ifdef TARGET_ANDROID_NATIVE_GLES
     "#version 300 es\n"
+#else
+    "#version 330 core\n"
+#endif
     "#extension GL_OVR_multiview2 : enable\n"
     "#define NUM_VIEWS 2\n"
     "layout(num_views = NUM_VIEWS) in;\n"
+#ifdef TARGET_ANDROID_NATIVE_GLES
     "precision highp float;\n"
+#endif
     "layout(location = 0) in vec3 aPos;\n"
     "layout(location = 1) in vec4 aColor;\n"
-    "uniform mat4 uMVP[2];\n"  // Per-eye MVP matrices
+    "uniform mat4 uMVP[2];\n"  // Per-eye MVP matrices, indexed by gl_ViewID_OVR
     "out vec4 vColor;\n"
     "void main() {\n"
     "    gl_Position = uMVP[gl_ViewID_OVR] * vec4(aPos, 1.0);\n"
     "    vColor = aColor;\n"
     "}\n";
-#else
-    "#version 330 core\n"
-    "layout(location = 0) in vec3 aPos;\n"
-    "layout(location = 1) in vec4 aColor;\n"
-    "uniform mat4 uMVP[2];\n"
-    "uniform int uEyeIndex;\n"
-    "out vec4 vColor;\n"
-    "void main() {\n"
-    "    gl_Position = uMVP[uEyeIndex] * vec4(aPos, 1.0);\n"
-    "    vColor = aColor;\n"
-    "}\n";
-#endif
 
 // Fragment shader for colored lines
 static const char* stdVR_map3DFragmentShaderSrc =
@@ -1408,13 +1403,12 @@ void stdVR_Map3D_Render(int eye)
         float zNear = 0.05f;
         float zFar = 50.0f;
 
-#ifdef TARGET_ANDROID_NATIVE_GLES
-        // MultiView: use symmetric projection (same for both eyes)
+        // MultiView (Quest + desktop PCVR): use the same symmetric projection for both eyes
+        // so the holomap renders identically across platforms. (Desktop previously used a
+        // per-eye asymmetric projection here, which gave a wrong-looking result under the
+        // unified single-pass path.)
         stdVR_Map3D_GetSymmetricProjection(projMat, zNear, zFar);
-#else
-        // PC VR: use per-eye asymmetric projection
-        stdVR_Map3D_GetAsymmetricProjection(projMat, eyeIdx, zNear, zFar);
-#endif
+        (void)eyeIdx;
 
         // Build view matrix: JKDF2 view rotation + coordinate conversion
         // Combined rotation = CoordConvert * JKDF2_ViewRotation

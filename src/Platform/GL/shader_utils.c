@@ -51,6 +51,10 @@ void print_log(GLuint object) {
 	free(log);
 }
 
+// When nonzero, force the next-loaded shader(s) to be compiled with MultiView enabled
+// (used to load a multiview UI program for baking the HUD into the eye buffer).
+int g_shaderForceMultiView = 0;
+
 GLuint load_shader_file(const char* filepath, GLenum type)
 {
     stdPlatform_Printf("std3D: Loading shader file: %s\n", filepath);
@@ -71,7 +75,20 @@ GLuint load_shader_file(const char* filepath, GLenum type)
 
     stdPlatform_Printf("std3D: Parse shader `%s`\n", filepath);
 
-    GLuint ret = create_shader(shader_contents, type);
+    // Only the 3D-scene shaders that render into the MultiView array FBO may declare
+    // num_views=2 / use gl_ViewID_OVR. UI and menu shaders render to plain single-layer 2D
+    // FBOs (HUD quad layer, menus), where a multiview shader is invalid on strict desktop
+    // GL drivers (it renders nothing). Restrict the multiview injection accordingly.
+    // g_shaderForceMultiView lets the caller load a multiview variant of an otherwise-mono
+    // shader (used for the multiview UI program that bakes the HUD into the eye buffer).
+    extern int g_shaderForceMultiView;
+    int enableMultiView =
+        g_shaderForceMultiView ||
+        (strstr(filepath, "default") != NULL) ||
+        (strstr(filepath, "crosshair") != NULL) ||
+        (strstr(filepath, "vignette") != NULL);
+
+    GLuint ret = create_shader(shader_contents, type, enableMultiView);
     stdPlatform_Printf("std3D: Shader compiled, result=%u\n", ret);
     free(shader_contents);
 
@@ -81,8 +98,9 @@ GLuint load_shader_file(const char* filepath, GLenum type)
 /**
  * Compile the shader from file 'filename', with error handling
  */
-GLuint create_shader(const char* shader, GLenum type) {
+GLuint create_shader(const char* shader, GLenum type, int enableMultiView) {
 	const GLchar* source = (const GLchar*)shader;
+	(void)enableMultiView;  // Unused on non-VR / Android / WASM builds
 	GLuint res = glCreateShader(type);
 
 	// GLSL version
@@ -137,6 +155,20 @@ GLuint create_shader(const char* shader, GLenum type) {
     extensions = "\n";
     defines = "#define CAN_BILINEAR_FILTER\n";
 #endif
+#endif
+
+#if defined(PLATFORM_VR) && !defined(TARGET_ANDROID) && !defined(ARCH_WASM)
+    // Desktop PCVR: enable single-pass MultiView stereo, but ONLY for the 3D-scene shaders
+    // that render into the multiview array FBO (enableMultiView). default_v.glsl (and the
+    // crosshair/vignette shaders) branch on MULTIVIEW_ENABLED and use
+    // layout(num_views=2)/gl_ViewID_OVR, which require the GL_OVR_multiview2 extension and a
+    // multiview FBO. UI/menu shaders render to plain 2D FBOs (HUD quad layer, menus) and
+    // must stay mono, so they keep the non-multiview extensions/defines set above.
+    // Version stays #version 330.
+    if (enableMultiView) {
+        extensions = "#extension GL_ARB_texture_gather : enable\n#extension GL_OVR_multiview2 : enable\n";
+        defines = "#define CAN_BILINEAR_FILTER\n#define HAS_MIPS\n#define MULTIVIEW_ENABLED\n";
+    }
 #endif
 
 	// GLES2 precision specifiers
