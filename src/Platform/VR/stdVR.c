@@ -510,76 +510,55 @@ void stdVR_SetMultiViewMatrices(float zNear, float zFar)
         worldScale = 1.0f;
     }
 
-    // For clip-space offset, we need to scale IPD appropriately
-    const float CLIP_SPACE_MAGIC_NUMBER = 7.f;
-    float halfIpd = (worldScale * 0.5f) * CLIP_SPACE_MAGIC_NUMBER;
-
-    // Per-eye asymmetric-frustum remap. The scene is CPU-rendered ONCE to the UNION frustum
-    // (sithCamera_SetVRViewMultiView).
-    //  - DESKTOP/PCVR: remap the union render into each eye's NATIVE canted frustum (scale/offset)
-    //    and submit each eye's NATIVE FOV -> correct convergence on Oculus (its per-eye FOV is
-    //    narrower than the union). The desktop GPU handles the ~1.24x magnification fine.
-    //  - QUEST/standalone: remap stays IDENTITY and the UNION FOV is submitted as-is. Quest's
-    //    Adreno (tiled) GPU drops view-1 triangles if the union render is magnified to native, and
-    //    Quest's own per-eye FOV ~= the union so no remap is needed.
-    // This is a HARDWARE-driven difference (GPU capability + device FOV), gated below and in the
-    // submit + HUD offset. Both platforms use the identical single-pass multiview render path;
-    // only this remap uniform and the submitted FOV differ.
-    float eyeRemap[4] = { 1.0f, 0.0f, 1.0f, 0.0f };  // identity {scale0,offset0, scale1,offset1}
-#if !defined(TARGET_ANDROID_NATIVE_GLES)
-    {
-        float combinedWidth  = stdVR_clientInfo.eyes[1].fovRight + stdVR_clientInfo.eyes[0].fovLeft;
-        float combinedCenter = stdVR_clientInfo.eyes[1].fovRight - stdVR_clientInfo.eyes[0].fovLeft;
-        for (int e = 0; e < STDVR_EYE_COUNT; e++) {
-            float nativeWidth  = stdVR_clientInfo.eyes[e].fovRight + stdVR_clientInfo.eyes[e].fovLeft;
-            float nativeCenter = stdVR_clientInfo.eyes[e].fovRight - stdVR_clientInfo.eyes[e].fovLeft;
-            if (combinedWidth > 0.0001f && nativeWidth > 0.0001f) {
-                eyeRemap[e * 2 + 0] = combinedWidth / nativeWidth;                   // scale
-                eyeRemap[e * 2 + 1] = (combinedCenter - nativeCenter) / nativeWidth; // offset
-            }
-        }
-    }
-#endif
-
-    // Symmetric IPD offset for stereo separation (clip-space parallax).
-    // Left eye (eye=0): positive offset (image shifts right); right eye (eye=1): negative.
+    // Proper per-eye GPU projection (OVR_multiview). The scene is CPU-rendered ONCE to the CENTER
+    // (HMD) view as view-space geometry (sithCamera_SetVRViewMultiView + rdCamera_bGpuProjection);
+    // the GPU vertex shader applies these per-eye matrices selected by gl_ViewID_OVR.
+    //
+    // For each eye we upload:
+    //   u_viewMatrices[eye] = A * (InvertOrtho34(eyePose) * hmdPose), translation * worldScale
+    //   u_projMatrices[eye] = real asymmetric OpenXR per-eye frustum (stdVR_GetEyeProjectionMatrix44)
+    // where A is the engine->GL axis swap (engine view space is X=right, Y=forward, Z=up; GL is
+    // X=right, Y=up, -Z=forward). M_eye = InvertOrtho34(eyePose)*hmdPose maps a point from the
+    // center-view space the geometry was rendered in into this eye's view space; it is independent
+    // of the game camera (it cancels). This replaces the old union-render + shader post-warp/remap
+    // and is correct on both desktop and Adreno (no post-projection magnify), so no platform gate.
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
-        float xOffset = (eye == 0) ? halfIpd : -halfIpd;
+        rdMatrix34 invEye, mEye;
+        rdMatrix_InvertOrtho34(&invEye, &stdVR_clientInfo.eyes[eye].viewMatrix);
+        rdMatrix_Multiply34(&mEye, &invEye, &stdVR_clientInfo.hmdPoseMatrix);
+        // Physical eye-from-center offset is in meters; scale into game units like the combine path.
+        mEye.scale.x *= worldScale;
+        mEye.scale.y *= worldScale;
+        mEye.scale.z *= worldScale;
 
-        float* viewDst = &viewMatrices[eye * 16];
-        // Identity matrix with X translation only (column-major). [3][0]=viewDst[12]=xOffset is
-        // the IPD parallax coefficient read by the scene shader AND the IPD translation used by
-        // the crosshair shader (which multiplies coord3d by this matrix).
-        viewDst[0]  = 1.0f;  viewDst[4]  = 0.0f;  viewDst[8]  = 0.0f;  viewDst[12] = xOffset;
-        viewDst[1]  = 0.0f;  viewDst[5]  = 1.0f;  viewDst[9]  = 0.0f;  viewDst[13] = 0.0f;
-        viewDst[2]  = 0.0f;  viewDst[6]  = 0.0f;  viewDst[10] = 1.0f;  viewDst[14] = 0.0f;
-        viewDst[3]  = 0.0f;  viewDst[7]  = 0.0f;  viewDst[11] = 0.0f;  viewDst[15] = 1.0f;
+        // Convert the engine-space transform M_eye into a GL column-major view matrix, applying the
+        // engine->GL axis swap A (GL rows = engine rvec, uvec, -lvec; see stdVR_Map3D.c). Columns of
+        // M_eye are rvec (in.x), lvec (in.y), uvec (in.z); translation is scale.
+        float* V = &viewMatrices[eye * 16];
+        V[0]  =  mEye.rvec.x;  V[4]  =  mEye.lvec.x;  V[8]  =  mEye.uvec.x;  V[12] =  mEye.scale.x;
+        V[1]  =  mEye.rvec.z;  V[5]  =  mEye.lvec.z;  V[9]  =  mEye.uvec.z;  V[13] =  mEye.scale.z;
+        V[2]  = -mEye.rvec.y;  V[6]  = -mEye.lvec.y;  V[10] = -mEye.uvec.y;  V[14] = -mEye.scale.y;
+        V[3]  =  0.0f;         V[7]  =  0.0f;         V[11] =  0.0f;         V[15] =  1.0f;
 
-        // Get projection matrix
+        // Real asymmetric per-eye projection from the OpenXR FOV tangents.
         stdVR_GetEyeProjectionMatrix44(eye, &projMatrices[eye * 16], zNear, zFar);
     }
 
-    // Upload the per-eye scale/offset remap to the scene shader (separate from the view UBO).
-    extern void std3D_SetVREyeRemap(float scale0, float offset0, float scale1, float offset1);
-    std3D_SetVREyeRemap(eyeRemap[0], eyeRemap[1], eyeRemap[2], eyeRemap[3]);
-    // Per-eye HUD offset (forward-centering + convergence) for the baked HUD, at the menu depth.
+    // Per-eye HUD offset (forward-centering + convergence) for the baked 2D HUD, at the menu depth.
     extern float jkPlayer_vrHudDepth;
     stdVR_SetHudOffsetForDepth(jkPlayer_vrHudDepth);
 
-    // Upload to std3D UBOs
+    // Upload to std3D UBOs (ViewMatrices + ProjectionMatrices, consumed by default_v.glsl /
+    // crosshair_v.glsl via gl_ViewID_OVR).
     extern void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices);
     std3D_UpdateMultiViewMatrices(viewMatrices, projMatrices);
-
-    // Also set per-eye offsets for any other systems that need them
-    extern void std3D_SetEyeOffsets(float leftOffset, float rightOffset);
-    std3D_SetEyeOffsets(viewMatrices[12], viewMatrices[28]);
 }
 
 // Compute and upload the per-eye baked-HUD horizontal shift (native-eye NDC) for a given virtual
 // depth: forward-centering (-nativeCenter/nativeWidth, puts the HUD at the binocular straight-
 // ahead, correcting asymmetric FOV) + convergence (+/- IPD/(d*nativeWidth) to sit at distance d).
-// The eye buffer holds each eye's NATIVE frustum (the scene-shader remap), so the HUD is laid out
-// in native-eye NDC. Used for the HUD (menu depth) and overridden for the weapon/force wheel.
+// The eye buffer holds each eye's NATIVE frustum (the GPU projects per eye), so the HUD is laid
+// out in native-eye NDC. Used for the HUD (menu depth) and overridden for the weapon/force wheel.
 void stdVR_SetHudOffsetForDepth(float depthMeters)
 {
     if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
@@ -590,12 +569,11 @@ void stdVR_SetHudOffsetForDepth(float depthMeters)
     float ipdAbs = rightEyeX - leftEyeX;
     if (ipdAbs < 0.0f) ipdAbs = -ipdAbs;
 
-    // The HUD must be laid out in the SAME NDC space the eye buffer is presented in (see the
-    // platform gate in stdVR_SetMultiViewMatrices):
-    //  - DESKTOP/PCVR: each eye buffer is its NATIVE canted frustum (remap) -> native-eye NDC.
-    //  - QUEST: the eye buffer is the UNION frustum (identity remap) -> combined NDC.
+    // The baked 2D HUD is laid out in each eye's NATIVE-eye NDC (the eye buffer now always holds
+    // that eye's real per-eye frustum - the GPU projects per eye, so there is no union/remap and
+    // no platform difference). Per-eye shift = forward-centering (-nativeCenter/nativeWidth, places
+    // the HUD at the binocular straight-ahead) + depth convergence (+/- IPD/(d*nativeWidth)).
     float off[2] = { 0.0f, 0.0f };
-#if !defined(TARGET_ANDROID_NATIVE_GLES)
     for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
         float nativeWidth  = stdVR_clientInfo.eyes[eye].fovRight + stdVR_clientInfo.eyes[eye].fovLeft;
         float nativeCenter = stdVR_clientInfo.eyes[eye].fovRight - stdVR_clientInfo.eyes[eye].fovLeft;
@@ -605,18 +583,6 @@ void stdVR_SetHudOffsetForDepth(float depthMeters)
             off[eye] = forwardCenter + ((eye == 0) ? convergeNDC : -convergeNDC);
         }
     }
-#else
-    {
-        float combinedWidth  = stdVR_clientInfo.eyes[1].fovRight + stdVR_clientInfo.eyes[0].fovLeft;
-        float combinedCenter = stdVR_clientInfo.eyes[1].fovRight - stdVR_clientInfo.eyes[0].fovLeft;
-        if (combinedWidth > 0.0001f) {
-            float forwardCenter = -combinedCenter / combinedWidth;
-            float convergeNDC = (depthMeters > 0.01f) ? (ipdAbs / (depthMeters * combinedWidth)) : 0.0f;
-            off[0] = forwardCenter + convergeNDC;
-            off[1] = forwardCenter - convergeNDC;
-        }
-    }
-#endif
     extern void std3D_SetVRHudOffset(float eye0, float eye1);
     std3D_SetVRHudOffset(off[0], off[1]);
 }

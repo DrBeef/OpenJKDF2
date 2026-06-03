@@ -1274,39 +1274,9 @@ static void stdVR_Map3D_MultMatrix44(float* result, float* a, float* b)
     memcpy(result, temp, 16 * sizeof(float));
 }
 
-// Build symmetric projection matrix for MultiView (Android/Quest)
-// Uses averaged FOV values that work for both eyes in a single draw call
-static void stdVR_Map3D_GetSymmetricProjection(float* pOut16, float zNear, float zFar)
-{
-    // Build asymmetric projection matrix from FOV tangents
-    float fovLeft = stdVR_clientInfo.eyes[0].fovLeft;
-    float fovRight = stdVR_clientInfo.eyes[1].fovRight;
-    float fovUp = stdVR_clientInfo.eyes[0].fovUp;
-    float fovDown = stdVR_clientInfo.eyes[0].fovDown;
-
-    float left = -fovLeft * zNear;
-    float right = fovRight * zNear;
-    float bottom = -fovDown * zNear;
-    float top = fovUp * zNear;
-
-    float width = right - left;
-    float height = top - bottom;
-
-    // Column-major 4x4 perspective matrix
-    memset(pOut16, 0, 16 * sizeof(float));
-    pOut16[0] = 2.0f * zNear / width;
-    pOut16[5] = 2.0f * zNear / height;
-    pOut16[8] = (right + left) / width;
-    pOut16[9] = (top + bottom) / height;
-    pOut16[10] = -(zFar + zNear) / (zFar - zNear);
-    pOut16[11] = -1.0f;
-    pOut16[14] = -2.0f * zFar * zNear / (zFar - zNear);
-    pOut16[15] = 0.0f;
-}
-
-#ifndef TARGET_ANDROID_NATIVE_GLES
-// Build per-eye asymmetric projection matrix for PC VR
-// Each eye gets its own projection based on that eye's FOV
+// Build per-eye asymmetric projection matrix (all VR platforms).
+// Each eye gets its own projection based on that eye's FOV - matches the scene's real per-eye
+// GPU projection and the native per-eye FOV the eye buffer is submitted with.
 static void stdVR_Map3D_GetAsymmetricProjection(float* pOut16, int eyeIdx, float zNear, float zFar)
 {
     // Use this specific eye's FOV tangents
@@ -1334,7 +1304,6 @@ static void stdVR_Map3D_GetAsymmetricProjection(float* pOut16, int eyeIdx, float
     pOut16[14] = -2.0f * zFar * zNear / (zFar - zNear);
     pOut16[15] = 0.0f;
 }
-#endif
 
 void stdVR_Map3D_Render(int eye)
 {
@@ -1403,12 +1372,11 @@ void stdVR_Map3D_Render(int eye)
         float zNear = 0.05f;
         float zFar = 50.0f;
 
-        // MultiView (Quest + desktop PCVR): use the same symmetric projection for both eyes
-        // so the holomap renders identically across platforms. (Desktop previously used a
-        // per-eye asymmetric projection here, which gave a wrong-looking result under the
-        // unified single-pass path.)
-        stdVR_Map3D_GetSymmetricProjection(projMat, zNear, zFar);
-        (void)eyeIdx;
+        // Real per-eye asymmetric projection - matches the scene's GPU per-eye projection and the
+        // NATIVE per-eye FOV the eye buffer is now submitted with. (Was the union "symmetric"
+        // projection to match the OLD union-rendered scene; now the scene projects per-eye for
+        // real, so the holomap must too or it renders at the wrong scale/convergence.)
+        stdVR_Map3D_GetAsymmetricProjection(projMat, eyeIdx, zNear, zFar);
 
         // Build view matrix: JKDF2 view rotation + coordinate conversion
         // Combined rotation = CoordConvert * JKDF2_ViewRotation

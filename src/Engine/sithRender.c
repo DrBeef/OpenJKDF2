@@ -966,9 +966,22 @@ void sithRender_Clip(sithSector *sector, rdClipFrustum *frustumArg, flex_t prevA
 #ifdef TARGET_TWL
                 rdCamera_pCurCamera->fnProjectLstClip(sithRender_aVerticesTmp_projected, sithRender_aVerticesTmp, meshinfo_out.numVertices);
 #else
-                rdCamera_pCurCamera->fnProjectLst(sithRender_aVerticesTmp_projected, sithRender_aVerticesTmp, meshinfo_out.numVertices);
+#ifdef PLATFORM_VR
+                // Portal/adjoin frustum-narrowing needs REAL union screen-space coords (this
+                // projected buffer feeds rdCamera_BuildClipFrustum below for sector recursion, it is
+                // NOT sent to the GPU). Temporarily disable the GPU-projection passthrough so
+                // fnProjectLst uses the union PerspProjectVR (bUsingVRProjection is set by
+                // rdCamera_SetVRTangents); otherwise the adjoin's "screen" extent is computed from
+                // view-space and the narrowed frustum collapses, so no adjacent sectors render.
+                int savedGpuProj = rdCamera_bGpuProjection;
+                rdCamera_bGpuProjection = 0;
 #endif
-                
+                rdCamera_pCurCamera->fnProjectLst(sithRender_aVerticesTmp_projected, sithRender_aVerticesTmp, meshinfo_out.numVertices);
+#ifdef PLATFORM_VR
+                rdCamera_bGpuProjection = savedGpuProj;
+#endif
+#endif
+
                 v31 = frustumArg;
 
                 // no frustum culling if forced

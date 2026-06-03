@@ -164,14 +164,6 @@ GLint uniform_tint, uniform_filter, uniform_fade, uniform_add, uniform_emissiveF
 GLint uniform_light_mult, uniform_displacement_factor, uniform_iResolution;
 GLint uniform_vr_debug_mode; // VR debug mode uniform
 #if defined(MULTIVIEW_ENABLED)
-GLint uniform_eyeOffsets;  // MultiView per-eye horizontal offsets
-float std3D_eyeOffsets[2] = { 0.0f, 0.0f };  // [0]=left, [1]=right
-// Added: per-eye asymmetric-frustum remap for the scene shader (Oculus PCVR fix).
-// Two vec2 (one per eye): .x = horizontal scale, .y = horizontal offset, applied in
-// default_v.glsl as ndc_eye = scale*(ndc_combined + parallax*(1-z)) + offset. Default
-// (1,0) is identity = previous symmetric behaviour. Parallax still comes from the view UBO.
-GLint uniform_vrEyeRemap;
-float std3D_vrEyeRemap[4] = { 1.0f, 0.0f, 1.0f, 0.0f };  // {scale0,offset0, scale1,offset1}
 // Per-eye HUD horizontal shift in NATIVE-eye NDC, used ONLY by the baked-HUD shaders
 // (menu/ui multiview). The HUD is authored directly in native-eye NDC (one draw -> both eye
 // layers, each submitted with its own native FOV), so unlike the scene it needs NO combined->
@@ -664,10 +656,6 @@ int init_resources()
     uniform_displacement_factor = std3D_tryFindUniform(programDefault, "displacement_factor");
     uniform_iResolution = std3D_tryFindUniform(programDefault, "iResolution");
     uniform_vr_debug_mode = std3D_tryFindUniform(programDefault, "vr_debug_mode");
-#if defined(MULTIVIEW_ENABLED)
-    uniform_eyeOffsets = std3D_tryFindUniform(programDefault, "u_eyeOffsets");
-    uniform_vrEyeRemap = std3D_tryFindUniform(programDefault, "u_vrEyeRemap");
-#endif
 
     programMenu_attribute_coord3d = std3D_tryFindAttribute(programMenu, "coord3d");
     programMenu_attribute_v_color = std3D_tryFindAttribute(programMenu, "v_color");
@@ -2852,17 +2840,8 @@ void std3D_DrawRenderList()
     glUseProgram(programDefault);
 
 #if defined(MULTIVIEW_ENABLED)
-    // Bind MultiView UBOs for stereo rendering
+    // Bind MultiView UBOs (ViewMatrices + ProjectionMatrices) for per-eye GPU projection.
     std3D_BindMultiViewUBOs(programDefault);
-
-    // Set per-eye offsets for stereo parallax
-    if (std3D_multiViewActive && uniform_eyeOffsets >= 0) {
-        glUniform2fv(uniform_eyeOffsets, 1, std3D_eyeOffsets);
-    }
-    // Set per-eye asymmetric-frustum remap (scale/offset) for the scene shader
-    if (std3D_multiViewActive && uniform_vrEyeRemap >= 0) {
-        glUniform2fv(uniform_vrEyeRemap, 2, std3D_vrEyeRemap);
-    }
 #endif
 
 #if defined(MULTIVIEW_ENABLED)
@@ -5205,26 +5184,6 @@ void std3D_ClearMultiViewActive(void)
 #endif
 }
 
-// Set per-eye horizontal offsets for MultiView stereo parallax
-void std3D_SetEyeOffsets(float leftOffset, float rightOffset)
-{
-#if defined(MULTIVIEW_ENABLED)
-    std3D_eyeOffsets[0] = leftOffset;
-    std3D_eyeOffsets[1] = rightOffset;
-#endif
-}
-
-// Set per-eye asymmetric-frustum remap for the scene shader (Oculus PCVR fix).
-// {scale0,offset0, scale1,offset1}; (1,0) is identity (symmetric headsets).
-void std3D_SetVREyeRemap(float scale0, float offset0, float scale1, float offset1)
-{
-#if defined(MULTIVIEW_ENABLED)
-    std3D_vrEyeRemap[0] = scale0;
-    std3D_vrEyeRemap[1] = offset0;
-    std3D_vrEyeRemap[2] = scale1;
-    std3D_vrEyeRemap[3] = offset1;
-#endif
-}
 
 // Set per-eye HUD horizontal shift (NDC) = forward-centering + depth convergence.
 void std3D_SetVRHudOffset(float eye0, float eye1)

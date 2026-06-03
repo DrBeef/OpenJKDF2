@@ -68,12 +68,12 @@ void rdCamera_SetMipmapScalar(flex_t val); // MOTS added
 
 // Added: VR asymmetric projection support
 #ifdef PLATFORM_VR
-void rdCamera_SetVRProjection(float* proj16);
 void rdCamera_SetVRTangents(float tanLeft, float tanRight, float tanUp, float tanDown);
 void rdCamera_SetVRRenderDimensions(int width, int height);
 void rdCamera_ClearVRProjection(void);
-int rdCamera_IsVRProjectionActive(void);
-float* rdCamera_GetVRProjection(void);
+// Added: GPU-side per-eye projection. When set, the CPU emits view-space vertices and the
+// GPU vertex shader applies the real per-eye projection matrix (proper OVR_multiview).
+extern int rdCamera_bGpuProjection;
 #endif
 
 #ifdef TARGET_TWL

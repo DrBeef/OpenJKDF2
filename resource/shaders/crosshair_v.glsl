@@ -3,7 +3,7 @@ layout(num_views = 2) in;
 layout(std140) uniform ViewMatrices {
     mat4 u_viewMatrices[2];
 };
-layout(std140) uniform ProjMatrices {
+layout(std140) uniform ProjectionMatrices {
     mat4 u_projMatrices[2];
 };
 #endif

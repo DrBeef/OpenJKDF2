@@ -13,7 +13,6 @@ static rdVector3 rdCamera_camRotation;
 static flex_t rdCamera_mipmapScalar = 1.0; // MOTS added
 
 #ifdef PLATFORM_VR
-static float rdCamera_vrProjection[16];
 static int rdCamera_bUsingVRProjection = 0;
 static float rdCamera_vrTanLeft = 0.0f;
 static float rdCamera_vrTanRight = 0.0f;
@@ -22,6 +21,10 @@ static float rdCamera_vrTanDown = 0.0f;
 // Added: VR render target dimensions (replaces canvas size for CPU projection)
 static int rdCamera_vrRenderWidth = 0;
 static int rdCamera_vrRenderHeight = 0;
+// Added: GPU-side projection (proper OVR_multiview). When set, the CPU emits view-space
+// (un-projected) vertices and the GPU vertex shader applies the real per-eye projection
+// matrix. Bypasses rdCamera_PerspProject and the rdCache z-normalization.
+int rdCamera_bGpuProjection = 0;
 #endif
 
 #ifdef TARGET_TWL
@@ -539,22 +542,6 @@ static void rdCamera_PerspProjectVR(rdVector3 *out, const rdVector3 *v)
     out->x = offsetX + v->x * scaleX;
     out->y = offsetY - v->z * scaleY;
     out->z = v->y;
-
-    // DEBUG: Log projection details for first few vertices
-    {
-        extern int stdVR_currentEye;
-        extern void VR_Log(const char* fmt, ...);
-        static int logCount[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (eye >= 0 && eye < 2) {
-            logCount[eye]++;
-            if (logCount[eye] <= 5 || logCount[eye] == 100 || logCount[eye] == 1000) {
-                VR_Log("ProjVR[eye%d] #%d: in=(%.1f,%.1f,%.1f) out=(%.1f,%.1f,%.4f) half=(%.0f,%.0f) tan=(%.3f,%.3f,%.3f,%.3f)\n",
-                    eye, logCount[eye], v->x, v->y, v->z, out->x, out->y, out->z,
-                    half_w, half_h, left, right, top, bottom);
-            }
-        }
-    }
 }
 #endif
 
@@ -592,22 +579,11 @@ void rdCamera_PerspProjectLst(rdVector3 *pVerticesOut, const rdVector3 *pVertice
 #endif
 
 #ifdef PLATFORM_VR
-    // DEBUG: Log whether VR projection is being used
-    {
-        extern int stdVR_currentEye;
-        extern int stdVR_bEnabled;
-        extern void VR_Log(const char* fmt, ...);
-        static int checkCount[2] = {0, 0};
-        int eye = stdVR_currentEye;
-        if (stdVR_bEnabled && eye >= 0 && eye < 2) {
-            checkCount[eye]++;
-            int useVR = rdCamera_UseVRProjection();
-            if (checkCount[eye] <= 3 || checkCount[eye] == 50 || checkCount[eye] == 500) {
-                VR_Log("ProjLst[eye%d] #%d: UseVR=%d, numVerts=%d, bUsingVR=%d, tanL=%.3f tanR=%.3f tanU=%.3f tanD=%.3f\n",
-                    eye, checkCount[eye], useVR, numVertices,
-                    rdCamera_bUsingVRProjection, rdCamera_vrTanLeft, rdCamera_vrTanRight, rdCamera_vrTanUp, rdCamera_vrTanDown);
-            }
-        }
+    // Added: GPU-side projection. Emit view-space verts unchanged; the GPU vertex shader
+    // applies the real per-eye projection matrix (proper OVR_multiview, no CPU projection).
+    if (rdCamera_bGpuProjection) {
+        memcpy(pVerticesOut, pVerticesIn, numVertices * sizeof(rdVector3));
+        return;
     }
     if (rdCamera_UseVRProjection()) {
         for (unsigned int i = 0; i < numVertices; i++)
@@ -678,6 +654,11 @@ void rdCamera_PerspProjectSquareLst(rdVector3 *pVerticesOut, const rdVector3 *pV
     return;
 #endif
 #ifdef PLATFORM_VR
+    // Added: GPU-side projection - pass view-space verts through (see rdCamera_PerspProjectLst).
+    if (rdCamera_bGpuProjection) {
+        memcpy(pVerticesOut, pVerticesIn, numVertices * sizeof(rdVector3));
+        return;
+    }
     if (rdCamera_UseVRProjection()) {
         for (unsigned int i = 0; i < numVertices; i++)
         {
@@ -791,14 +772,6 @@ void rdCamera_SetMipmapScalar(flex_t val)
 
 // Added: VR asymmetric projection support
 #ifdef PLATFORM_VR
-void rdCamera_SetVRProjection(float* proj16)
-{
-    if (proj16) {
-        memcpy(rdCamera_vrProjection, proj16, 16 * sizeof(float));
-        rdCamera_bUsingVRProjection = 1;
-    }
-}
-
 void rdCamera_SetVRTangents(float tanLeft, float tanRight, float tanUp, float tanDown)
 {
     rdCamera_vrTanLeft = tanLeft;
@@ -841,15 +814,5 @@ void rdCamera_ClearVRProjection(void)
     rdCamera_vrTanDown = 0.0f;
     rdCamera_vrRenderWidth = 0;
     rdCamera_vrRenderHeight = 0;
-}
-
-int rdCamera_IsVRProjectionActive(void)
-{
-    return rdCamera_bUsingVRProjection;
-}
-
-float* rdCamera_GetVRProjection(void)
-{
-    return rdCamera_vrProjection;
 }
 #endif // PLATFORM_VR

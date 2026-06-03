@@ -954,12 +954,12 @@ void sithCamera_PrepareFrameVR(void)
 // Set up VR view for a specific eye (called per-eye in the stereo loop)
 void sithCamera_SetVRView(int eye)
 {
-    extern void VR_Log(const char* fmt, ...);
-    static int vrViewCallCount = 0;
-    vrViewCallCount++;
-
     if (!sithCamera_currentCamera) return;
     if (eye < 0 || eye >= STDVR_EYE_COUNT) return;
+
+    // Per-eye path (Android fallback + -vrtest): keep the legacy CPU projection (each eye is
+    // rendered separately, so the GPU per-eye multiview projection does not apply here).
+    rdCamera_bGpuProjection = 0;
 
     // Get the combined camera+VR matrix
     rdMatrix34 vrViewMatrix;
@@ -981,34 +981,12 @@ void sithCamera_SetVRView(int eye)
     // This was missing before, causing stale camera state for one eye
     rdCamera_UpdateCamMatrix(&vrViewMatrix);
 
-    // Set the VR projection matrix for this eye
-    float proj[16];
+    // Per-eye CPU projection state (this fallback path projects on the CPU via
+    // rdCamera_PerspProjectVR, which uses the tangents + render dimensions below; the per-eye
+    // projection matrix itself is applied on the GPU in the multiview path, not here).
     stdVR_EyeView* pEye = &stdVR_clientInfo.eyes[eye];
-
-    // Reduced logging - only log first 4 calls (2 frames x 2 eyes)
-    if (vrViewCallCount <= 4) {
-        VR_Log("sithCamera_SetVRView: eye %d - fov(L/R/U/D)=(%.2f/%.2f/%.2f/%.2f) pos=(%.2f,%.2f,%.2f)\n",
-            eye, pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown,
-            vrViewMatrix.scale.x, vrViewMatrix.scale.y, vrViewMatrix.scale.z);
-    }
-
-    // Set per-eye frustum tangents for CPU clipping
     rdCamera_SetVRTangents(pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
-
-    // Set VR render dimensions for CPU projection (must match actual render target size)
     rdCamera_SetVRRenderDimensions(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
-
-    stdVR_GetEyeProjectionMatrix44(eye, proj,
-        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zNear : 0.01f,
-        sithCamera_currentCamera->rdCam.pClipFrustum ? sithCamera_currentCamera->rdCam.pClipFrustum->zFar : 1000.0f);
-
-    // Debug: Log projection matrix for each eye
-    if (vrViewCallCount <= 4) {
-        VR_Log("  Projection eye %d: [0]=%.4f [5]=%.4f [8]=%.4f [9]=%.4f\n",
-            eye, proj[0], proj[5], proj[8], proj[9]);
-    }
-
-    rdCamera_SetVRProjection(proj);
 }
 
 void sithCamera_RestoreVRView(void)
@@ -1033,8 +1011,12 @@ void sithCamera_SetVRViewMultiView(void)
         return;
     }
 
+    // Proper GPU per-eye projection: the CPU emits view-space (un-projected) geometry relative to
+    // the center/head view; the GPU vertex shader applies the real per-eye projection matrix via
+    // gl_ViewID_OVR (stdVR_SetMultiViewMatrices). See rdCamera_bGpuProjection.
+    rdCamera_bGpuProjection = 1;
+
     // For MultiView, we use the center/head view (no IPD offset)
-    // The shader will apply per-eye transforms via gl_ViewID_OVR
     rdMatrix34 centerView;
     stdVR_CombineCameraWithHMD(&sithCamera_currentCamera->viewMat, &centerView);
 
@@ -1049,10 +1031,10 @@ void sithCamera_SetVRViewMultiView(void)
     // Update global camera matrix
     rdCamera_UpdateCamMatrix(&centerView);
 
-    // Render the UNION (combined) frustum: horizontal [eyes[0].fovLeft .. eyes[1].fovRight],
-    // vertical from eye 0. Wide enough that the clip-space stereo parallax doesn't push near
-    // edge geometry across the clip boundary (narrowing this re-introduced view-1 slivers on
-    // Quest). Submitted as-is (identity remap) - matches the clean Quest config.
+    // CPU-clip against the UNION (combined) frustum: horizontal [eyes[0].fovLeft .. eyes[1].fovRight],
+    // vertical from eye 0. This is wide enough to enclose BOTH eyes' real per-eye frustums, so no
+    // geometry visible to either eye is clipped away on the CPU; the GPU then clips each eye's
+    // surplus at NDC after applying that eye's real projection matrix.
     float fovLeft = stdVR_clientInfo.eyes[0].fovLeft;
     float fovRight = stdVR_clientInfo.eyes[1].fovRight;
     float fovUp = stdVR_clientInfo.eyes[0].fovUp;

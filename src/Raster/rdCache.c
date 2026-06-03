@@ -11,6 +11,7 @@
 
 #ifdef PLATFORM_VR
 #include "SDL2_helper.h"  // For GL headers
+#include "Engine/rdCamera.h"  // For rdCamera_bGpuProjection
 #endif
 
 #ifdef RDCACHE_RENDER_LINES
@@ -751,6 +752,16 @@ int rdCache_SendFaceListToHardware()
                 v38 = d3dvtx_zval * invZFar;
                 if ( rdCache_dword_865258 != 16 )
                     v38 = 1.0 - v38;
+#ifdef PLATFORM_VR
+                // Added: GPU-side projection - carry the raw engine view-space depth (z = up
+                // axis) so coord3d = (right, forward, up). The GPU vertex shader applies the real
+                // per-eye projection matrix; the CPU z-normalization above is bypassed. nx is the
+                // 1/depth term used by the legacy w-reconstruction, unused under GPU projection.
+                if (rdCamera_bGpuProjection) {
+                    v38 = iterating_6c_vtxs_[vtx_idx].z;
+                    d3dvtx_zval = 0.0;
+                }
+#endif
 #endif
 
 #ifdef TARGET_TWL
@@ -1112,6 +1123,13 @@ LABEL_232:
             v89 = v88 * invZFar;
             if ( rdCache_dword_865258 != 16 )
                 v89 = 1.0 - v89;
+#ifdef PLATFORM_VR
+            // Added: GPU-side projection - carry raw engine view-space depth (see above).
+            if (rdCamera_bGpuProjection) {
+                v89 = active_6c->vertices[tmpiter].z;
+                v88 = 0.0;
+            }
+#endif
 #endif
 #ifdef TARGET_TWL
             rdCache_aHWVertices[rdCache_totalVerts].x = ((active_6c->vertices[tmpiter].x));  // Added: The original game rounded to ints here (with ceilf?)

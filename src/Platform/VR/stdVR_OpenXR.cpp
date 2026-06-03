@@ -2189,30 +2189,15 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             // MultiView: single array swapchain (single-pass stereo). On desktop this is the
             // only path; on Android it is preferred, with the per-eye fallback below.
             if (vrMultiViewEnabled && xrMultiViewSwapchain != XR_NULL_HANDLE) {
-                // Submit per-eye PER-EYE pose always. The FOV is platform-gated to match the
-                // eye-buffer content (see the remap gate in stdVR_SetMultiViewMatrices):
-                //  - DESKTOP/PCVR: each eye's NATIVE FOV (the shader remaps the union render into
-                //    each eye's native canted frustum) -> correct convergence on Oculus.
-                //  - QUEST: the UNION FOV (identity remap, no magnification) -> the Adreno tiled GPU
-                //    keeps view-1 geometry, and union ~= Quest's own per-eye FOV anyway.
-                // Both paths are single-pass multiview with the identical render; only the FOV
-                // (and the remap uniform) differ, driven by GPU capability + device FOV.
-#if defined(TARGET_ANDROID_NATIVE_GLES)
-                XrFovf combinedFov;
-                combinedFov.angleLeft  = xrViews[0].fov.angleLeft;
-                combinedFov.angleRight = xrViews[1].fov.angleRight;
-                combinedFov.angleUp    = xrViews[0].fov.angleUp;
-                combinedFov.angleDown  = xrViews[0].fov.angleDown;
-#endif
+                // Submit each eye's REAL per-eye pose + native FOV on BOTH platforms. The GPU vertex
+                // shader projects the view-space scene with each eye's real asymmetric projection
+                // matrix (stdVR_SetMultiViewMatrices), so the submitted frustum is simply each eye's
+                // native OpenXR FOV - correct convergence everywhere, no union/remap, no platform gate.
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
                     projectionViews[eye].next = nullptr;
                     projectionViews[eye].pose = xrViews[eye].pose;
-#if defined(TARGET_ANDROID_NATIVE_GLES)
-                    projectionViews[eye].fov = combinedFov;       // Quest: union FOV (identity remap)
-#else
-                    projectionViews[eye].fov = xrViews[eye].fov;  // PCVR: native per-eye FOV (remap)
-#endif
+                    projectionViews[eye].fov = xrViews[eye].fov;
                     projectionViews[eye].subImage.swapchain = xrMultiViewSwapchain;
                     projectionViews[eye].subImage.imageRect.offset = { 0, 0 };
                     projectionViews[eye].subImage.imageRect.extent = {
