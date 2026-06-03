@@ -134,6 +134,10 @@ void std3D_SetMultiViewActive(int active);
 void std3D_ClearMultiViewActive(void);
 // Per-eye offsets for stereo parallax in MultiView
 void std3D_SetEyeOffsets(float leftOffset, float rightOffset);
+// Per-eye asymmetric-frustum remap (scale/offset) for the scene shader
+void std3D_SetVREyeRemap(float scale0, float offset0, float scale1, float offset1);
+// Per-eye HUD horizontal shift (NDC) for the baked HUD: forward-centering + depth convergence
+void std3D_SetVRHudOffset(float eye0, float eye1);
 // VR debug helpers
 void std3D_DebugLogGLState(const char* tag, int eye, int frame);
 void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame);

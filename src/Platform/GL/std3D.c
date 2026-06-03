@@ -166,6 +166,19 @@ GLint uniform_vr_debug_mode; // VR debug mode uniform
 #if defined(MULTIVIEW_ENABLED)
 GLint uniform_eyeOffsets;  // MultiView per-eye horizontal offsets
 float std3D_eyeOffsets[2] = { 0.0f, 0.0f };  // [0]=left, [1]=right
+// Added: per-eye asymmetric-frustum remap for the scene shader (Oculus PCVR fix).
+// Two vec2 (one per eye): .x = horizontal scale, .y = horizontal offset, applied in
+// default_v.glsl as ndc_eye = scale*(ndc_combined + parallax*(1-z)) + offset. Default
+// (1,0) is identity = previous symmetric behaviour. Parallax still comes from the view UBO.
+GLint uniform_vrEyeRemap;
+float std3D_vrEyeRemap[4] = { 1.0f, 0.0f, 1.0f, 0.0f };  // {scale0,offset0, scale1,offset1}
+// Per-eye HUD horizontal shift in NATIVE-eye NDC, used ONLY by the baked-HUD shaders
+// (menu/ui multiview). The HUD is authored directly in native-eye NDC (one draw -> both eye
+// layers, each submitted with its own native FOV), so unlike the scene it needs NO combined->
+// native scale (which would stretch the HUD's width and break its aspect). This single per-eye
+// shift = forward-centering (-nativeCenter/nativeWidth, so the HUD sits at the binocular
+// straight-ahead) + depth convergence (+/- IPD/(d*nativeWidth)). {eye0, eye1}.
+float std3D_vrHudOffset[2] = { 0.0f, 0.0f };
 #endif
 
 GLint programMenu_attribute_coord3d, programMenu_attribute_v_color, programMenu_attribute_v_uv, programMenu_attribute_v_norm;
@@ -181,6 +194,12 @@ std3DSimpleTexStage std3D_uiProgram;
 #if defined(MULTIVIEW_ENABLED)
 std3DSimpleTexStage std3D_uiProgramMV;  // MultiView UI program: bakes the HUD into both eye layers
 static int std3D_uiProgramMVLoaded = 0;
+// MultiView variant of programMenu: bakes the 2D HUD overlay into BOTH eye layers (the plain
+// programMenu is single-view, so it would only reach one eye of the multiview array FBO).
+GLuint programMenuMV;
+static int programMenuMVLoaded = 0;
+GLint programMenuMV_attribute_coord3d, programMenuMV_attribute_v_color, programMenuMV_attribute_v_uv;
+GLint programMenuMV_uniform_mvp, programMenuMV_uniform_tex, programMenuMV_uniform_displayPalette, programMenuMV_uniform_vrHudOffset;
 #endif
 std3DSimpleTexStage std3D_texFboStage;
 std3DSimpleTexStage std3D_blurStage;
@@ -573,6 +592,23 @@ int init_resources()
         std3D_uiProgramMVLoaded = std3D_loadSimpleTexProgram("shaders/ui", &std3D_uiProgramMV) ? 1 : 0;
         g_shaderForceMultiView = 0;
         if (!std3D_uiProgramMVLoaded) stdPlatform_Printf("std3D: WARNING - failed to load MultiView ui shader\n");
+
+        // MultiView variant of the menu program for baking the 2D HUD overlay into both eyes.
+        g_shaderForceMultiView = 1;
+        programMenuMV = std3D_loadProgram("shaders/menu");
+        g_shaderForceMultiView = 0;
+        programMenuMVLoaded = (programMenuMV != 0) ? 1 : 0;
+        if (!programMenuMVLoaded) {
+            stdPlatform_Printf("std3D: WARNING - failed to load MultiView menu shader\n");
+        } else {
+            programMenuMV_attribute_coord3d     = std3D_tryFindAttribute(programMenuMV, "coord3d");
+            programMenuMV_attribute_v_color     = std3D_tryFindAttribute(programMenuMV, "v_color");
+            programMenuMV_attribute_v_uv        = std3D_tryFindAttribute(programMenuMV, "v_uv");
+            programMenuMV_uniform_mvp           = std3D_tryFindUniform(programMenuMV, "mvp");
+            programMenuMV_uniform_tex           = std3D_tryFindUniform(programMenuMV, "tex");
+            programMenuMV_uniform_displayPalette = std3D_tryFindUniform(programMenuMV, "displayPalette");
+            programMenuMV_uniform_vrHudOffset   = std3D_tryFindUniform(programMenuMV, "u_vrHudOffset");
+        }
     }
 #endif
     stdPlatform_Printf("std3D: Loading shader 'vignette'...\n");
@@ -630,6 +666,7 @@ int init_resources()
     uniform_vr_debug_mode = std3D_tryFindUniform(programDefault, "vr_debug_mode");
 #if defined(MULTIVIEW_ENABLED)
     uniform_eyeOffsets = std3D_tryFindUniform(programDefault, "u_eyeOffsets");
+    uniform_vrEyeRemap = std3D_tryFindUniform(programDefault, "u_vrEyeRemap");
 #endif
 
     programMenu_attribute_coord3d = std3D_tryFindAttribute(programMenu, "coord3d");
@@ -844,6 +881,9 @@ void std3D_FreeResources()
 
     glDeleteProgram(programDefault);
     glDeleteProgram(programMenu);
+#if defined(MULTIVIEW_ENABLED)
+    if (programMenuMV) { glDeleteProgram(programMenuMV); programMenuMV = 0; programMenuMVLoaded = 0; }
+#endif
     std3D_deleteFramebuffer(&std3D_framebuffers[0]);
     std3D_deleteFramebuffer(&std3D_framebuffers[1]);
     glDeleteTextures(1, &blank_tex);
@@ -2819,6 +2859,10 @@ void std3D_DrawRenderList()
     if (std3D_multiViewActive && uniform_eyeOffsets >= 0) {
         glUniform2fv(uniform_eyeOffsets, 1, std3D_eyeOffsets);
     }
+    // Set per-eye asymmetric-frustum remap (scale/offset) for the scene shader
+    if (std3D_multiViewActive && uniform_vrEyeRemap >= 0) {
+        glUniform2fv(uniform_vrEyeRemap, 2, std3D_vrEyeRemap);
+    }
 #endif
 
 #if defined(MULTIVIEW_ENABLED)
@@ -3058,7 +3102,7 @@ void std3D_DrawRenderList()
     {
         glCullFace(GL_FRONT);
     }
-    
+
     for (int j = 0; j < GL_tmpTrisAmt; j++)
     {
         if (tris[j].texture != last_tex || tris[j].flags != last_flags)
@@ -3801,13 +3845,29 @@ void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
                (int)Video_overlayMapBuffer.format.height);
     }
 
+    // Select the menu program. When baking into the multiview eye buffer, use the MultiView
+    // variant (num_views=2) so the HUD reaches BOTH eye layers; the plain programMenu is
+    // single-view and would only fill one eye.
+    GLuint mprog = programMenu;
+    GLint a_coord = programMenu_attribute_coord3d, a_color = programMenu_attribute_v_color, a_uv = programMenu_attribute_v_uv;
+    GLint u_mvp = programMenu_uniform_mvp, u_tex = programMenu_uniform_tex, u_pal = programMenu_uniform_displayPalette;
+    int overlayUseMV = 0;
+#if defined(MULTIVIEW_ENABLED)
+    if (std3D_multiViewActive && programMenuMVLoaded) {
+        mprog   = programMenuMV;
+        a_coord = programMenuMV_attribute_coord3d; a_color = programMenuMV_attribute_v_color; a_uv = programMenuMV_attribute_v_uv;
+        u_mvp   = programMenuMV_uniform_mvp; u_tex = programMenuMV_uniform_tex; u_pal = programMenuMV_uniform_displayPalette;
+        overlayUseMV = 1;
+    }
+#endif
+
     // Set up GL state for 2D overlay rendering (matching std3D_DrawMenu pattern)
     glDepthMask(GL_TRUE);
     glCullFace(GL_FRONT);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthFunc(GL_ALWAYS);
-    glUseProgram(programMenu);
+    glUseProgram(mprog);
 
     // Set viewport to target size
     glViewport(0, 0, targetWidth, targetHeight);
@@ -3861,34 +3921,83 @@ void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
 
     // Set uniforms for menu shader
     glActiveTexture(GL_TEXTURE0 + 0);
-    glUniform1i(programMenu_uniform_tex, 0);
-    glUniform1i(programMenu_uniform_displayPalette, 1);
+    glUniform1i(u_tex, 0);
+    glUniform1i(u_pal, 1);
+
+#if defined(MULTIVIEW_ENABLED)
+    // Per-eye HUD shift (forward-centering + depth convergence) so it fuses at a comfortable
+    // distance, centred on the binocular straight-ahead. No scale -> aspect preserved.
+    if (overlayUseMV && programMenuMV_uniform_vrHudOffset >= 0) {
+        glUniform1fv(programMenuMV_uniform_vrHudOffset, 2, std3D_vrHudOffset);
+    }
+#endif
 
     // Upload vertices
     glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
     glBufferData(GL_ARRAY_BUFFER, GL_tmpVerticesAmt * sizeof(D3DVERTEX), GL_tmpVertices, GL_STREAM_DRAW);
 
-    glVertexAttribPointer(programMenu_attribute_coord3d, 3, GL_FLOAT, GL_FALSE,
+    glVertexAttribPointer(a_coord, 3, GL_FLOAT, GL_FALSE,
                           sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, x));
-    glVertexAttribPointer(programMenu_attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE,
+    glVertexAttribPointer(a_color, 4, GL_UNSIGNED_BYTE, GL_TRUE,
                           sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, color));
-    glVertexAttribPointer(programMenu_attribute_v_uv, 2, GL_FLOAT, GL_FALSE,
+    glVertexAttribPointer(a_uv, 2, GL_FLOAT, GL_FALSE,
                           sizeof(D3DVERTEX), (GLvoid*)offsetof(D3DVERTEX, tu));
 
-    glEnableVertexAttribArray(programMenu_attribute_coord3d);
-    glEnableVertexAttribArray(programMenu_attribute_v_color);
-    glEnableVertexAttribArray(programMenu_attribute_v_uv);
+    glEnableVertexAttribArray(a_coord);
+    glEnableVertexAttribArray(a_color);
+    glEnableVertexAttribArray(a_uv);
 
-    // Set up transformation matrix
-    float scaleX = 1.0f / ((float)targetWidth / 2.0f);
-    float scaleY = 1.0f / ((float)targetHeight / 2.0f);
-    float d3dmat[16] = {
-       scaleX, 0, 0, 0,
-       0, -scaleY, 0, 0,
-       0, 0, 1, 0,
-       -(targetWidth/2.0f)*scaleX, (targetHeight/2.0f)*scaleY, -1, 1
-    };
-    glUniformMatrix4fv(programMenu_uniform_mvp, 1, GL_FALSE, d3dmat);
+    // Set up transformation matrix.
+    float d3dmat[16];
+#if defined(MULTIVIEW_ENABLED)
+    {
+        // VR HUD "safe zone": map the HUD quad into an explicit, independently-sized NDC rect in
+        // the comfortable central/lower viewing zone (rather than stretching it across the very
+        // wide eye buffer). Mapped from the quad's ACTUAL bounding box so it's robust to any
+        // window/eye-buffer size mismatch. Applied UNCONDITIONALLY (not gated on overlayUseMV) so
+        // the layout always responds to the tunables even if the MultiView menu program isn't
+        // active; per-eye fusion/depth is added in the shader (programMenuMV only). All tunable
+        // live in the VR Options menu (persisted in the player config).
+        extern float jkPlayer_vrHudWidth, jkPlayer_vrHudHeight, jkPlayer_vrHudPosX, jkPlayer_vrHudPosY;
+        const float hudHFrac   = jkPlayer_vrHudWidth;   // HUD half-WIDTH  in NDC (smaller = narrower)
+        const float hudVFrac   = jkPlayer_vrHudHeight;  // HUD half-HEIGHT in NDC (smaller = shorter)
+        const float hudCenterY = jkPlayer_vrHudPosY;    // vertical centre in NDC (more negative = lower)
+        const float hudCenterX = jkPlayer_vrHudPosX;    // horizontal centre in NDC
+
+        // Bounding box of the quad just built by std3D_DrawMenuSubrect.
+        float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+        for (int i = 0; i < GL_tmpVerticesAmt; i++) {
+            float vx = GL_tmpVertices[i].x, vy = GL_tmpVertices[i].y;
+            if (vx < minX) minX = vx; if (vx > maxX) maxX = vx;
+            if (vy < minY) minY = vy; if (vy > maxY) maxY = vy;
+        }
+        float qw = maxX - minX, qh = maxY - minY;
+        if (qw < 1.0f) qw = 1.0f;
+        if (qh < 1.0f) qh = 1.0f;
+        float sx = (2.0f * hudHFrac) / qw;
+        float sy = (2.0f * hudVFrac) / qh;
+        float d3dmatMV[16] = {
+            sx, 0, 0, 0,
+            0, -sy, 0, 0,
+            0, 0, 1, 0,
+            hudCenterX - hudHFrac - sx * minX, hudCenterY + hudVFrac + sy * minY, -1, 1
+        };
+        memcpy(d3dmat, d3dmatMV, sizeof(d3dmat));
+    }
+#else
+    {
+        float scaleX = 1.0f / ((float)targetWidth / 2.0f);
+        float scaleY = 1.0f / ((float)targetHeight / 2.0f);
+        float d3dmatMono[16] = {
+           scaleX, 0, 0, 0,
+           0, -scaleY, 0, 0,
+           0, 0, 1, 0,
+           -(targetWidth/2.0f)*scaleX, (targetHeight/2.0f)*scaleY, -1, 1
+        };
+        memcpy(d3dmat, d3dmatMono, sizeof(d3dmat));
+    }
+#endif
+    glUniformMatrix4fv(u_mvp, 1, GL_FALSE, d3dmat);
 
     // Upload and draw indices
     for (int j = 0; j < GL_tmpTrisAmt; j++) {
@@ -3904,9 +4013,9 @@ void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
     glDrawElements(GL_TRIANGLES, tris_size / sizeof(GLushort), GL_UNSIGNED_SHORT, 0);
 
     // Cleanup
-    glDisableVertexAttribArray(programMenu_attribute_v_uv);
-    glDisableVertexAttribArray(programMenu_attribute_v_color);
-    glDisableVertexAttribArray(programMenu_attribute_coord3d);
+    glDisableVertexAttribArray(a_uv);
+    glDisableVertexAttribArray(a_color);
+    glDisableVertexAttribArray(a_coord);
 
     GL_tmpVerticesAmt = 0;
     GL_tmpTrisAmt = 0;
@@ -3993,6 +4102,15 @@ void std3D_DrawUIRenderListToCurrentFBO(int fboWidth, int fboHeight, float dstX,
     glUniformMatrix4fv(std3D_uiProgram.uniform_mvp, 1, GL_FALSE, d3dmat);
     glViewport(0, 0, fboWidth, fboHeight);
     glUniform2f(std3D_uiProgram.uniform_iResolution, internalWidth, internalHeight);
+
+#if defined(MULTIVIEW_ENABLED)
+    // When baking into the multiview eye buffer, feed the per-eye asymmetric-frustum remap so
+    // the HUD lands at the same WORLD angle in both eyes (fuses). Same data as the scene shader.
+    if (uiUseMV) {
+        GLint locO = glGetUniformLocation(std3D_uiProgram.program, "u_vrHudOffset");
+        if (locO >= 0) glUniform1fv(locO, 2, std3D_vrHudOffset);
+    }
+#endif
 
     glUniform1f(std3D_uiProgram.uniform_param1, 1.0f);
     glUniform1f(std3D_uiProgram.uniform_param2, 1.0f);
@@ -5093,6 +5211,27 @@ void std3D_SetEyeOffsets(float leftOffset, float rightOffset)
 #if defined(MULTIVIEW_ENABLED)
     std3D_eyeOffsets[0] = leftOffset;
     std3D_eyeOffsets[1] = rightOffset;
+#endif
+}
+
+// Set per-eye asymmetric-frustum remap for the scene shader (Oculus PCVR fix).
+// {scale0,offset0, scale1,offset1}; (1,0) is identity (symmetric headsets).
+void std3D_SetVREyeRemap(float scale0, float offset0, float scale1, float offset1)
+{
+#if defined(MULTIVIEW_ENABLED)
+    std3D_vrEyeRemap[0] = scale0;
+    std3D_vrEyeRemap[1] = offset0;
+    std3D_vrEyeRemap[2] = scale1;
+    std3D_vrEyeRemap[3] = offset1;
+#endif
+}
+
+// Set per-eye HUD horizontal shift (NDC) = forward-centering + depth convergence.
+void std3D_SetVRHudOffset(float eye0, float eye1)
+{
+#if defined(MULTIVIEW_ENABLED)
+    std3D_vrHudOffset[0] = eye0;
+    std3D_vrHudOffset[1] = eye1;
 #endif
 }
 

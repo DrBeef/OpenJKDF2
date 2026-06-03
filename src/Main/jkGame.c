@@ -504,8 +504,39 @@ int jkGame_Update()
                             stdVR_WeaponWheel_Draw(hudW, hudH);
                         }
 
+                        // Destination rect for the UI flush.
+                        float dstX, dstY, dstW, dstH;
+                        if (stdVR_WeaponWheel_IsActive()) {
+                            // Weapon/force selector: keep it CENTRED at a fixed comfortable size,
+                            // NOT subject to the HUD X/Y/size tuning (that misaligns the radial
+                            // selector and makes it hard to use). Aspect-preserving, centred, and
+                            // pushed further back than the HUD so it doesn't crowd the view.
+                            dstH = (float)hudH * 0.45f;
+                            dstW = dstH * ((float)Window_xSize / (float)Window_ySize);
+                            if (dstW > (float)hudW) { dstW = (float)hudW; dstH = dstW * ((float)Window_ySize / (float)Window_xSize); }
+                            dstX = ((float)hudW - dstW) * 0.5f;
+                            dstY = ((float)hudH - dstH) * 0.5f;
+                            stdVR_SetHudOffsetForDepth(1.5f);  // selector sits ~1.5m back
+                        } else {
+                            // VR HUD placement: map the 2D HUD into an NDC rect centred at (PosX,PosY)
+                            // with half-extents (Width,Height), all tunable live in the VR Options menu.
+                            // Convert NDC -> eye-buffer pixels (NDC [-1,1] spans the buffer; Y flipped).
+                            // The multiview UI shader adds per-eye forward-centering + depth convergence.
+                            extern float jkPlayer_vrHudWidth, jkPlayer_vrHudHeight, jkPlayer_vrHudPosX, jkPlayer_vrHudPosY;
+                            float hHalfW = jkPlayer_vrHudWidth,  hHalfH = jkPlayer_vrHudHeight;
+                            float hPosX  = jkPlayer_vrHudPosX,   hPosY  = jkPlayer_vrHudPosY;
+                            if (hHalfW < 0.02f) hHalfW = 0.02f; if (hHalfW > 1.60f) hHalfW = 1.60f;
+                            if (hHalfH < 0.02f) hHalfH = 0.02f; if (hHalfH > 1.60f) hHalfH = 1.60f;
+                            if (hPosX < -1.05f) hPosX = -1.05f; if (hPosX > 1.05f) hPosX = 1.05f;
+                            if (hPosY < -1.35f) hPosY = -1.35f; if (hPosY > 1.05f) hPosY = 1.05f;
+                            dstW = hHalfW * (float)hudW;
+                            dstH = hHalfH * (float)hudH;
+                            dstX = ((float)hudW * 0.5f) * (1.0f + hPosX - hHalfW);
+                            dstY = ((float)hudH * 0.5f) * (1.0f - hPosY - hHalfH);
+                        }
+
                         // Flush queued UI + overlay into the (bound) multiview eye buffer
-                        std3D_DrawUIRenderListToCurrentFBO(hudW, hudH, 0.0f, 0.0f, (float)hudW, (float)hudH);
+                        std3D_DrawUIRenderListToCurrentFBO(hudW, hudH, dstX, dstY, dstW, dstH);
                         std3D_DrawOverlayToCurrentFBO(hudW, hudH);
                     }
 

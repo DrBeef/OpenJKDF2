@@ -189,6 +189,11 @@ extern int jkPlayer_vrWeaponCrosshair;   // Show in-world weapon crosshair (0/1)
 extern int jkPlayer_vrDominantHand;      // 0=left, 1=right
 extern int jkPlayer_vrMoveDirection;     // 0=head, 1=controller
 extern float jkPlayer_vrSupersampling;   // VR render scale multiplier
+extern float jkPlayer_vrHudWidth;        // Baked HUD half-width in NDC
+extern float jkPlayer_vrHudHeight;       // Baked HUD half-height in NDC
+extern float jkPlayer_vrHudPosX;         // Baked HUD horizontal centre in NDC
+extern float jkPlayer_vrHudPosY;         // Baked HUD vertical centre in NDC
+extern float jkPlayer_vrHudDepth;        // Baked HUD virtual depth in metres
 #endif // PLATFORM_VR
 
 #define HUD_SCALED(x) ((int)((flex_t)(x) * jkPlayer_hudScale)) // FLEXTODO

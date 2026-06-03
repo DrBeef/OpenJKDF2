@@ -54,6 +54,7 @@ int stdVR_PrepareMultiViewBuffer(void); // Acquire and bind MultiView swapchain 
 int stdVR_FinishMultiViewBuffer(void);  // Release MultiView swapchain
 int stdVR_GetMultiViewFBO(void);        // Get the MultiView FBO (0 if not active)
 void stdVR_SetMultiViewMatrices(float zNear, float zFar);  // Upload both eye view/proj matrices to UBOs
+void stdVR_SetHudOffsetForDepth(float depthMeters);        // Set baked-HUD per-eye shift for a virtual depth
 
 // Desktop mirror (debug aid): blit the last-rendered VR buffer to the SDL window.
 // Caller does the SDL_GL_SwapWindow afterwards. See stdVR_mirrorMode in stdVR_OpenXR.h.
@@ -161,6 +162,7 @@ static inline int stdVR_PrepareMultiViewBuffer(void) { return 0; }
 static inline int stdVR_FinishMultiViewBuffer(void) { return 0; }
 static inline int stdVR_GetMultiViewFBO(void) { return 0; }
 static inline void stdVR_SetMultiViewMatrices(float zNear, float zFar) { (void)zNear; (void)zFar; }
+static inline void stdVR_SetHudOffsetForDepth(float depthMeters) { (void)depthMeters; }
 static inline int stdVR_PrepareHudBuffer(void) { return 0; }
 static inline int stdVR_FinishHudBuffer(void) { return 0; }
 static inline int stdVR_GetHudFBO(void) { return 0; }

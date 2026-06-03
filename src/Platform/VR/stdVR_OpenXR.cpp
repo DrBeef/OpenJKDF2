@@ -2097,8 +2097,16 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
     std::vector<XrCompositionLayerBaseHeader*> layers;
     XrCompositionLayerProjection projectionLayer = { XR_TYPE_COMPOSITION_LAYER_PROJECTION };
     projectionLayer.next = nullptr;
-    projectionLayer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
-        XR_COMPOSITION_LAYER_CORRECT_CHROMATIC_ABERRATION_BIT;
+    // The 3D scene layer is OPAQUE (the HUD is baked into the eye buffer, not a separate
+    // alpha-blended layer here). Do NOT set XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT:
+    // it makes the compositor blend the eye image against the (opaque black) environment using
+    // the eye buffer's per-texel alpha. The scene's accumulated framebuffer alpha is not
+    // guaranteed to be 1.0 where transparent/blended surfaces overlap, and because that overlap
+    // pattern differs per eye (stereo parallax) the right layer ends up with low-alpha holes the
+    // left layer lacks -> black wedges on Quest (SteamVR's compositor ignores it for opaque
+    // projection layers, which is why PCVR was unaffected). Keep the layer fully opaque.
+    // Unified: applies to both PCVR and Quest.
+    projectionLayer.layerFlags = XR_COMPOSITION_LAYER_CORRECT_CHROMATIC_ABERRATION_BIT;
     std::vector<XrCompositionLayerProjectionView> projectionViews(STDVR_EYE_COUNT, { XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW });
     XrCompositionLayerQuad quadLayer = { XR_TYPE_COMPOSITION_LAYER_QUAD };
 
@@ -2181,18 +2189,30 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
             // MultiView: single array swapchain (single-pass stereo). On desktop this is the
             // only path; on Android it is preferred, with the per-eye fallback below.
             if (vrMultiViewEnabled && xrMultiViewSwapchain != XR_NULL_HANDLE) {
-                //Calculate an average FOV used for both eyes
-                XrFovf fov;
-                fov.angleLeft = xrViews[0].fov.angleLeft;
-                fov.angleRight = xrViews[1].fov.angleRight;
-                fov.angleUp = xrViews[0].fov.angleUp;
-                fov.angleDown = xrViews[0].fov.angleDown;
-
+                // Submit per-eye PER-EYE pose always. The FOV is platform-gated to match the
+                // eye-buffer content (see the remap gate in stdVR_SetMultiViewMatrices):
+                //  - DESKTOP/PCVR: each eye's NATIVE FOV (the shader remaps the union render into
+                //    each eye's native canted frustum) -> correct convergence on Oculus.
+                //  - QUEST: the UNION FOV (identity remap, no magnification) -> the Adreno tiled GPU
+                //    keeps view-1 geometry, and union ~= Quest's own per-eye FOV anyway.
+                // Both paths are single-pass multiview with the identical render; only the FOV
+                // (and the remap uniform) differ, driven by GPU capability + device FOV.
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+                XrFovf combinedFov;
+                combinedFov.angleLeft  = xrViews[0].fov.angleLeft;
+                combinedFov.angleRight = xrViews[1].fov.angleRight;
+                combinedFov.angleUp    = xrViews[0].fov.angleUp;
+                combinedFov.angleDown  = xrViews[0].fov.angleDown;
+#endif
                 for (int eye = 0; eye < STDVR_EYE_COUNT; eye++) {
                     projectionViews[eye].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
                     projectionViews[eye].next = nullptr;
-                    projectionViews[eye].pose = xrViews[eye].pose;  // Per-eye pose for position
-                    projectionViews[eye].fov = fov;
+                    projectionViews[eye].pose = xrViews[eye].pose;
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+                    projectionViews[eye].fov = combinedFov;       // Quest: union FOV (identity remap)
+#else
+                    projectionViews[eye].fov = xrViews[eye].fov;  // PCVR: native per-eye FOV (remap)
+#endif
                     projectionViews[eye].subImage.swapchain = xrMultiViewSwapchain;
                     projectionViews[eye].subImage.imageRect.offset = { 0, 0 };
                     projectionViews[eye].subImage.imageRect.extent = {
@@ -2264,27 +2284,6 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
     endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     endInfo.layerCount = (uint32_t)layers.size();
     endInfo.layers = layers.data();
-
-    // Debug: log the layer composition periodically so we can see exactly what is submitted
-    // (screen-layer/menu quad vs projection + HUD quad) per frame.
-    {
-        static int endFrameLogCount = 0;
-        static long screenLayerSubmits = 0;   // cumulative frames submitted as screen-layer (briefing)
-        static long projectionSubmits = 0;     // cumulative frames submitted as gameplay projection
-        endFrameLogCount++;
-        if (stdVR_clientInfo.bUseScreenLayer) screenLayerSubmits++; else projectionSubmits++;
-        // Log every 30 frames: screen-layer vs projection cumulative submits, AND the
-        // predictedDisplayTime delta (if it's frozen, WaitFrame is being skipped and SteamVR
-        // discards our frames, showing the last good one = the briefing).
-        static long long prevDisplayTime = 0;
-        long long dt = (long long)xrFrameState.predictedDisplayTime;
-        if (endFrameLogCount <= 20 || endFrameLogCount % 30 == 0) {
-            VR_Log("stdVR_OpenXR_EndFrame #%d: bUseScreenLayer=%d layerCount=%u cum[screenLayer=%ld proj=%ld] displayTimeDelta=%lldms\n",
-                endFrameLogCount, stdVR_clientInfo.bUseScreenLayer, (unsigned)layers.size(),
-                screenLayerSubmits, projectionSubmits, (dt - prevDisplayTime) / 1000000);
-        }
-        prevDisplayTime = dt;
-    }
 
     XrResult result = xrEndFrame(xrSession, &endInfo);
     if (XR_FAILED(result)) {
@@ -2545,13 +2544,15 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
     }
 
     // Capture the left-eye content for the desktop mirror while the swapchain image is still
-    // acquired (per-eye / menu path).
+    // acquired (per-eye / menu path). DESKTOP ONLY (see note in FinishMultiViewBuffer).
+#if !defined(TARGET_ANDROID_NATIVE_GLES)
     if (eye == 0 && !xrSwapchainImages[eye].empty()) {
         stdVR_OpenXR_CaptureEyeMirror(xrSwapchainImages[eye][xrSwapchainImageIndex[eye]].image,
             false, 0,
             xrConfigViews[eye].recommendedImageRectWidth,
             xrConfigViews[eye].recommendedImageRectHeight);
     }
+#endif
 
     // Restore std3D's window FBO routing
     std3D_ClearVRTargetFBO();
@@ -2713,18 +2714,17 @@ extern "C" int stdVR_OpenXR_FinishMultiViewBuffer(void)
     GLuint fbo = vrMultiViewFBOs[xrMultiViewSwapchainImageIndex];
 
     // Capture the left-eye layer for the desktop mirror while the image is still acquired.
+    // DESKTOP ONLY: on Android/Quest there is no desktop mirror window, and reading from the
+    // multiview swapchain image here (glCopyTexSubImage2D) forces a tile resolve mid-finish that
+    // leaves the right-eye layer incompletely rendered (large black regions).
+#if !defined(TARGET_ANDROID_NATIVE_GLES)
     if (xrMultiViewSwapchainImageIndex < xrMultiViewSwapchainImages.size()) {
         stdVR_OpenXR_CaptureEyeMirror(xrMultiViewSwapchainImages[xrMultiViewSwapchainImageIndex].image,
             true, VR_MV_LAYER_OFFSET,
             xrConfigViews[0].recommendedImageRectWidth,
             xrConfigViews[0].recommendedImageRectHeight);
-        // Debug: periodically dump the projection/eye buffer (see DumpEyeMirror) to determine
-        // whether the obscuring briefing is in the projection layer.
-        static int eyeAutoDumpCount = 0;
-        if ((++eyeAutoDumpCount % 300) == 60) {
-            stdVR_OpenXR_DumpEyeMirror();
-        }
     }
+#endif
 
     // Discard depth buffer so the tiler doesn't need to write it back (tiled-GPU
     // optimization). GLES3 core on Android; on desktop only present with GL 4.3+, so guard
@@ -3083,14 +3083,6 @@ extern "C" int stdVR_OpenXR_FinishHudBuffer(void)
         glBindTexture(GL_TEXTURE_2D, 0);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         vrHudMirrorValid = true;
-
-        // Debug: periodically dump the HUD FBO + opacity automatically (keypresses often
-        // don't reach the desktop window while the headset has focus). Lets us see the HUD
-        // FBO content during gameplay without any user interaction.
-        static int hudAutoDumpCount = 0;
-        if ((++hudAutoDumpCount % 300) == 60) {
-            stdVR_OpenXR_DumpHudMirror();
-        }
     }
 
     // Detach color texture from FBO

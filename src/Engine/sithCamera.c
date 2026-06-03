@@ -1049,8 +1049,10 @@ void sithCamera_SetVRViewMultiView(void)
     // Update global camera matrix
     rdCamera_UpdateCamMatrix(&centerView);
 
-    // Set up VR projection using center eye's FOV (both eyes have similar FOV)
-    // This is needed for CPU projection to work correctly
+    // Render the UNION (combined) frustum: horizontal [eyes[0].fovLeft .. eyes[1].fovRight],
+    // vertical from eye 0. Wide enough that the clip-space stereo parallax doesn't push near
+    // edge geometry across the clip boundary (narrowing this re-introduced view-1 slivers on
+    // Quest). Submitted as-is (identity remap) - matches the clean Quest config.
     float fovLeft = stdVR_clientInfo.eyes[0].fovLeft;
     float fovRight = stdVR_clientInfo.eyes[1].fovRight;
     float fovUp = stdVR_clientInfo.eyes[0].fovUp;

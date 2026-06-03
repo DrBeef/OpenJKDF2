@@ -809,10 +809,18 @@ void rdCamera_SetVRTangents(float tanLeft, float tanRight, float tanUp, float ta
 
     if (rdCamera_pCurCamera && rdCamera_pCurCamera->pClipFrustum) {
         rdClipFrustum* frustum = rdCamera_pCurCamera->pClipFrustum;
-        frustum->farLeft = -tanLeft;
-        frustum->right = tanRight;
-        frustum->farTop = tanUp;
-        frustum->bottom = -tanDown;
+        // Widen the CPU clip frustum beyond the projection. The NEAR POV weapon sits right at the
+        // camera and the multiview clip-space stereo parallax shifts it sideways; clipping it to the
+        // exact view frustum lops off the parts the shift pushed past the edge ("weapon side
+        // clipping" - bits missing from the gun). The projection tangents (rdCamera_vrTan*) are
+        // UNCHANGED so the NDC mapping / FOV is identical; only the CPU clip planes are loosened and
+        // the GPU clips the surplus at NDC. (Removing this margin re-introduced the weapon clipping.)
+        float hMargin = 0.50f * (tanLeft + tanRight) * 0.5f;
+        float vMargin = 0.50f * (tanUp + tanDown) * 0.5f;
+        frustum->farLeft = -(tanLeft + hMargin);
+        frustum->right = tanRight + hMargin;
+        frustum->farTop = tanUp + vMargin;
+        frustum->bottom = -(tanDown + vMargin);
         frustum->nearLeft = frustum->farLeft;
         frustum->nearTop = frustum->farTop;
     }

@@ -94,6 +94,19 @@ int jkPlayer_vrWeaponCrosshair = 0;     // Show in-world weapon crosshair (0/1)
 int jkPlayer_vrDominantHand = 1;        // 0=left, 1=right
 int jkPlayer_vrMoveDirection = 1;       // 0=head, 1=controller
 float jkPlayer_vrSupersampling = 1.0f;  // VR render scale multiplier
+// Baked-HUD layout (multiview eye buffer), tunable in the VR Options menu. Half-extents and
+// centre are in NDC; depth is the virtual distance in metres for the per-eye convergence.
+float jkPlayer_vrHudWidth  = 0.60f;     // HUD half-width  in NDC (smaller = narrower)
+float jkPlayer_vrHudHeight = 0.60f;     // HUD half-height in NDC (smaller = shorter)
+// PosX/PosY defaults differ per platform (standalone headsets sit the HUD centred and higher).
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+float jkPlayer_vrHudPosX   = 0.00f;     // Standalone (Quest): horizontally centred
+float jkPlayer_vrHudPosY   = -0.25f;    // Standalone (Quest): higher
+#else
+float jkPlayer_vrHudPosX   = 0.25f;     // PCVR: HUD horizontal centre in NDC (+ = right)
+float jkPlayer_vrHudPosY   = -0.50f;    // PCVR: HUD vertical centre in NDC (- = lower)
+#endif
+float jkPlayer_vrHudDepth  = 0.40f;     // HUD virtual depth in metres (0 = infinity)
 static rdModel3* pVRFistsModel3 = NULL;
 static rdThing vrOffhandThing;
 static int bVROffhandReady = 0;
@@ -279,6 +292,16 @@ void jkPlayer_ResetVars()
     jkPlayer_vrDominantHand = 1;
     jkPlayer_vrMoveDirection = 1;
     jkPlayer_vrSupersampling = 1.0f;
+    jkPlayer_vrHudWidth  = 0.60f;
+    jkPlayer_vrHudHeight = 0.60f;
+#if defined(TARGET_ANDROID_NATIVE_GLES)
+    jkPlayer_vrHudPosX   = 0.00f;   // Standalone (Quest): centred
+    jkPlayer_vrHudPosY   = -0.25f;  // Standalone (Quest): higher
+#else
+    jkPlayer_vrHudPosX   = 0.25f;   // PCVR
+    jkPlayer_vrHudPosY   = -0.50f;  // PCVR
+#endif
+    jkPlayer_vrHudDepth  = 0.40f;
 #endif
 
 #ifdef JKM_DSS
@@ -625,6 +648,11 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveInt(ext_fpath, "vrMoveDirection", jkPlayer_vrMoveDirection);
         stdJSON_SaveInt(ext_fpath, "vrComfortVignette", jkPlayer_vrComfortVignette);
         stdJSON_SaveFloat(ext_fpath, "vrHeightOffset", jkPlayer_vrHeightOffset);
+        stdJSON_SaveFloat(ext_fpath, "vrHudWidth", jkPlayer_vrHudWidth);
+        stdJSON_SaveFloat(ext_fpath, "vrHudHeight", jkPlayer_vrHudHeight);
+        stdJSON_SaveFloat(ext_fpath, "vrHudPosX", jkPlayer_vrHudPosX);
+        stdJSON_SaveFloat(ext_fpath, "vrHudPosY", jkPlayer_vrHudPosY);
+        stdJSON_SaveFloat(ext_fpath, "vrHudDepth", jkPlayer_vrHudDepth);
 #endif
         stdJSON_SaveBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         stdJSON_SaveBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
@@ -833,6 +861,11 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_vrMoveDirection = stdJSON_GetInt(ext_fpath, "vrMoveDirection", jkPlayer_vrMoveDirection);
         jkPlayer_vrComfortVignette = stdJSON_GetInt(ext_fpath, "vrComfortVignette", jkPlayer_vrComfortVignette);
         jkPlayer_vrHeightOffset = stdJSON_GetFloat(ext_fpath, "vrHeightOffset", jkPlayer_vrHeightOffset);
+        jkPlayer_vrHudWidth  = stdJSON_GetFloat(ext_fpath, "vrHudWidth",  jkPlayer_vrHudWidth);
+        jkPlayer_vrHudHeight = stdJSON_GetFloat(ext_fpath, "vrHudHeight", jkPlayer_vrHudHeight);
+        jkPlayer_vrHudPosX   = stdJSON_GetFloat(ext_fpath, "vrHudPosX",   jkPlayer_vrHudPosX);
+        jkPlayer_vrHudPosY   = stdJSON_GetFloat(ext_fpath, "vrHudPosY",   jkPlayer_vrHudPosY);
+        jkPlayer_vrHudDepth  = stdJSON_GetFloat(ext_fpath, "vrHudDepth",  jkPlayer_vrHudDepth);
 #endif
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);

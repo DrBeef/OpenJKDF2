@@ -40,11 +40,26 @@ static wchar_t vr_snap_angle_text[8] = {0};
 static wchar_t vr_smooth_speed_text[8] = {0};
 static wchar_t vr_height_text[16] = {0};
 static wchar_t vr_ss_text[256] = {0};
+// HUD layout tuning sliders: per-field label + value text, plus slider config and the
+// jkPlayer globals each slider targets. base/inc/n map slider step <-> value consistently
+// across the draw callback, the populate-on-show, and the save-on-OK.
+static wchar_t vr_hud_val[5][16] = {0};
+static const struct { float base, inc; int n; const wchar_t* label; } s_hudCfg[5] = {
+    { 0.05f, 0.02f,  73, L"Width"  },   // 0.05 .. 1.49  (half-width  NDC)
+    { 0.05f, 0.02f,  73, L"Height" },   // 0.05 .. 1.49  (half-height NDC)
+    {-1.00f, 0.02f, 101, L"X"      },   // -1.00 .. 1.00 (centre NDC, + = right)
+    {-1.30f, 0.02f, 116, L"Y"      },   // -1.30 .. 1.00 (centre NDC, - = lower)
+    { 0.00f, 0.05f,  61, L"Dist"   },   // 0.00 .. 3.00 m (0 = infinity / no depth)
+};
+static float* const s_hudGlobals[5] = {
+    &jkPlayer_vrHudWidth, &jkPlayer_vrHudHeight, &jkPlayer_vrHudPosX, &jkPlayer_vrHudPosY, &jkPlayer_vrHudDepth
+};
 
 void jkGuiDisplay_VRVignetteDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRSnapAngleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRSmoothSpeedDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRHeightDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
+void jkGuiDisplay_VRHudSliderDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 
 // Element indices for VR Options menu
 enum {
@@ -69,6 +84,7 @@ enum {
     VR_EL_HEIGHT_VAL,        // 22
     VR_EL_SS_LABEL,          // 23
     VR_EL_SS_TEXTBOX,        // 24
+    VR_EL_HUD_LAYOUT_BTN,    // opens the HUD Layout sub-page
     VR_EL_END,
 };
 
@@ -107,6 +123,9 @@ static jkGuiElement jkGuiDisplay_aElements[VR_EL_END + 1] = {
 
     { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SUPERSAMPLING",   2, {330, 370, 150, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
     { ELEMENT_TEXTBOX,     0,            0, NULL,                        100,{490, 370, 80, 20}, 1, 0, "GUIEXT_VR_SUPERSAMPLING_HINT",    0, 0, 0, {0}, 0},
+
+    // Button to open the dedicated HUD Layout sub-page (full-width sliders need their own page).
+    { ELEMENT_TEXTBUTTON, 500, 2, NULL,      3, { 30, 330, 270, 30}, 1, 0, NULL, 0, 0, 0, {0}, 0},
 
     { ELEMENT_END,         0,            0, NULL,                        0, {0},                 0, 0, NULL,                              0, 0, 0, {0}, 0},
 };
@@ -178,6 +197,54 @@ static jkGuiElement jkGuiDisplay_aElements[31] = {
 
 static jkGuiMenu jkGuiDisplay_menu = { jkGuiDisplay_aElements, 0, 0xFF, 0xE1, 0x0F, 0, 0, jkGui_stdBitmaps, jkGui_stdFonts, 0, 0, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0, 0 };
 
+// ----------------------------------------------------------------------------
+// Dedicated "HUD Layout" sub-page: full-width sliders (270px ~= the slider bitmap, so the
+// whole range is reachable) with generous vertical spacing. label + slider + value per row.
+// ----------------------------------------------------------------------------
+enum {
+    VRHUD_TITLE = 0, VRHUD_OK, VRHUD_CANCEL,
+    VRHUD_PAD0, VRHUD_PAD1, VRHUD_PAD2, VRHUD_PAD3,   // fill the menu's reserved tab zone (idx 2-6)
+    VRHUD_W_LABEL, VRHUD_W_SLIDER, VRHUD_W_VAL,       // sliders MUST be at index >= 7 (outside tab zone)
+    VRHUD_H_LABEL, VRHUD_H_SLIDER, VRHUD_H_VAL,
+    VRHUD_X_LABEL, VRHUD_X_SLIDER, VRHUD_X_VAL,
+    VRHUD_Y_LABEL, VRHUD_Y_SLIDER, VRHUD_Y_VAL,
+    VRHUD_D_LABEL, VRHUD_D_SLIDER, VRHUD_D_VAL,
+    VRHUD_END
+};
+static wchar_t vrhud_title_text[32] = {0};
+static jkGuiElement jkGuiDisplay_aElementsVRHud[VRHUD_END + 1] = {
+    { ELEMENT_TEXT,       0, 6, NULL,            3, { 20, 40, 600, 40}, 1, 0, NULL, 0, 0, 0, {0}, 0}, // title
+    { ELEMENT_TEXTBUTTON, 1, 2, "GUI_OK",        3, {440,430, 200, 40}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXTBUTTON,-1, 2, "GUI_CANCEL",    3, {  0,430, 200, 40}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    // Invisible placeholders occupying the menu's reserved tab-zone indices (2-6); the menu/tab
+    // navigation treats those indices specially, which broke a slider placed there (it buzzed
+    // but wouldn't drag). Keeping the real sliders at index >= 7 avoids that.
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {0, 0, 0, 0}, 0, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {0, 0, 0, 0}, 0, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {0, 0, 0, 0}, 0, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {0, 0, 0, 0}, 0, 0, NULL, 0, 0, 0, {0}, 0},
+    // Row pitch 64px with 28px-tall sliders so each slider's rect clears the +/-32px hit-pad
+    // of the neighbouring sliders (otherwise the lower part of one slider grabs the next one).
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 111,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)73, 0, {140, 110, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 111,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 175,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)73, 0, {140, 174, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 175,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 239,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)101,0, {140, 238, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 239,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 303,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)116,0, {140, 302, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 303,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 367,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)61, 0, {140, 366, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 367,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_END,    0, 0, NULL,            0, {0},                 0, 0, NULL, 0, 0, 0, {0}, 0},
+};
+static jkGuiMenu jkGuiDisplay_menuVRHud = { jkGuiDisplay_aElementsVRHud, 0, 0xFF, 0xE1, 0x0F, 0, 0, jkGui_stdBitmaps, jkGui_stdFonts, 0, 0, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0, 0 };
+int jkGuiDisplay_ShowVRHud(void);
+
 #ifndef PLATFORM_VR
 static jkGuiElement jkGuiDisplay_aElementsAdvanced[22] = {
     { ELEMENT_TEXT,        0,            0, NULL,                   3, {0, 410, 640, 20},   1, 0, NULL,                        0, 0, 0, {0}, 0},
@@ -212,6 +279,18 @@ void jkGuiDisplay_Startup()
     // VR Options: set up supersampling textbox
     jkGuiDisplay_aElements[VR_EL_SS_TEXTBOX].wstr = vr_ss_text;
     jk_snwprintf(vr_ss_text, 255, L"%.2f", (flex32_t)jkPlayer_vrSupersampling);
+
+    // "HUD Layout" button label on the main VR Options menu.
+    jkGuiDisplay_aElements[VR_EL_HUD_LAYOUT_BTN].wstr = L"HUD Layout...";
+
+    // Init the HUD Layout sub-page and point its label/value elements at their buffers.
+    jkGui_InitMenu(&jkGuiDisplay_menuVRHud, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
+    jk_snwprintf(vrhud_title_text, 31, L"VR HUD Layout");
+    jkGuiDisplay_aElementsVRHud[VRHUD_TITLE].wstr = vrhud_title_text;
+    for (int i = 0; i < 5; i++) {
+        jkGuiDisplay_aElementsVRHud[VRHUD_W_LABEL + i*3].wstr = s_hudCfg[i].label;
+        jkGuiDisplay_aElementsVRHud[VRHUD_W_VAL   + i*3].wstr = vr_hud_val[i];
+    }
 #else
     // Desktop Display: set up textboxes and advanced menu
     jkGui_InitMenu(&jkGuiDisplay_menuAdvanced, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
@@ -281,6 +360,58 @@ void jkGuiDisplay_VRHeightDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffe
     jkGuiDisplay_aElements[VR_EL_HEIGHT_VAL].wstr = vr_height_text;
     jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
     jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_HEIGHT_VAL], menu, 1);
+}
+
+// Shared draw for the 5 HUD layout sliders. Identifies which one by element pointer, maps the
+// slider step to a value via s_hudCfg, and writes the value text next to it.
+void jkGuiDisplay_VRHudSliderDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
+{
+    int k = -1;
+    for (int i = 0; i < 5; i++) {
+        if (element == &jkGuiDisplay_aElementsVRHud[VRHUD_W_SLIDER + i*3]) { k = i; break; }
+    }
+    if (k >= 0) {
+        int step = element->selectedTextEntry;
+        if (step < 0) step = 0;
+        if (step >= s_hudCfg[k].n) step = s_hudCfg[k].n - 1;
+        float v = s_hudCfg[k].base + s_hudCfg[k].inc * (float)step;
+        jk_snwprintf(vr_hud_val[k], 15, L"%.2f", (flex32_t)v);
+        jkGuiDisplay_aElementsVRHud[VRHUD_W_VAL + k*3].wstr = vr_hud_val[k];
+    }
+    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
+    if (k >= 0)
+        jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElementsVRHud[VRHUD_W_VAL + k*3], menu, 1);
+}
+
+// Show the HUD Layout sub-page: full-width sliders for the 5 HUD layout values.
+int jkGuiDisplay_ShowVRHud(void)
+{
+    int v0;
+    jkGui_sub_412E20(&jkGuiDisplay_menuVRHud, 100, 104, 102);
+    jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiDisplay_menuVRHud, &jkGuiDisplay_aElementsVRHud[VRHUD_OK]);
+    jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiDisplay_menuVRHud, &jkGuiDisplay_aElementsVRHud[VRHUD_CANCEL]);
+    jkGuiSetup_sub_412EF0(&jkGuiDisplay_menuVRHud, 0);
+
+    // Populate sliders from current globals.
+    for (int i = 0; i < 5; i++) {
+        int step = (int)(((*s_hudGlobals[i]) - s_hudCfg[i].base) / s_hudCfg[i].inc + 0.5f);
+        if (step < 0) step = 0;
+        if (step >= s_hudCfg[i].n) step = s_hudCfg[i].n - 1;
+        jkGuiDisplay_aElementsVRHud[VRHUD_W_SLIDER + i*3].selectedTextEntry = step;
+    }
+
+    v0 = jkGuiRend_DisplayAndReturnClicked(&jkGuiDisplay_menuVRHud);
+    if (v0 != -1) {
+        for (int i = 0; i < 5; i++) {
+            int step = jkGuiDisplay_aElementsVRHud[VRHUD_W_SLIDER + i*3].selectedTextEntry;
+            if (step < 0) step = 0;
+            if (step >= s_hudCfg[i].n) step = s_hudCfg[i].n - 1;
+            *s_hudGlobals[i] = s_hudCfg[i].base + s_hudCfg[i].inc * (float)step;
+        }
+        stdVR_SyncConfigFromJkPlayer();
+        jkPlayer_WriteConf(jkPlayer_playerShortName);
+    }
+    return v0;
 }
 
 #else // !PLATFORM_VR
@@ -422,7 +553,13 @@ int jkGuiDisplay_Show()
     // Supersampling textbox
     jk_snwprintf(vr_ss_text, 255, L"%.2f", (flex32_t)jkPlayer_vrSupersampling);
 
+vr_redisplay:
     v0 = jkGuiRend_DisplayAndReturnClicked(&jkGuiDisplay_menu);
+    if (v0 == 500) {
+        // "HUD Layout..." button -> open the dedicated sub-page, then return here.
+        jkGuiDisplay_ShowVRHud();
+        goto vr_redisplay;
+    }
     if (v0 != -1)
     {
         // Write values back to jkPlayer globals
@@ -459,6 +596,8 @@ int jkGuiDisplay_Show()
                 jkPlayer_vrSupersampling = ftmp;
             }
         }
+
+        // (HUD layout values are edited on the HUD Layout sub-page, not here.)
 
         // Apply and save
         stdVR_SyncConfigFromJkPlayer();
