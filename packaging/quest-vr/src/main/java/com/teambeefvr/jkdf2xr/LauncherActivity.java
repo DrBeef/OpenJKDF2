@@ -1,4 +1,4 @@
-package org.openjkdf2.vr;
+package com.teambeefvr.jkdf2xr;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -26,11 +26,11 @@ import java.io.OutputStream;
  */
 public class LauncherActivity extends Activity {
 
-    private static final String TAG = "OpenJKDF2";
+    private static final String TAG = "JKDF2XR";
     private static final int REQUEST_MANAGE_ALL_FILES = 2296;
     private static final int REQUEST_STORAGE_PERMISSION = 2297;
-    private static final String GAME_FOLDER = "/sdcard/OpenJKDF2";
-    private static final String VR_WEAPON_OFFSETS_FILE = "openjkdf2_vr_weapons.json";
+    private static final String GAME_FOLDER = "/sdcard/JKDF2XR";
+    private static final String VR_WEAPON_OFFSETS_FILE = "jkdf2xr_vr_weapons.json";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

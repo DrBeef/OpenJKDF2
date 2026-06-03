@@ -282,10 +282,10 @@ retry_file:
         }
         stdPlatform_Printf("stdEmbeddedRes: Not found in APK assets, trying filesystem paths\n");
 
-        // Try /sdcard/OpenJKDF2 path (new preferred location)
+        // Try /sdcard/JKDF2XR path (new preferred location)
         {
-            stdPlatform_Printf("stdEmbeddedRes: Trying /sdcard/OpenJKDF2 path\n");
-            snprintf(tmp_filepath, 256-1, "/sdcard/OpenJKDF2/resource/%s", filepath);
+            stdPlatform_Printf("stdEmbeddedRes: Trying /sdcard/JKDF2XR path\n");
+            snprintf(tmp_filepath, 256-1, "/sdcard/JKDF2XR/resource/%s", filepath);
             stdPlatform_Printf("stdEmbeddedRes: Full path: %s\n", tmp_filepath);
 
             f = fopen(tmp_filepath, "rb");

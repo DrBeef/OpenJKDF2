@@ -1,0 +1,62 @@
+================================================================
+ JKDF2-XR  -  Star Wars: Jedi Knight Dark Forces II in VR (PCVR)
+================================================================
+
+This is a PCVR (OpenXR) build of OpenJKDF2. It works with SteamVR,
+Oculus/Meta, and other OpenXR runtimes.
+
+You need a legal copy of Jedi Knight: Dark Forces II to play. No game
+assets are included here. The GOG release is recommended (DRM-free and
+includes the soundtrack).
+
+
+----------------------------------------------------------------
+ 1. Copy your game files into THIS folder
+----------------------------------------------------------------
+
+From your Jedi Knight: Dark Forces II installation, copy the following
+into this folder (next to jkdf2xr.exe), merging with what's already
+here:
+
+    JK.EXE
+    episode/          (JK1.GOB, JK1CTF.GOB, JK1MP.GOB)
+    resource/         (Res1hi.gob, Res2.gob, jk_.cd, video/)
+    player/
+    MUSIC/            (optional - the soundtrack, if you have it)
+
+Note: a "resource" folder already exists here (it holds the renderer's
+shaders and UI). Just merge your game's resource folder into it - keep
+both sets of files.
+
+When you're done, this folder should contain both jkdf2xr.exe and
+JK.EXE side by side.
+
+
+----------------------------------------------------------------
+ 2. Put on your headset and launch
+----------------------------------------------------------------
+
+Make sure your VR runtime is running (SteamVR, Oculus app, etc.), then
+run:
+
+    jkdf2xr.exe
+
+The game should appear in your headset in stereo 3D.
+
+If nothing builds in the headset, confirm your OpenXR runtime is active
+(in SteamVR: Settings > OpenXR > "Set SteamVR as OpenXR runtime").
+
+
+----------------------------------------------------------------
+ Notes
+----------------------------------------------------------------
+
+- jkdf2xr_vr_weapons.json contains pre-tuned VR weapon alignment.
+  Keep it - it places the weapons correctly in your hand.
+- If the game fails to start with a missing-DLL error, install the
+  "Microsoft Visual C++ Redistributable (x64)" from microsoft.com.
+- Controls are documented in the project's VR_CONTROLS.md.
+- See the version marker file in this folder (JKDF2-XR-vX.Y.Z.txt) to
+  check which build you have.
+
+================================================================

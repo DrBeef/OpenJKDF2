@@ -99,4 +99,4 @@ When `VR_WEAPON_ALIGNMENT_TOOL` is enabled in `engine_config.h`:
 | **Right Stick Y** | Adjust Z offset (up/down) / Scale / Pitch depending on mode |
 | **Both Grips + B** | Save current weapon offsets and exit |
 
-Saved offsets are stored in `openjkdf2_vr_weapons.json` and apply even without the alignment tool compiled in.
+Saved offsets are stored in `jkdf2xr_vr_weapons.json` and apply even without the alignment tool compiled in.

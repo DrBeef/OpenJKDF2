@@ -46,6 +46,13 @@ macro(plat_link_and_package)
       LINK_SEARCH_START_STATIC ON
       LINK_SEARCH_END_STATIC ON
     )
+
+    # JKDF2-XR rebrand: the PCVR (VR-enabled) Windows build ships as jkdf2xr.exe.
+    # The CMake target name stays ${BIN_NAME} (openjkdf2-64) so `--target openjkdf2-64`
+    # and the non-VR Windows build are unaffected; only the output filename changes.
+    if(TARGET_USE_VR)
+        set_target_properties(${BIN_NAME} PROPERTIES OUTPUT_NAME "jkdf2xr")
+    endif()
     set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
     set(THREADS_PREFER_PTHREAD_FLAG TRUE)
     find_package(Threads REQUIRED)

@@ -154,7 +154,7 @@ int jkGuiPatrons_Startup(const char* fpath)
     jkGuiPatrons_CopyNarrow(jkGuiPatrons_sTitle, 64, "Thank You To Our Gold Patrons");
 
     // Load via stdEmbeddedRes_Load which handles CWD resource/, SDL base path,
-    // macOS bundle, Android APK assets and /sdcard/OpenJKDF2/resource/.
+    // macOS bundle, Android APK assets and /sdcard/JKDF2XR/resource/.
     size_t bufSz = 0;
     char* buf = stdEmbeddedRes_Load(fpath, &bufSz);
     if (!buf || bufSz == 0)

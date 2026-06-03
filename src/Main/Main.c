@@ -294,7 +294,7 @@ static void Main_ReadCommandLineFile(char *pOutBuf, int maxLen)
     pOutBuf[0] = 0;
 
 #ifdef TARGET_ANDROID
-    const char* pPath = "/sdcard/OpenJKDF2/commandline.txt";
+    const char* pPath = "/sdcard/JKDF2XR/commandline.txt";
 #else
     const char* pPath = "commandline.txt";
 #endif

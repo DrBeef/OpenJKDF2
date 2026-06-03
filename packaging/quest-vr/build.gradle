@@ -21,7 +21,7 @@ allprojects {
 apply plugin: 'com.android.application'
 
 android {
-    namespace "org.openjkdf2.vr"
+    namespace "com.teambeefvr.jkdf2xr"
     compileSdk 34
     ndkVersion "26.1.10909125"  // Compatible with AGP 8.2
 
@@ -31,7 +31,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "org.openjkdf2.vr"
+        applicationId "com.teambeefvr.jkdf2xr"
         minSdk 29  // Quest 2/3 minimum
         targetSdk 34
         versionCode 1
@@ -127,4 +127,11 @@ task copyPatrons(type: Copy) {
     into 'assets'
 }
 
-preBuild.dependsOn copyShaders, copySSL, copyUI, copyPatrons
+// VR weapon offsets: the PCVR copy is the golden source. Pull it in at build
+// time so PCVR and Quest always ship identical, pre-tuned weapon alignment.
+task copyWeapons(type: Copy) {
+    from '../pcvr/files/jkdf2xr_vr_weapons.json'
+    into 'assets'
+}
+
+preBuild.dependsOn copyShaders, copySSL, copyUI, copyPatrons, copyWeapons

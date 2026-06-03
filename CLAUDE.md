@@ -117,12 +117,12 @@ cd packaging/quest-vr
 
 **Step 3: Install on device**
 ```bash
-"C:/Users/simon/AppData/Local/Android/Sdk/platform-tools/adb.exe" install -r "C:/DEV/GitHub/Public/OpenJKDF2/packaging/quest-vr/build/outputs/apk/debug/OpenJKDF2-VR-debug.apk"
+"C:/Users/simon/AppData/Local/Android/Sdk/platform-tools/adb.exe" install -r "C:/DEV/GitHub/Public/OpenJKDF2/packaging/quest-vr/build/outputs/apk/debug/JKDF2-XR-debug.apk"
 ```
 
 **Troubleshooting:**
 - If gradle fails with locked file errors, stop the daemon first: `./gradlew.bat --stop`
-- APK output location: `packaging/quest-vr/build/outputs/apk/debug/OpenJKDF2-VR-debug.apk`
+- APK output location: `packaging/quest-vr/build/outputs/apk/debug/JKDF2-XR-debug.apk`
 
 ### PC VR Build (Windows)
 
@@ -138,7 +138,43 @@ cmake .. -G "Visual Studio 17 2022" -A x64 -DTARGET_USE_VR=ON
 cmake --build . --config Release
 ```
 
-**Output:** `C:\DEV\GitHub\Public\OpenJKDF2\build_pcvr\Release\openjkdf2-64.exe`
+**Output:** `C:\DEV\GitHub\Public\OpenJKDF2\build_pcvr\Release\jkdf2xr.exe`
+(The CMake *target* is still `openjkdf2-64`; the VR build's output is renamed to `jkdf2xr.exe` via `OUTPUT_NAME` in `cmake_modules/plat_msvc.cmake`, gated on `TARGET_USE_VR`.)
+
+### Packaging a PCVR Release (JKDF2-XR)
+
+`packaging/pcvr/package-pcvr.ps1` bundles the PCVR build into a single distributable
+zip that end users extract, drop their game files into, and run. No game assets are
+included — users supply their own copy of JKDF2.
+
+**Prerequisite:** build the PCVR target first (see *PC VR Build* above) so
+`build_pcvr/Release/jkdf2xr.exe` exists and is current.
+
+**Run it** (from the repo root):
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\pcvr\package-pcvr.ps1
+```
+
+**Output:** `dist/JKDF2-XR-PCVR-v<version>.zip` (the `dist/` folder is gitignored).
+- The version comes from `cmake_modules/version.cmake` → `OPENJKDF2VR_PROJECT_VERSION`
+  (so it's in the zip's *filename* and a `JKDF2-XR-v<version>.txt` marker inside).
+- The zip contains a single `JKDF2-XR/` folder (no version, for clean overwrites)
+  with: the exe, the 4 runtime DLLs (OpenAL32/exchndl/mgwhelp/symsrv, from the
+  `build_pcvr` root), the engine `resource/` (shaders/ui/ssl — from the repo, NOT
+  the user's game GOBs), `jkdf2xr_vr_weapons.json`, and `HOW-TO-PLAY.txt`.
+
+**Optional params:** `-BuildDir` (default `build_pcvr`), `-OutputDir` (default `dist`),
+`-WeaponsJson` (default `packaging/pcvr/files/jkdf2xr_vr_weapons.json`).
+
+**Weapon offsets (golden source):** `packaging/pcvr/files/jkdf2xr_vr_weapons.json` is
+the single canonical weapon-alignment file. The PCVR package bundles it directly, and
+the Quest build pulls it in via the gradle `copyWeapons` task — so both platforms ship
+identical, pre-tuned alignment. To update offsets, edit that one file (or re-copy from a
+tuned runtime `C:\DEV\OpenJKDF2\jkdf2xr_vr_weapons.json`); do not hand-edit the
+`packaging/quest-vr/assets/` copy (it's overwritten from the golden source at build time).
+
+To cut a versioned release, bump `OPENJKDF2VR_PROJECT_VERSION` in
+`cmake_modules/version.cmake`, rebuild PCVR, then re-run the packaging script.
 
 ### VR Technical Notes
 
@@ -181,5 +217,5 @@ export TARGET_BUILD_TESTS=1
 
 VR can be tested without a headset:
 ```bash
-./openjkdf2-64.exe -vrtest -vrframes 600
+./jkdf2xr.exe -vrtest -vrframes 600
 ```

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- OpenJKDF2 VR - Android VR Manifest (Meta Quest + Pico 4/Neo3) -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="org.openjkdf2.vr"
+    package="com.teambeefvr.jkdf2xr"
     android:versionCode="1"
     android:versionName="1.0"
     android:installLocation="auto">
@@ -21,7 +21,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- All files access for /sdcard/OpenJKDF2 game data -->
+    <!-- All files access for /sdcard/JKDF2XR game data -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <!-- Quest VR keyboard requires scene permission -->
     <uses-permission android:name="horizonos.permission.USE_SCENE" />
@@ -53,7 +53,7 @@
         <meta-data android:name="com.samsung.android.vr.application.mode" android:value="vr_only"/>
 
         <!-- Launcher activity that checks for storage permission -->
-        <activity android:name="org.openjkdf2.vr.LauncherActivity"
+        <activity android:name=".LauncherActivity"
             android:label="@string/app_name"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
             android:launchMode="singleTask"
@@ -73,7 +73,7 @@
         </activity>
 
         <!-- Main VR activity (started by LauncherActivity after permission check) -->
-        <activity android:name="org.openjkdf2.vr.VRActivity"
+        <activity android:name=".VRActivity"
             android:label="@string/app_name"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
             android:launchMode="singleTask"

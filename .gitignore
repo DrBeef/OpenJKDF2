@@ -71,6 +71,9 @@ wasm_out
 win64-debug
 win64-package
 asan.log.*
+
+# PCVR packaging output (packaging/pcvr/package-pcvr.ps1)
+/dist/
 build_hooks/
 astyle_c.config
 astyle_cpp.config

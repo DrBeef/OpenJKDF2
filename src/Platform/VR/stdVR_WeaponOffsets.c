@@ -21,9 +21,9 @@ static int stdVR_weaponOffsets_bInitted = 0;
 
 // Filename for weapon offsets (separate from cvars to avoid limit)
 #ifdef ARCH_WASM
-#define STDVR_WEAPON_OFFSETS_FNAME "persist/openjkdf2_vr_weapons.json"
+#define STDVR_WEAPON_OFFSETS_FNAME "persist/jkdf2xr_vr_weapons.json"
 #else
-#define STDVR_WEAPON_OFFSETS_FNAME "openjkdf2_vr_weapons.json"
+#define STDVR_WEAPON_OFFSETS_FNAME "jkdf2xr_vr_weapons.json"
 #endif
 
 // Initialize all offsets with defaults from stdVR_motionConfig

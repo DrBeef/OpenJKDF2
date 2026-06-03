@@ -1,4 +1,4 @@
-package org.openjkdf2.vr;
+package com.teambeefvr.jkdf2xr;
 
 import org.libsdl.app.SDLActivity;
 import android.os.Bundle;

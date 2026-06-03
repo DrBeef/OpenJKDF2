@@ -176,7 +176,7 @@ cmake --build . --config Debug --target openjkdf2-64
 
 After successful build, find your executable at:
 ```
-build_vr\Release\openjkdf2-64.exe
+build_vr\Release\jkdf2xr.exe
 ```
 
 Required DLLs will be in the same directory:
@@ -281,7 +281,7 @@ These are MinGW flags that don't apply to MSVC builds.
 
 ### Basic Test
 
-1. Copy `openjkdf2-64.exe` to your Jedi Knight game directory:
+1. Copy `jkdf2xr.exe` to your Jedi Knight game directory:
    ```
    C:\GOG Games\Star Wars Jedi Knight - Dark Forces 2\
    ```
@@ -291,14 +291,14 @@ These are MinGW flags that don't apply to MSVC builds.
 3. Launch the game:
    ```powershell
    cd "C:\GOG Games\Star Wars Jedi Knight - Dark Forces 2"
-   .\openjkdf2-64.exe
+   .\jkdf2xr.exe
    ```
 
 ### VR Test Mode
 
 For automated VR testing without a headset, use the VR test arguments:
 ```powershell
-.\openjkdf2-64.exe -vrtest -vrframes 600
+.\jkdf2xr.exe -vrtest -vrframes 600
 ```
 
 This runs for 600 frames (~10 seconds at 60fps) with simulated VR input.
@@ -331,7 +331,7 @@ After a successful build, your directory should look like:
 OpenJKDF2/
 ├── build_vr/
 │   ├── Release/
-│   │   ├── openjkdf2-64.exe      # Main executable
+│   │   ├── jkdf2xr.exe      # Main executable
 │   │   ├── OpenAL32.dll          # Audio library
 │   │   ├── exchndl.dll           # Crash handler
 │   │   ├── mgwhelp.dll

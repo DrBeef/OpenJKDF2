@@ -30,13 +30,13 @@ This folder contains the Android Studio project for building OpenJKDF2 VR for Me
 3. Select `Build > Build Bundle(s) / APK(s) > Build APK(s)`
 
 The APK will be generated at:
-`build/outputs/apk/debug/OpenJKDF2-VR-debug.apk`
+`build/outputs/apk/debug/JKDF2-XR-debug.apk`
 
 ## Installing on Quest 3
 
 ### Via ADB
 ```bash
-adb install build/outputs/apk/debug/OpenJKDF2-VR-debug.apk
+adb install build/outputs/apk/debug/JKDF2-XR-debug.apk
 ```
 
 ### Via SideQuest
@@ -46,13 +46,30 @@ adb install build/outputs/apk/debug/OpenJKDF2-VR-debug.apk
 
 ## Game Assets
 
-You need to copy your Jedi Knight game files to the Quest. The app looks for them in:
-`/sdcard/Android/data/org.openjkdf2.vr/files/`
+You need a legal copy of Jedi Knight: Dark Forces II. No game assets are
+included.
 
-Copy these folders from your Jedi Knight installation:
-- `Episode/`
-- `Resource/`
-- `MUSIC/` (optional, for music)
+The app reads its game data from this folder on the headset:
+
+`/sdcard/JKDF2XR/`
+
+On first launch the app creates that folder and populates it with the
+renderer's assets (shaders, UI) and the shareware demo. To play the full
+game, copy these files from your Jedi Knight: Dark Forces II installation
+into `/sdcard/JKDF2XR/` (merge with what's already there):
+
+- `JK.EXE`
+- `episode/`   (JK1.GOB, JK1CTF.GOB, JK1MP.GOB)
+- `resource/`  (Res1hi.gob, Res2.gob, jk_.cd, video/) — merge into the existing resource folder
+- `player/`
+- `MUSIC/`     (optional — the soundtrack)
+
+You can push files over ADB, e.g.:
+```bash
+adb push JK.EXE /sdcard/JKDF2XR/
+adb push episode /sdcard/JKDF2XR/
+adb push resource /sdcard/JKDF2XR/
+```
 
 ## Troubleshooting
 

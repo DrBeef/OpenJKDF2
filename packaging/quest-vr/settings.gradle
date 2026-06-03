@@ -14,4 +14,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'OpenJKDF2-VR'
+rootProject.name = 'JKDF2-XR'
