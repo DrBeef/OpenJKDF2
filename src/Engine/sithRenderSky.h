@@ -16,4 +16,10 @@ MATH_FUNC void sithRenderSky_Update();
 MATH_FUNC void sithRenderSky_TransformHorizontal(rdProcEntry *pProcEntry, sithSurfaceInfo *pSurfaceInfo, uint32_t num_vertices);
 MATH_FUNC void sithRenderSky_TransformVertical(rdProcEntry *pProcEntry, sithSurfaceInfo *pSurfaceInfo, rdVector3 *pUntransformedVerts, uint32_t num_vertices);
 
+#ifdef PLATFORM_VR
+// Renders a real world-fixed sky dome for the VR (GPU per-eye projection) path. No-op unless
+// rdCamera_bGpuProjection is set. Replaces the 2D screen-space sky in VR.
+void sithRenderSky_DrawVRDome(void);
+#endif
+
 #endif // _SITHRENDERSKY_H

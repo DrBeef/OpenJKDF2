@@ -342,6 +342,12 @@ void sithRender_Draw()
 #endif
 
     sithRenderSky_Update();
+#ifdef PLATFORM_VR
+    // VR: render a real world-fixed sky dome instead of the 2D screen-space sky. No-op on
+    // desktop / non-GPU-projection (the legacy 2D sky path stays the fallback there). The dome
+    // is submitted first so it sits behind the world geometry that draws over it.
+    sithRenderSky_DrawVRDome();
+#endif
     if (!sithRender_geoMode) {
 #ifdef PLATFORM_VR
         extern int stdVR_bEnabled;
@@ -1931,6 +1937,13 @@ void sithRender_RenderLevelGeometry()
             vertices_alloc = sithWorld_pCurrentWorld->vertices;
 
             BOOL bIsSkySurface = (v65->surfaceFlags & (SITH_SURFACE_CEILING_SKY|SITH_SURFACE_HORIZON_SKY));
+#ifdef PLATFORM_VR
+            // VR: the 2D screen-space sky is replaced by the world-fixed dome (sithRenderSky_DrawVRDome,
+            // submitted above). Skip the sky surfaces so they don't z-fight the dome; the world geometry
+            // then occludes the dome everywhere except through these openings.
+            if (bIsSkySurface && rdCamera_bGpuProjection)
+                continue;
+#endif
             flex_t dist = rdMath_DistancePointToPlane(&sithCamera_currentCamera->vec3_1, &v65->surfaceInfo.face.normal, &vertices_alloc[*v65->surfaceInfo.face.vertexPosIdx]);
             if (UNLIKELY(dist <= 0.0))
                 continue;

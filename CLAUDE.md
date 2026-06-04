@@ -170,7 +170,7 @@ powershell -ExecutionPolicy Bypass -File packaging\pcvr\package-pcvr.ps1
 the single canonical weapon-alignment file. The PCVR package bundles it directly, and
 the Quest build pulls it in via the gradle `copyWeapons` task — so both platforms ship
 identical, pre-tuned alignment. To update offsets, edit that one file (or re-copy from a
-tuned runtime `C:\DEV\OpenJKDF2\jkdf2xr_vr_weapons.json`); do not hand-edit the
+tuned runtime `C:\DEV\JKDF2-XR\jkdf2xr_vr_weapons.json`); do not hand-edit the
 `packaging/quest-vr/assets/` copy (it's overwritten from the golden source at build time).
 
 To cut a versioned release, bump `OPENJKDF2VR_PROJECT_VERSION` in

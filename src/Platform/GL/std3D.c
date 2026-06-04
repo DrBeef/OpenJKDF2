@@ -919,6 +919,20 @@ void std3D_FreeResources()
 
     glDeleteBuffers(1, &menu_vbo_all);
 
+#if defined(MULTIVIEW_ENABLED)
+    // Altered: the MultiView matrix UBOs belong to the GL context being torn down here.
+    // On a context recreate (std3D_Shutdown/Startup via a video/resolution change) the old
+    // buffer names become invalid, but init_resources() guards UBO creation on
+    // std3D_multiViewUBOInitted and would otherwise SKIP recreating them — leaving stale IDs
+    // that fail glBindBuffer with GL_INVALID_OPERATION, so the per-eye matrices never upload
+    // and the VR world renders black. Delete them and clear the flag so they are recreated.
+    glDeleteBuffers(1, &std3D_viewMatricesUBO);
+    glDeleteBuffers(1, &std3D_projMatricesUBO);
+    std3D_viewMatricesUBO = 0;
+    std3D_projMatricesUBO = 0;
+    std3D_multiViewUBOInitted = 0;
+#endif
+
     std3D_bReinitHudElements = 1;
 
     has_initted = false;

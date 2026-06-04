@@ -4,7 +4,162 @@
 #include "Engine/sithCamera.h"
 #include "Engine/sithIntersect.h"
 #include "World/sithSector.h"
+#include "World/sithSurface.h"
+#include "World/sithWorld.h"
+#include "Raster/rdCache.h"
+#include "Primitives/rdMatrix.h"
 #include "jk.h"
+
+#ifdef PLATFORM_VR
+// ---------------------------------------------------------------------------
+// Real world-fixed VR sky dome.
+//
+// The legacy sky (sithRenderSky_TransformHorizontal/Vertical) is a 2D screen-space
+// backdrop that has no correct stereo-VR equivalent. For VR (rdCamera_bGpuProjection)
+// we instead render a real tessellated dome of unit directions, world-fixed at infinity,
+// textured with the level's sky material. The dome verts are emitted in VIEW space so the
+// GPU per-eye projection (default_v.glsl) handles stereo automatically. The sky surfaces
+// are skipped (see sithRender.c) and the dome sits just inside the far plane, so the world
+// geometry naturally occludes it everywhere except through the sky openings.
+// ---------------------------------------------------------------------------
+extern int rdCamera_bGpuProjection;
+
+#define SKYDOME_NLAT   16   // latitude (elevation) bands: -90..+90
+#define SKYDOME_NLONG  32   // longitude (azimuth) bands: 0..360
+#define SKYDOME_NVERTS ((SKYDOME_NLAT + 1) * (SKYDOME_NLONG + 1))
+
+static rdVector3 sithRenderSky_domeDir[SKYDOME_NVERTS];   // unit world directions (x=east, y=north, z=up)
+static flex_t    sithRenderSky_domeAzim[SKYDOME_NVERTS];  // degrees
+static flex_t    sithRenderSky_domeElev[SKYDOME_NVERTS];  // degrees
+static int       sithRenderSky_domeReady = 0;
+
+static void sithRenderSky_GenDome(void)
+{
+    for (int i = 0; i <= SKYDOME_NLAT; i++)
+    {
+        flex_t elev = -90.0 + 180.0 * (flex_t)i / (flex_t)SKYDOME_NLAT;
+        flex_t se, ce;
+        stdMath_SinCos(elev, &se, &ce);
+        for (int j = 0; j <= SKYDOME_NLONG; j++)
+        {
+            flex_t azim = 360.0 * (flex_t)j / (flex_t)SKYDOME_NLONG;
+            flex_t sa, ca;
+            stdMath_SinCos(azim, &sa, &ca);
+            int v = i * (SKYDOME_NLONG + 1) + j;
+            sithRenderSky_domeDir[v].x = ce * sa;
+            sithRenderSky_domeDir[v].y = ce * ca;
+            sithRenderSky_domeDir[v].z = se;
+            sithRenderSky_domeAzim[v] = azim;
+            sithRenderSky_domeElev[v] = elev;
+        }
+    }
+    sithRenderSky_domeReady = 1;
+}
+
+void sithRenderSky_DrawVRDome(void)
+{
+    if (!rdCamera_bGpuProjection)
+        return;
+    if (!sithRenderSky_domeReady)
+        sithRenderSky_GenDome();
+
+    sithWorld* pWorld = sithWorld_pCurrentWorld;
+    if (!pWorld || !pWorld->surfaces)
+        return;
+
+    // Grab the horizon and ceiling sky materials from the level's sky surfaces.
+    rdMaterial* pHorizonMat = NULL;
+    rdMaterial* pCeilingMat = NULL;
+    for (int s = 0; s < pWorld->numSurfaces; s++)
+    {
+        uint32_t flags = pWorld->surfaces[s].surfaceFlags;
+        if (!pHorizonMat && (flags & SITH_SURFACE_HORIZON_SKY))
+            pHorizonMat = pWorld->surfaces[s].surfaceInfo.face.material;
+        if (!pCeilingMat && (flags & SITH_SURFACE_CEILING_SKY))
+            pCeilingMat = pWorld->surfaces[s].surfaceInfo.face.material;
+        if (pHorizonMat && pCeilingMat)
+            break;
+    }
+    if (!pHorizonMat && !pCeilingMat)
+        return;
+
+    flex_t farY = rdCamera_pCurCamera->pClipFrustum->zFar - 0.2;
+    flex_t ppr  = sithSector_horizontalPixelsPerRev_idk;  // pixels-per-degree (pixelsPerRev/360)
+    rdVector2 hOff = pWorld->horizontalSkyOffs;
+    rdVector2 cOff = pWorld->ceilingSkyOffs;
+    rdVector3 camPos = sithCamera_currentCamera->vec3_1;
+
+    // Above this elevation, use the CEILING sky (material + the original spherical ceiling mapping,
+    // which is smooth at the zenith). The horizon band below keeps the cylindrical mapping. If the
+    // level has no ceiling sky, the whole dome stays horizon/cylindrical (same as before -> no regress).
+    const flex_t SKYDOME_CEIL_ELEV = 25.0;
+
+    for (int i = 0; i < SKYDOME_NLAT; i++)
+    {
+        for (int j = 0; j < SKYDOME_NLONG; j++)
+        {
+            int v00 = i * (SKYDOME_NLONG + 1) + j;
+            int v01 = v00 + 1;
+            int v10 = v00 + (SKYDOME_NLONG + 1);
+            int v11 = v10 + 1;
+            int idx[4] = { v00, v01, v11, v10 };
+
+            // Per-quad scheme: ceiling cap if a ceiling material exists and we're high enough (or there's
+            // no horizon material at all -> ceiling-only level uses ceiling everywhere).
+            int bCeil = (pCeilingMat != NULL) && (!pHorizonMat || sithRenderSky_domeElev[v00] >= SKYDOME_CEIL_ELEV);
+            rdMaterial* mat = bCeil ? pCeilingMat : pHorizonMat;
+            if (!mat)
+                continue;
+
+            rdProcEntry* pe = rdCache_GetProcEntry();
+            if (!pe)
+                continue;
+            pe->geometryMode      = RD_GEOMODE_TEXTURED;
+            pe->lightingMode      = RD_LIGHTMODE_FULLYLIT;
+            pe->textureMode       = RD_TEXTUREMODE_PERSPECTIVE;
+            pe->material          = mat;
+            pe->wallCel           = 0;
+            pe->type              = 0;
+            pe->extralight        = 0.0;
+            pe->ambientLight      = 1.0;
+            pe->light_level_static = 1.0;
+
+            for (int k = 0; k < 4; k++)
+            {
+                int vi = idx[k];
+                rdVector3 vView;
+                // World-fixed dome at infinity: only the view ROTATION applies (translation drops).
+                rdMatrix_TransformVector34(&vView, &sithRenderSky_domeDir[vi], &rdCamera_pCurCamera->view_matrix);
+                pe->vertices[k].x = vView.x * farY;
+                pe->vertices[k].y = vView.y * farY;
+                pe->vertices[k].z = vView.z * farY;
+
+                if (bCeil)
+                {
+                    // Original ceiling-sky mapping: intersect the view ray with the sky sphere, UV = hit.xy*16.
+                    // This is smooth at the zenith (no pole pinch), and is what the level was authored for.
+                    rdVector3 a1a = sithRenderSky_domeDir[vi];
+                    flex_t tmp;
+                    if (!sithIntersect_SphereHit(&camPos, &a1a, 1000.0, 0.0, &sithSector_surfaceNormal, &sithSector_zMaxVec, &tmp, 0))
+                        tmp = 1000.0;
+                    rdVector_Scale3Acc(&a1a, tmp);
+                    rdVector_Add3Acc(&a1a, &camPos);
+                    pe->vertexUVs[k].x = a1a.x * 16.0 + cOff.x;
+                    pe->vertexUVs[k].y = a1a.y * 16.0 + cOff.y;
+                }
+                else
+                {
+                    // Cylindrical horizon UV (azimuth->u, elevation->v); REPEAT tiles seamlessly.
+                    pe->vertexUVs[k].x =  sithRenderSky_domeAzim[vi] * ppr + hOff.x;
+                    pe->vertexUVs[k].y = -sithRenderSky_domeElev[vi] * ppr + hOff.y;
+                }
+                pe->vertexIntensities[k] = 1.0;
+            }
+            rdCache_AddProcFace(0, 4, 7);
+        }
+    }
+}
+#endif // PLATFORM_VR
 
 int sithRenderSky_Open(flex_t horizontalPixelsPerRev, flex_t horizontalDist, flex_t ceilingSky)
 {
@@ -27,10 +182,21 @@ void sithRenderSky_Close()
 
 void sithRenderSky_Update()
 {
+    rdVector3 viewAngles = sithCamera_currentCamera->viewPYR;
+#ifdef PLATFORM_VR
+    // VR multiview (GPU per-eye projection): the true view orientation is the game camera combined
+    // with the HMD head pose, baked into the center view (rdCamera_camMatrix). The game camera's
+    // viewPYR alone omits the HMD rotation, so the horizontal sky's texture scroll stays pinned to
+    // the head while the geometry tracks it -> the sky looks "locked to your head". Use the center
+    // view's angles so the scroll/roll matches the head-aware geometry.
+    if (rdCamera_bGpuProjection) {
+        rdMatrix_ExtractAngles34(&rdCamera_camMatrix, &viewAngles);
+    }
+#endif
     sithSector_flt_8553C0 = sithSector_horizontalDist / rdCamera_pCurCamera->fovDx;
-    stdMath_SinCos(sithCamera_currentCamera->viewPYR.z, &sithSector_flt_8553F4, &sithSector_flt_8553C8);
-    sithSector_flt_8553B8 = -(sithCamera_currentCamera->viewPYR.y * sithSector_horizontalPixelsPerRev_idk);
-    sithSector_flt_8553C4 = -(sithCamera_currentCamera->viewPYR.x * sithSector_horizontalPixelsPerRev_idk);
+    stdMath_SinCos(viewAngles.z, &sithSector_flt_8553F4, &sithSector_flt_8553C8);
+    sithSector_flt_8553B8 = -(viewAngles.y * sithSector_horizontalPixelsPerRev_idk);
+    sithSector_flt_8553C4 = -(viewAngles.x * sithSector_horizontalPixelsPerRev_idk);
 }
 
 // As seen in: Return Home to Sulon
@@ -64,9 +230,29 @@ void sithRenderSky_TransformHorizontal(rdProcEntry *pProcEntry, sithSurfaceInfo 
         pVertXYZ->z /= prev_z;
         pVertXYZ->z *= pVertXYZ->y;
 #else
-        pVertXYZ->z = rdCamera_pCurCamera->pClipFrustum->zFar; // zFar
-        tmp1 = (pVertXYZ->x - rdCamera_pCurCamera->canvas->half_screen_width) * sithSector_flt_8553C0;
-        tmp2 = (pVertXYZ->y - rdCamera_pCurCamera->canvas->half_screen_height) * sithSector_flt_8553C0;
+#ifdef PLATFORM_VR
+        if (rdCamera_bGpuProjection) {
+            // GPU per-eye projection: pVertXYZ is VIEW-space (x=right, y=forward, z=up), not the
+            // CPU-projected screen coords this path normally expects. The old screen-space UV
+            // reduces EXACTLY to a view-direction ratio (the fovDx cancels), so compute it from
+            // view space directly; then push the vertex out along its view ray to the far plane
+            // (preserving direction) so the GPU projects it per-eye behind everything. This mirrors
+            // the TARGET_TWL branch above, which is also a view-space (HW-projected) path.
+            flex_t fwd = pVertXYZ->y;
+            if (fwd == 0.0) fwd = 0.000001;
+            tmp1 =  (pVertXYZ->x / fwd) * sithSector_horizontalDist;
+            tmp2 = -(pVertXYZ->z / fwd) * sithSector_horizontalDist;
+            flex_t farY = rdCamera_pCurCamera->pClipFrustum->zFar - 0.1;
+            pVertXYZ->x = pVertXYZ->x / fwd * farY;
+            pVertXYZ->z = pVertXYZ->z / fwd * farY;
+            pVertXYZ->y = farY;
+        } else
+#endif
+        {
+            pVertXYZ->z = rdCamera_pCurCamera->pClipFrustum->zFar; // zFar
+            tmp1 = (pVertXYZ->x - rdCamera_pCurCamera->canvas->half_screen_width) * sithSector_flt_8553C0;
+            tmp2 = (pVertXYZ->y - rdCamera_pCurCamera->canvas->half_screen_height) * sithSector_flt_8553C0;
+        }
 #endif
 
         pVertUV->x = tmp1 * sithSector_flt_8553C8 - tmp2 * sithSector_flt_8553F4 + sithSector_flt_8553B8;
@@ -147,7 +333,24 @@ void sithRenderSky_TransformVertical(rdProcEntry *pProcEntry, sithSurfaceInfo *p
         pProcEntry->vertices[i].z /= prev_z;
         pProcEntry->vertices[i].z *= pProcEntry->vertices[i].y;
 #else
-        pProcEntry->vertices[i].z = vertex_out.y;
+#ifdef PLATFORM_VR
+        if (rdCamera_bGpuProjection) {
+            // GPU per-eye projection: emit the full VIEW-space sky-dome point. It is colinear with
+            // the surface vertex (same direction from the camera), so it lands at the same screen
+            // position when the GPU projects it per-eye; clamp its depth to just inside the far
+            // plane so it isn't far-clipped, preserving direction.
+            flex_t fwd = vertex_out.y;
+            if (fwd < 0.000001) fwd = 0.000001;
+            flex_t farY = rdCamera_pCurCamera->pClipFrustum->zFar - 0.1;
+            flex_t s = (fwd > farY) ? (farY / fwd) : 1.0;
+            pProcEntry->vertices[i].x = vertex_out.x * s;
+            pProcEntry->vertices[i].y = fwd * s;
+            pProcEntry->vertices[i].z = vertex_out.z * s;
+        } else
+#endif
+        {
+            pProcEntry->vertices[i].z = vertex_out.y;
+        }
 #endif
         // TODO: There's a bug where facing a vertical wall of sky starts dividing strangely
     }
