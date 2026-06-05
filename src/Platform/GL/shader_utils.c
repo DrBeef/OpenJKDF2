@@ -139,17 +139,33 @@ GLuint create_shader(const char* shader, GLenum type, int enableMultiView) {
 #if defined(TARGET_ANDROID)
     version = "#version 300 es\n";
 #if defined(PLATFORM_VR)
-    // MultiView requires the extension declaration BEFORE any other code
-    extensions = "#extension GL_OVR_multiview2 : enable\n";
-    // Add unique session ID to force shader recompilation (bypasses Pico shader cache bug)
+    // RazeXR-parity multiview injection (works on Pico AND Quest Adreno):
+    //  - Enable GL_OVR_multiview2 ONLY in the VERTEX stage of shaders that actually use it.
+    //    A vertex-only extension declared in the fragment stage is a divergence from the
+    //    reference and risks strict Adreno linkers.
+    //  - Define MULTIVIEW_ENABLED only for multiview shaders (so the mono menu/ui programs and
+    //    the post-process shaders compile genuinely single-view).
+    //  - Keep CAN_BILINEAR_FILTER + the SHADER_SESSION_ID cache-buster on ALL shaders (the
+    //    session id forces recompiles, bypassing Pico's shader-cache bug).
+    // The MultiView extension declaration must come BEFORE any other (non-#version) code.
     static uint32_t shaderSessionId = 0;
     static char definesBuffer[256];
     if (shaderSessionId == 0) {
         shaderSessionId = (uint32_t)time(NULL);
     }
-    snprintf(definesBuffer, sizeof(definesBuffer),
-        "#define CAN_BILINEAR_FILTER\n#define MULTIVIEW_ENABLED\n#define SHADER_SESSION_ID %u\n",
-        shaderSessionId);
+    if (enableMultiView) {
+        extensions = (type == GL_VERTEX_SHADER)
+            ? "#extension GL_OVR_multiview2 : enable\n"
+            : "\n";
+        snprintf(definesBuffer, sizeof(definesBuffer),
+            "#define CAN_BILINEAR_FILTER\n#define MULTIVIEW_ENABLED\n#define SHADER_SESSION_ID %u\n",
+            shaderSessionId);
+    } else {
+        extensions = "\n";
+        snprintf(definesBuffer, sizeof(definesBuffer),
+            "#define CAN_BILINEAR_FILTER\n#define SHADER_SESSION_ID %u\n",
+            shaderSessionId);
+    }
     defines = definesBuffer;
 #else
     extensions = "\n";

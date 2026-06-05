@@ -191,7 +191,7 @@ static int std3D_uiProgramMVLoaded = 0;
 GLuint programMenuMV;
 static int programMenuMVLoaded = 0;
 GLint programMenuMV_attribute_coord3d, programMenuMV_attribute_v_color, programMenuMV_attribute_v_uv;
-GLint programMenuMV_uniform_mvp, programMenuMV_uniform_tex, programMenuMV_uniform_displayPalette, programMenuMV_uniform_vrHudOffset;
+GLint programMenuMV_uniform_mvp, programMenuMV_uniform_tex, programMenuMV_uniform_displayPalette;
 #endif
 std3DSimpleTexStage std3D_texFboStage;
 std3DSimpleTexStage std3D_blurStage;
@@ -258,6 +258,7 @@ int std3D_vrHudTexH = 0;
 #if defined(MULTIVIEW_ENABLED)
 static GLuint std3D_viewMatricesUBO = 0;
 static GLuint std3D_projMatricesUBO = 0;
+static GLuint std3D_hudOffsetUBO = 0;   // Per-eye HUD NDC shift (vec4[2], binding point 2)
 static int std3D_multiViewUBOInitted = 0;
 #endif
 
@@ -583,6 +584,38 @@ int init_resources()
     std3D_activeFb = 1;
     std3D_pFb = &std3D_framebuffers[0];
 
+    // Initialize MultiView UBOs BEFORE loading shaders. std3D_BindMultiViewUBOs() is called
+    // during shader loading below (crosshair, and the menu/ui MultiView variants) and calls
+    // glBindBufferBase on these buffers — they must already exist, or it binds buffer 0 (null)
+    // to the binding point. The scene programs survive a null bind because programDefault
+    // rebinds points 0/1 every draw, but HudOffsets (point 2) is only bound here at load, so a
+    // null bind left the per-eye HUD offset reading an unbound block -> undefined on Pico's
+    // tiled GPU (HUD dropped out of one eye).
+#if defined(MULTIVIEW_ENABLED)
+    if (!std3D_multiViewUBOInitted) {
+        // View matrices UBO (2 x mat4 = 128 bytes, std140 layout)
+        glGenBuffers(1, &std3D_viewMatricesUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, std3D_viewMatricesUBO);
+        glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+
+        // Projection matrices UBO (2 x mat4 = 128 bytes, std140 layout)
+        glGenBuffers(1, &std3D_projMatricesUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, std3D_projMatricesUBO);
+        glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+
+        // Per-eye HUD offset UBO (vec4[2] = 32 bytes, std140). Replaces a default-block
+        // uniform array that crashed Pico's Adreno GLSL linker when indexed by gl_ViewID_OVR.
+        glGenBuffers(1, &std3D_hudOffsetUBO);
+        glBindBuffer(GL_UNIFORM_BUFFER, std3D_hudOffsetUBO);
+        glBufferData(GL_UNIFORM_BUFFER, 2 * 4 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+        std3D_multiViewUBOInitted = 1;
+        stdPlatform_Printf("std3D: MultiView UBOs created (view=%u, proj=%u, hud=%u)\n",
+            std3D_viewMatricesUBO, std3D_projMatricesUBO, std3D_hudOffsetUBO);
+    }
+#endif
+
     stdPlatform_Printf("std3D: Loading shader 'default'...\n");
     if ((programDefault = std3D_loadProgram("shaders/default")) == 0) { stdPlatform_Printf("std3D: FAILED to load default shader\n"); return false; }
     stdPlatform_Printf("std3D: Loading shader 'menu'...\n");
@@ -600,6 +633,7 @@ int init_resources()
         std3D_uiProgramMVLoaded = std3D_loadSimpleTexProgram("shaders/ui", &std3D_uiProgramMV) ? 1 : 0;
         g_shaderForceMultiView = 0;
         if (!std3D_uiProgramMVLoaded) stdPlatform_Printf("std3D: WARNING - failed to load MultiView ui shader\n");
+        else std3D_BindMultiViewUBOs(std3D_uiProgramMV.program);  // bind HudOffsets (point 2)
 
         // MultiView variant of the menu program for baking the 2D HUD overlay into both eyes.
         g_shaderForceMultiView = 1;
@@ -615,7 +649,7 @@ int init_resources()
             programMenuMV_uniform_mvp           = std3D_tryFindUniform(programMenuMV, "mvp");
             programMenuMV_uniform_tex           = std3D_tryFindUniform(programMenuMV, "tex");
             programMenuMV_uniform_displayPalette = std3D_tryFindUniform(programMenuMV, "displayPalette");
-            programMenuMV_uniform_vrHudOffset   = std3D_tryFindUniform(programMenuMV, "u_vrHudOffset");
+            std3D_BindMultiViewUBOs(programMenuMV);  // bind HudOffsets (point 2); per-eye shift now a UBO
         }
     }
 #endif
@@ -824,26 +858,6 @@ int init_resources()
     glGenBuffers(1, &menu_vbo_all);
     glGenBuffers(1, &menu_ibo_triangle);
 
-    // Initialize MultiView UBOs for Quest VR (if supported)
-#if defined(MULTIVIEW_ENABLED)
-    if (!std3D_multiViewUBOInitted) {
-        // View matrices UBO (2 x mat4 = 128 bytes, std140 layout)
-        glGenBuffers(1, &std3D_viewMatricesUBO);
-        glBindBuffer(GL_UNIFORM_BUFFER, std3D_viewMatricesUBO);
-        glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
-
-        // Projection matrices UBO (2 x mat4 = 128 bytes, std140 layout)
-        glGenBuffers(1, &std3D_projMatricesUBO);
-        glBindBuffer(GL_UNIFORM_BUFFER, std3D_projMatricesUBO);
-        glBufferData(GL_UNIFORM_BUFFER, 2 * 16 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
-
-        glBindBuffer(GL_UNIFORM_BUFFER, 0);
-        std3D_multiViewUBOInitted = 1;
-        stdPlatform_Printf("std3D: MultiView UBOs created (view=%u, proj=%u)\n",
-            std3D_viewMatricesUBO, std3D_projMatricesUBO);
-    }
-#endif
-
     has_initted = true;
     return true;
 }
@@ -950,8 +964,10 @@ void std3D_FreeResources()
     // and the VR world renders black. Delete them and clear the flag so they are recreated.
     glDeleteBuffers(1, &std3D_viewMatricesUBO);
     glDeleteBuffers(1, &std3D_projMatricesUBO);
+    glDeleteBuffers(1, &std3D_hudOffsetUBO);
     std3D_viewMatricesUBO = 0;
     std3D_projMatricesUBO = 0;
+    std3D_hudOffsetUBO = 0;
     std3D_multiViewUBOInitted = 0;
 #endif
 
@@ -3866,13 +3882,11 @@ void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
     GLuint mprog = programMenu;
     GLint a_coord = programMenu_attribute_coord3d, a_color = programMenu_attribute_v_color, a_uv = programMenu_attribute_v_uv;
     GLint u_mvp = programMenu_uniform_mvp, u_tex = programMenu_uniform_tex, u_pal = programMenu_uniform_displayPalette;
-    int overlayUseMV = 0;
 #if defined(MULTIVIEW_ENABLED)
     if (std3D_multiViewActive && programMenuMVLoaded) {
         mprog   = programMenuMV;
         a_coord = programMenuMV_attribute_coord3d; a_color = programMenuMV_attribute_v_color; a_uv = programMenuMV_attribute_v_uv;
         u_mvp   = programMenuMV_uniform_mvp; u_tex = programMenuMV_uniform_tex; u_pal = programMenuMV_uniform_displayPalette;
-        overlayUseMV = 1;
     }
 #endif
 
@@ -3939,13 +3953,8 @@ void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
     glUniform1i(u_tex, 0);
     glUniform1i(u_pal, 1);
 
-#if defined(MULTIVIEW_ENABLED)
-    // Per-eye HUD shift (forward-centering + depth convergence) so it fuses at a comfortable
-    // distance, centred on the binocular straight-ahead. No scale -> aspect preserved.
-    if (overlayUseMV && programMenuMV_uniform_vrHudOffset >= 0) {
-        glUniform1fv(programMenuMV_uniform_vrHudOffset, 2, std3D_vrHudOffset);
-    }
-#endif
+    // Per-eye HUD shift (forward-centering + depth convergence) is delivered via the HudOffsets
+    // UBO (bound at load, updated per-frame in std3D_SetVRHudOffset) — no per-draw uniform.
 
     // Upload vertices
     glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
@@ -3969,9 +3978,10 @@ void std3D_DrawOverlayToCurrentFBO(int targetWidth, int targetHeight)
         // VR HUD "safe zone": map the HUD quad into an explicit, independently-sized NDC rect in
         // the comfortable central/lower viewing zone (rather than stretching it across the very
         // wide eye buffer). Mapped from the quad's ACTUAL bounding box so it's robust to any
-        // window/eye-buffer size mismatch. Applied UNCONDITIONALLY (not gated on overlayUseMV) so
-        // the layout always responds to the tunables even if the MultiView menu program isn't
-        // active; per-eye fusion/depth is added in the shader (programMenuMV only). All tunable
+        // window/eye-buffer size mismatch. Applied UNCONDITIONALLY (regardless of which menu
+        // program is active) so the layout always responds to the tunables even if the MultiView
+        // menu program isn't active; per-eye fusion/depth is added in the shader (programMenuMV
+        // only, via the HudOffsets UBO). All tunable
         // live in the VR Options menu (persisted in the player config).
         extern float jkPlayer_vrHudWidth, jkPlayer_vrHudHeight, jkPlayer_vrHudPosX, jkPlayer_vrHudPosY;
         const float hudHFrac   = jkPlayer_vrHudWidth;   // HUD half-WIDTH  in NDC (smaller = narrower)
@@ -4118,14 +4128,9 @@ void std3D_DrawUIRenderListToCurrentFBO(int fboWidth, int fboHeight, float dstX,
     glViewport(0, 0, fboWidth, fboHeight);
     glUniform2f(std3D_uiProgram.uniform_iResolution, internalWidth, internalHeight);
 
-#if defined(MULTIVIEW_ENABLED)
-    // When baking into the multiview eye buffer, feed the per-eye asymmetric-frustum remap so
-    // the HUD lands at the same WORLD angle in both eyes (fuses). Same data as the scene shader.
-    if (uiUseMV) {
-        GLint locO = glGetUniformLocation(std3D_uiProgram.program, "u_vrHudOffset");
-        if (locO >= 0) glUniform1fv(locO, 2, std3D_vrHudOffset);
-    }
-#endif
+    // When baking into the multiview eye buffer, the per-eye HUD shift (so the HUD lands at the
+    // same WORLD angle in both eyes) is delivered via the HudOffsets UBO bound to the MV ui
+    // program at load and updated per-frame in std3D_SetVRHudOffset — no per-draw uniform.
 
     glUniform1f(std3D_uiProgram.uniform_param1, 1.0f);
     glUniform1f(std3D_uiProgram.uniform_param2, 1.0f);
@@ -5314,6 +5319,17 @@ void std3D_SetVRHudOffset(float eye0, float eye1)
 #if defined(MULTIVIEW_ENABLED)
     std3D_vrHudOffset[0] = eye0;
     std3D_vrHudOffset[1] = eye1;
+
+    // Push into the HudOffsets UBO (vec4[2], .x = per-eye shift). Orphan before subdata for
+    // the same tiled-GPU race-avoidance as the matrix UBOs. The buffer stays bound to point 2
+    // (std3D_BindMultiViewUBOs at load), so the menu/ui MultiView programs pick this up.
+    if (std3D_multiViewUBOInitted) {
+        float hud[8] = { eye0, 0.0f, 0.0f, 0.0f, eye1, 0.0f, 0.0f, 0.0f };
+        glBindBuffer(GL_UNIFORM_BUFFER, std3D_hudOffsetUBO);
+        glBufferData(GL_UNIFORM_BUFFER, sizeof(hud), NULL, GL_DYNAMIC_DRAW);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(hud), hud);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    }
 #endif
 }
 
@@ -5362,6 +5378,14 @@ void std3D_BindMultiViewUBOs(GLuint program)
     if (projBlockIndex != GL_INVALID_INDEX) {
         glUniformBlockBinding(program, projBlockIndex, 1);
         glBindBufferBase(GL_UNIFORM_BUFFER, 1, std3D_projMatricesUBO);
+    }
+
+    // HudOffsets is present only in the menu/ui MultiView programs; a no-op for the scene
+    // programs (returns GL_INVALID_INDEX). Binding point 2 (0=view, 1=proj).
+    GLuint hudBlockIndex = glGetUniformBlockIndex(program, "HudOffsets");
+    if (hudBlockIndex != GL_INVALID_INDEX) {
+        glUniformBlockBinding(program, hudBlockIndex, 2);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 2, std3D_hudOffsetUBO);
     }
 }
 #else
