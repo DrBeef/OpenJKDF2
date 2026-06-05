@@ -155,6 +155,9 @@ void std3D_SetFrontFaceCW(int bCW);
 // For quad layer path: dstX=0, dstY=0, dstW=fboWidth, dstH=fboHeight (fill entire FBO)
 // For per-eye path: sub-rect matching the quad layer's angular coverage
 void std3D_DrawUIRenderListToCurrentFBO(int fboWidth, int fboHeight, float dstX, float dstY, float dstW, float dstH);
+// VR HUD: render the multi-textured UI list to one RGBA texture (single-view) then composite it
+// into both eye layers as a single-texture multiview draw — fixes the Adreno per-eye HUD desync.
+void std3D_RenderVRHudViaTexture(int fboWidth, int fboHeight, float dstX, float dstY, float dstW, float dstH);
 // MultiView UBO functions for single-pass stereo rendering
 void std3D_UpdateMultiViewMatrices(float* viewMatrices, float* projMatrices);
 void std3D_BindMultiViewUBOs(unsigned int program);

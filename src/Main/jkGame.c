@@ -535,8 +535,11 @@ int jkGame_Update()
                             dstY = ((float)hudH * 0.5f) * (1.0f - hPosY - hHalfH);
                         }
 
-                        // Flush queued UI + overlay into the (bound) multiview eye buffer
-                        std3D_DrawUIRenderListToCurrentFBO(hudW, hudH, dstX, dstY, dstW, dstH);
+                        // Flush queued UI + overlay into the (bound) multiview eye buffer.
+                        // The HUD UI list is multi-textured; rendering it directly with multiview
+                        // desyncs per eye on Adreno (left eye 100/100, right eye 050). Render it to
+                        // a single texture first, then composite as one single-texture MV draw.
+                        std3D_RenderVRHudViaTexture(hudW, hudH, dstX, dstY, dstW, dstH);
                         std3D_DrawOverlayToCurrentFBO(hudW, hudH);
                     }
 

@@ -245,6 +245,15 @@ GLushort* menu_data_elements = NULL;
 GLuint menu_vbo_all;
 GLuint menu_ibo_triangle;
 
+// Offscreen RGBA target for the VR HUD. The multi-textured HUD is rendered here SINGLE-VIEW (all
+// its per-element texture switches happen on one layer, where Adreno multiview can't desync them),
+// then composited into both eye layers as ONE single-texture multiview draw. See
+// std3D_RenderVRHudViaTexture.
+GLuint std3D_vrHudFbo = 0;
+GLuint std3D_vrHudTex = 0;
+int std3D_vrHudTexW = 0;
+int std3D_vrHudTexH = 0;
+
 // MultiView UBOs for single-pass stereo rendering (Quest VR)
 #if defined(MULTIVIEW_ENABLED)
 static GLuint std3D_viewMatricesUBO = 0;
@@ -496,12 +505,19 @@ GLuint std3D_loadProgram(const char* fpath_base)
     glAttachShader(out, fs);
     glLinkProgram(out);
     glGetProgramiv(out, GL_LINK_STATUS, &link_ok);
-    if (!link_ok) 
+    if (!link_ok)
     {
         print_log(out);
         return 0;
     }
-    
+
+    // Detach + delete the shader objects now that the program is linked (standard practice; frees
+    // each program's shader objects instead of leaking them for the process lifetime).
+    glDetachShader(out, vs);
+    glDetachShader(out, fs);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
     return out;
 }
 
@@ -918,6 +934,12 @@ void std3D_FreeResources()
     glDeleteBuffers(1, &world_ibo_triangle);
 
     glDeleteBuffers(1, &menu_vbo_all);
+
+    // VR HUD render-to-texture target (recreated lazily by std3D_RenderVRHudViaTexture).
+    if (std3D_vrHudTex) { glDeleteTextures(1, &std3D_vrHudTex); std3D_vrHudTex = 0; }
+    if (std3D_vrHudFbo) { glDeleteFramebuffers(1, &std3D_vrHudFbo); std3D_vrHudFbo = 0; }
+    std3D_vrHudTexW = 0;
+    std3D_vrHudTexH = 0;
 
 #if defined(MULTIVIEW_ENABLED)
     // Altered: the MultiView matrix UBOs belong to the GL context being torn down here.
@@ -4194,6 +4216,93 @@ void std3D_DrawUIRenderListToCurrentFBO(int fboWidth, int fboHeight, float dstX,
 #endif
 
     std3D_ResetUIRenderList();
+}
+
+// Static helper: push one textured quad (white vertex colour) into the UI render list.
+// Vertex layout matches std3D_DrawUIBitmapRGBA: 0=TL,1=BL,2=BR,3=TR. UVs: TL=(u0,v0), BR=(u1,v1).
+static void std3D_PushUIQuad(float x0, float y0, float x1, float y1,
+                             float u0, float v0, float u1, float v1, GLuint tex, int flags)
+{
+    if (GL_tmpUIVerticesAmt + 4 > STD3D_MAX_UI_VERTICES) return;
+    if (GL_tmpUITrisAmt + 2 > STD3D_MAX_UI_TRIS) return;
+    int b = GL_tmpUIVerticesAmt;
+    uint32_t white = 0xFFFFFFFFu;
+    GL_tmpUIVertices[b+0].x=x0; GL_tmpUIVertices[b+0].y=y0; GL_tmpUIVertices[b+0].z=0.0f; GL_tmpUIVertices[b+0].tu=u0; GL_tmpUIVertices[b+0].tv=v0; GL_tmpUIVertices[b+0].color=white; *(uint32_t*)&GL_tmpUIVertices[b+0].nx=0; *(uint32_t*)&GL_tmpUIVertices[b+0].nz=0;
+    GL_tmpUIVertices[b+1].x=x0; GL_tmpUIVertices[b+1].y=y1; GL_tmpUIVertices[b+1].z=0.0f; GL_tmpUIVertices[b+1].tu=u0; GL_tmpUIVertices[b+1].tv=v1; GL_tmpUIVertices[b+1].color=white; *(uint32_t*)&GL_tmpUIVertices[b+1].nx=0; *(uint32_t*)&GL_tmpUIVertices[b+1].nz=0;
+    GL_tmpUIVertices[b+2].x=x1; GL_tmpUIVertices[b+2].y=y1; GL_tmpUIVertices[b+2].z=0.0f; GL_tmpUIVertices[b+2].tu=u1; GL_tmpUIVertices[b+2].tv=v1; GL_tmpUIVertices[b+2].color=white; *(uint32_t*)&GL_tmpUIVertices[b+2].nx=0; *(uint32_t*)&GL_tmpUIVertices[b+2].nz=0;
+    GL_tmpUIVertices[b+3].x=x1; GL_tmpUIVertices[b+3].y=y0; GL_tmpUIVertices[b+3].z=0.0f; GL_tmpUIVertices[b+3].tu=u1; GL_tmpUIVertices[b+3].tv=v0; GL_tmpUIVertices[b+3].color=white; *(uint32_t*)&GL_tmpUIVertices[b+3].nx=0; *(uint32_t*)&GL_tmpUIVertices[b+3].nz=0;
+    GL_tmpUITris[GL_tmpUITrisAmt+0].v1=b+1; GL_tmpUITris[GL_tmpUITrisAmt+0].v2=b+0; GL_tmpUITris[GL_tmpUITrisAmt+0].v3=b+2; GL_tmpUITris[GL_tmpUITrisAmt+0].flags=flags; GL_tmpUITris[GL_tmpUITrisAmt+0].texture=tex;
+    GL_tmpUITris[GL_tmpUITrisAmt+1].v1=b+0; GL_tmpUITris[GL_tmpUITrisAmt+1].v2=b+3; GL_tmpUITris[GL_tmpUITrisAmt+1].v3=b+2; GL_tmpUITris[GL_tmpUITrisAmt+1].flags=flags; GL_tmpUITris[GL_tmpUITrisAmt+1].texture=tex;
+    GL_tmpUIVerticesAmt += 4;
+    GL_tmpUITrisAmt += 2;
+}
+
+// VR HUD: render the (multi-textured) UI render list to a single RGBA texture SINGLE-VIEW, then
+// composite that one texture into both multiview eye layers as a single-texture MV draw. This is
+// the fix for the Adreno multiview per-eye HUD desync (a multi-texture UI draw replicated across
+// the two eye layers sampled inconsistent texture state -> e.g. left eye 100/100, right eye 050).
+// A single-texture MV draw replicates correctly (verified on-device: solid-colour and overlay
+// single-texture draws never desync).
+void std3D_RenderVRHudViaTexture(int fboWidth, int fboHeight, float dstX, float dstY, float dstW, float dstH)
+{
+    if (Main_bHeadless || !has_initted) return;
+    if (!GL_tmpUITrisAmt) return;  // no HUD content this frame
+
+    int W = (int)Window_xSize, H = (int)Window_ySize;
+    if (W <= 0 || H <= 0) return;
+
+    // Save the multiview eye FBO + viewport FIRST (before any bind below clobbers them), so we can
+    // restore them for the composite.
+    GLint savedFbo = 0, savedVp[4] = {0,0,0,0};
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &savedFbo);
+    glGetIntegerv(GL_VIEWPORT, savedVp);
+
+    // Lazy-create / resize the HUD RGBA target.
+    if (std3D_vrHudFbo == 0 || std3D_vrHudTexW != W || std3D_vrHudTexH != H) {
+        if (std3D_vrHudTex) { glDeleteTextures(1, &std3D_vrHudTex); std3D_vrHudTex = 0; }
+        if (std3D_vrHudFbo) { glDeleteFramebuffers(1, &std3D_vrHudFbo); std3D_vrHudFbo = 0; }
+        glGenTextures(1, &std3D_vrHudTex);
+        glBindTexture(GL_TEXTURE_2D, std3D_vrHudTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glGenFramebuffers(1, &std3D_vrHudFbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, std3D_vrHudFbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, std3D_vrHudTex, 0);
+        std3D_vrHudTexW = W; std3D_vrHudTexH = H;
+    }
+
+    // --- Step 1: render the UI list to the HUD texture, SINGLE-VIEW. All the per-element texture
+    // switches happen here, on one layer, where Adreno multiview cannot desync them. Gamma is
+    // applied here (once); the composite below uses gamma 1.0 so it isn't applied twice. ---
+    glBindFramebuffer(GL_FRAMEBUFFER, std3D_vrHudFbo);
+    glViewport(0, 0, W, H);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    {
+        int savedMV = std3D_multiViewActive;
+        std3D_multiViewActive = 0;  // force the mono UI program -> plain 2D render
+        std3D_DrawUIRenderListToCurrentFBO(W, H, 0.0f, 0.0f, (float)W, (float)H);
+        std3D_multiViewActive = savedMV;
+    }
+    // (std3D_DrawUIRenderListToCurrentFBO calls std3D_ResetUIRenderList internally.)
+
+    // --- Step 2: composite the single HUD texture into both eye layers (MV, ONE texture -> syncs).
+    glBindFramebuffer(GL_FRAMEBUFFER, savedFbo);
+    glViewport(savedVp[0], savedVp[1], savedVp[2], savedVp[3]);
+
+    // One full-window quad sampling the HUD texture. UV is V-flipped: the HUD texture was written
+    // with the UI ortho (which flips Y), so Window (x,y) lives at UV (x/W, 1 - y/H). flags=1 ->
+    // discard fully-transparent texels so only the HUD composites over the scene.
+    std3D_PushUIQuad(0.0f, 0.0f, (float)W, (float)H, 0.0f, 1.0f, 1.0f, 0.0f, std3D_vrHudTex, 1);
+
+    extern float jkPlayer_gamma;
+    float savedGamma = jkPlayer_gamma;
+    jkPlayer_gamma = 1.0f;            // gamma already baked into the HUD texture in step 1
+    std3D_DrawUIRenderListToCurrentFBO(fboWidth, fboHeight, dstX, dstY, dstW, dstH);
+    jkPlayer_gamma = savedGamma;
 }
 #endif
 
