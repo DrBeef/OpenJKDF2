@@ -112,15 +112,6 @@ char Main_strEpisode[129];
 char Main_strMap[128+4];
 #endif
 
-#ifdef PLATFORM_VR
-// VR automated test mode
-int32_t Main_bVRTest = 0;
-int32_t Main_bVRTestNoHeadset = 0;    // Test without VR hardware
-int32_t Main_vrTestFrameTarget = 60;  // Frames to run before screenshot/exit
-int32_t Main_vrTestFrameCount = 0;    // Current frame count in gameplay
-int32_t Main_vrTestState = 0;         // 0=waiting, 1=in gameplay, 2=done
-#endif
-
 #if defined(QOL_IMPROVEMENTS) && !defined(TARGET_NO_MULTIPLAYER_MENUS)
 int Main_StartupDedicated(int bFullyDedicated)
 {
@@ -132,8 +123,8 @@ int Main_StartupDedicated(int bFullyDedicated)
 
 #ifdef PLATFORM_VR
     extern void VR_Log(const char* fmt, ...);
-    VR_Log("=== Main_StartupDedicated: bFullyDedicated=%d, Main_bVRTest=%d, Main_bAutostartSp=%d ===\n",
-           bFullyDedicated, Main_bVRTest, Main_bAutostartSp);
+    VR_Log("=== Main_StartupDedicated: bFullyDedicated=%d, Main_bAutostartSp=%d ===\n",
+           bFullyDedicated, Main_bAutostartSp);
     VR_Log("=== Episode='%s', Map='%s' ===\n", Main_strEpisode, Main_strMap);
 #endif
 
@@ -811,42 +802,6 @@ void Main_ParseCmdLine(char *cmdline)
         }
 #endif
 #ifdef PLATFORM_VR
-        else if (!__strcmpi(pArgTok, "-vrtest") || !__strcmpi(pArgTok, "/vrtest"))
-        {
-            Main_bVRTest = 1;
-            Main_bAutostart = 1;
-            Main_bAutostartSp = 1;
-            // Default to first level if not specified (note: .jkl is added automatically)
-            if (Main_strEpisode[0] == 0) {
-                stdString_SafeStrCopy(Main_strEpisode, "jk1", 0x80);
-            }
-            if (Main_strMap[0] == 0) {
-                stdString_SafeStrCopy(Main_strMap, "01narshadda", 0x80);
-            }
-        }
-        else if (!__strcmpi(pArgTok, "-vrtest-noheadset") || !__strcmpi(pArgTok, "/vrtest-noheadset"))
-        {
-            Main_bVRTest = 1;
-            Main_bVRTestNoHeadset = 1;
-            Main_bAutostart = 1;
-            Main_bAutostartSp = 1;
-            // Default to first level if not specified (note: .jkl is added automatically)
-            if (Main_strEpisode[0] == 0) {
-                stdString_SafeStrCopy(Main_strEpisode, "jk1", 0x80);
-            }
-            if (Main_strMap[0] == 0) {
-                stdString_SafeStrCopy(Main_strMap, "01narshadda", 0x80);
-            }
-            stdPlatform_Printf("VR TEST MODE: noheadset, episode=%s, map=%s\n", Main_strEpisode, Main_strMap);
-        }
-        else if (!__strcmpi(pArgTok, "-vrframes") || !__strcmpi(pArgTok, "/vrframes"))
-        {
-            char* pArgNext = _strtok(0, " \t");
-            if (pArgNext) {
-                Main_vrTestFrameTarget = _atoi(pArgNext);
-                if (Main_vrTestFrameTarget < 10) Main_vrTestFrameTarget = 10;
-            }
-        }
         else if (!__strcmpi(pArgTok, "-vrdebug") || !__strcmpi(pArgTok, "/vrdebug"))
         {
             // Shader debug mode: 0=normal, 1=solid, 2=UV, 3=depth, 4=vertex color

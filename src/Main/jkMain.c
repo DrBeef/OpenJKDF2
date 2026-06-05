@@ -893,50 +893,6 @@ void jkMain_TitleTick(int a1)
         jkGuiRend_thing_four = 1;
     jkSmack_stopTick = 1;
 
-#ifdef PLATFORM_VR
-    // VR test mode: skip main menu and go directly to gameplay
-    {
-        extern int32_t Main_bVRTest;
-        extern char Main_strEpisode[129];
-        extern char Main_strMap[128+4];
-
-        if (Main_bVRTest && Main_strEpisode[0] && Main_strMap[0]) {
-            extern void VR_Log(const char* fmt, ...);
-            VR_Log("=== VR AUTO-TEST: Skipping menu, loading %s/%s ===\n", Main_strEpisode, Main_strMap);
-
-            // Set up for singleplayer level load
-            jkSmack_gameMode = 0;  // New game mode
-
-            // Build full level filename
-            char levelFile[256];
-            snprintf(levelFile, sizeof(levelFile), "%s", Main_strMap);
-            // Add .jkl if not present
-            if (!strstr(levelFile, ".jkl")) {
-                strcat(levelFile, ".jkl");
-            }
-            _strncpy(jkMain_aLevelJklFname, levelFile, 127);
-            jkMain_aLevelJklFname[127] = 0;
-
-            // Load the episode GOB
-            char gobPath[256];
-            snprintf(gobPath, sizeof(gobPath), "%s.gob", Main_strEpisode);
-            jkRes_LoadGob(gobPath);
-
-            // Load episode info
-            if (!jkEpisode_Load(Main_strEpisode)) {
-                VR_Log("=== VR AUTO-TEST: Failed to load episode %s ===\n", Main_strEpisode);
-                jkSmack_nextGuiState = JK_GAMEMODE_MAIN;
-                return;
-            }
-
-            VR_Log("=== VR AUTO-TEST: Episode loaded, going to gameplay ===\n");
-            jkPlayer_bLoadingSomething = 1;
-            jkSmack_nextGuiState = JK_GAMEMODE_GAMEPLAY;
-            return;
-        }
-    }
-#endif
-
 #ifdef QOL_IMPROVEMENTS
     // Added: Runtime quickstart via commandline.txt (-map argument)
     // Allows skipping menus without recompiling

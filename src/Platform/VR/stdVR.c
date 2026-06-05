@@ -587,46 +587,6 @@ void stdVR_SetHudOffsetForDepth(float depthMeters)
     std3D_SetVRHudOffset(off[0], off[1]);
 }
 
-// ============================================================================
-// HUD Buffer Functions - Wrapper for dedicated HUD quad layer
-// ============================================================================
-
-int stdVR_PrepareHudBuffer(void)
-{
-    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
-        return 0;
-    }
-    return stdVR_OpenXR_PrepareHudBuffer();
-}
-
-int stdVR_FinishHudBuffer(void)
-{
-    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
-        return 0;
-    }
-    return stdVR_OpenXR_FinishHudBuffer();
-}
-
-int stdVR_GetHudFBO(void)
-{
-    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
-        return 0;
-    }
-    return stdVR_OpenXR_GetHudFBO();
-}
-
-void stdVR_GetHudSize(int* pWidth, int* pHeight)
-{
-    stdVR_OpenXR_GetHudSize(pWidth, pHeight);
-}
-
-int stdVR_IsHudEnabled(void)
-{
-    if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
-        return 0;
-    }
-    return stdVR_OpenXR_IsHudEnabled();
-}
 
 void stdVR_UpdateTracking(void)
 {

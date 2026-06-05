@@ -951,44 +951,6 @@ void sithCamera_PrepareFrameVR(void)
     }
 }
 
-// Set up VR view for a specific eye (called per-eye in the stereo loop)
-void sithCamera_SetVRView(int eye)
-{
-    if (!sithCamera_currentCamera) return;
-    if (eye < 0 || eye >= STDVR_EYE_COUNT) return;
-
-    // Per-eye path (Android fallback + -vrtest): keep the legacy CPU projection (each eye is
-    // rendered separately, so the GPU per-eye multiview projection does not apply here).
-    rdCamera_bGpuProjection = 0;
-
-    // Get the combined camera+VR matrix
-    rdMatrix34 vrViewMatrix;
-    stdVR_CombineCameraWithEye(&sithCamera_currentCamera->viewMat, eye, &vrViewMatrix);
-
-    // Added: Store the combined matrix for weapon rendering (jkPlayer_DrawPov)
-    stdVR_SetCurrentEyeViewMatrix(&vrViewMatrix);
-
-    // Update camera sector/position to match this eye for culling and lighting
-    sithCamera_ApplyVREyeState(&vrViewMatrix);
-
-    // Update the rdCamera with the VR view matrix
-    rdCamera_SetCurrent(&sithCamera_currentCamera->rdCam);
-    rdMatrix34 invertedView;
-    rdMatrix_InvertOrtho34(&invertedView, &vrViewMatrix);
-    rdMatrix_Copy34(&rdCamera_pCurCamera->view_matrix, &invertedView);
-
-    // Added: Update rdCamera_camMatrix global (used by culling and sky rendering)
-    // This was missing before, causing stale camera state for one eye
-    rdCamera_UpdateCamMatrix(&vrViewMatrix);
-
-    // Per-eye CPU projection state (this fallback path projects on the CPU via
-    // rdCamera_PerspProjectVR, which uses the tangents + render dimensions below; the per-eye
-    // projection matrix itself is applied on the GPU in the multiview path, not here).
-    stdVR_EyeView* pEye = &stdVR_clientInfo.eyes[eye];
-    rdCamera_SetVRTangents(pEye->fovLeft, pEye->fovRight, pEye->fovUp, pEye->fovDown);
-    rdCamera_SetVRRenderDimensions(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
-}
-
 void sithCamera_RestoreVRView(void)
 {
     if (!sithCamera_vrSavedState.valid) {

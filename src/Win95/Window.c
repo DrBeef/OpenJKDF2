@@ -850,20 +850,10 @@ void Window_SdlUpdate()
                 //stdPlatform_Printf("scancode %d\n", event.key.keysym.scancode);
                 //handleKey(&event.key.keysym, WM_KEYDOWN, 0x1);
 #ifdef PLATFORM_VR
-                // F8 toggles the desktop VR mirror source: left-eye scene <-> HUD FBO (debug)
-                if (event.key.keysym.sym == SDLK_F8 && !event.key.repeat) {
-                    extern int stdVR_mirrorMode;
-                    stdVR_mirrorMode = (stdVR_mirrorMode + 1) % 2;
-                }
-                // F9 cycles the mirror flip: 0=none,1=flipY,2=flipX,3=flipXY
+                // F9 cycles the desktop VR mirror flip: 0=none,1=flipY,2=flipX,3=flipXY
                 if (event.key.keysym.sym == SDLK_F9 && !event.key.repeat) {
                     extern int stdVR_mirrorFlip;
                     stdVR_mirrorFlip = (stdVR_mirrorFlip + 1) % 4;
-                }
-                // F7 dumps the current HUD FBO to vrtest_hud.ppm + an opacity analysis (debug)
-                if (event.key.keysym.sym == SDLK_F7 && !event.key.repeat) {
-                    extern void stdVR_OpenXR_DumpHudMirror(void);
-                    stdVR_OpenXR_DumpHudMirror();
                 }
 #endif
                 if (event.key.keysym.sym == SDLK_ESCAPE)

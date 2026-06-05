@@ -57,15 +57,8 @@ void stdVR_SetMultiViewMatrices(float zNear, float zFar);  // Upload both eye vi
 void stdVR_SetHudOffsetForDepth(float depthMeters);        // Set baked-HUD per-eye shift for a virtual depth
 
 // Desktop mirror (debug aid): blit the last-rendered VR buffer to the SDL window.
-// Caller does the SDL_GL_SwapWindow afterwards. See stdVR_mirrorMode in stdVR_OpenXR.h.
+// Caller does the SDL_GL_SwapWindow afterwards. See stdVR_mirrorFlip in stdVR_OpenXR.h.
 void stdVR_MirrorToWindow(int windowWidth, int windowHeight);
-
-// HUD rendering (dedicated quad layer for in-game HUD)
-int stdVR_PrepareHudBuffer(void);       // Acquire HUD swapchain and bind FBO
-int stdVR_FinishHudBuffer(void);        // Release HUD swapchain image
-int stdVR_GetHudFBO(void);              // Get HUD FBO (0 if not active)
-void stdVR_GetHudSize(int* pWidth, int* pHeight);  // Get HUD render target size
-int stdVR_IsHudEnabled(void);           // Check if HUD quad layer is available
 
 // Tracking
 void stdVR_UpdateTracking(void);        // Update HMD and controller poses
@@ -163,11 +156,6 @@ static inline int stdVR_FinishMultiViewBuffer(void) { return 0; }
 static inline int stdVR_GetMultiViewFBO(void) { return 0; }
 static inline void stdVR_SetMultiViewMatrices(float zNear, float zFar) { (void)zNear; (void)zFar; }
 static inline void stdVR_SetHudOffsetForDepth(float depthMeters) { (void)depthMeters; }
-static inline int stdVR_PrepareHudBuffer(void) { return 0; }
-static inline int stdVR_FinishHudBuffer(void) { return 0; }
-static inline int stdVR_GetHudFBO(void) { return 0; }
-static inline void stdVR_GetHudSize(int* pWidth, int* pHeight) { if (pWidth) *pWidth = 0; if (pHeight) *pHeight = 0; }
-static inline int stdVR_IsHudEnabled(void) { return 0; }
 static inline void stdVR_UpdateTracking(void) {}
 static inline void stdVR_UpdateInput(void) {}
 static inline void stdVR_MapInputToGame(void) {}
