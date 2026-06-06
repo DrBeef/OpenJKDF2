@@ -84,6 +84,7 @@ typedef struct stdVR_MotionState {
     rdVector3 linearVelocity;       // Linear velocity in m/s
     rdVector3 angularVelocity;      // Angular velocity in rad/s
     float swingSpeed;               // Magnitude of linear velocity
+    float forwardSpeed;             // Signed velocity along controller forward (m/s); +ve = forward thrust/punch
 
     // Multiple angle interpretations
     rdVector3 angles[STDVR_ANGLES_COUNT];       // Current angles per set

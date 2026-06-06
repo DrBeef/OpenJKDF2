@@ -813,6 +813,12 @@ void Main_ParseCmdLine(char *cmdline)
             }
         }
 #endif
+        else if (!__strcmpi(pArgTok, "-console") || !__strcmpi(pArgTok, "/console"))
+        {
+            // Handled early in main() (Windows: enables debug console output). Recognized here so
+            // it doesn't fall through to the "Error in arguments" path below — which calls
+            // Main_ShowHelp() -> jk_exit() and quits the game immediately (the "-console crash").
+        }
         else
         {
             pHS->errorPrint("Error in arguments.\n", 0, 0, 0, 0);

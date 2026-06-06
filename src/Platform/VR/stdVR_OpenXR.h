@@ -37,6 +37,11 @@ int stdVR_OpenXR_IsMultiViewSupported(void);
 int stdVR_OpenXR_PrepareMultiViewBuffer(void);
 int stdVR_OpenXR_FinishMultiViewBuffer(void);
 int stdVR_OpenXR_GetMultiViewFBO(void);
+
+// Request a rebuild of the MultiView swapchain (+ its FBOs/depth) at the current supersampling
+// (VR render scale). Safe to call from any thread/path; the rebuild itself is deferred to
+// between-frames (BeginFrame). No-op unless a MultiView session is running.
+void stdVR_OpenXR_RequestSupersampleRebuild(void);
 void stdVR_OpenXR_GetStereoOffsets(float* leftOffset, float* rightOffset);
 
 // Tracking

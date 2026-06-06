@@ -566,38 +566,41 @@ int main(int argc, char** argv)
 
 #endif
 #ifdef WIN64_STANDALONE
+    // Install the drmingw crash handler first, so early crashes produce a .RPT stack trace.
+    {
+        HMODULE hLib = LoadLibrary("exchndl.dll");
+        if (hLib) {
+            void (*pfnExcHndlInit)(void) = (void(*)(void))GetProcAddress(hLib, "ExcHndlInit");
+            if (pfnExcHndlInit) pfnExcHndlInit();
+        }
+    }
+
     int skipConsoleWindow = 0;
     if ((SDL_GetHintBoolean("SteamClientLaunch", 0) || SDL_GetHintBoolean("SteamOS", 0) || SDL_GetHintBoolean("SteamDeck", 0)) && SDL_GetHintBoolean("SteamGamepadUI", 0)) {
         skipConsoleWindow = 1;
     }
 
-    FILE* fp;
-    if (!skipConsoleWindow) {
-        AllocConsole();
-        freopen_s(&fp, "CONIN$", "r", stdin);
-        freopen_s(&fp, "CONOUT$", "w", stdout);
-        freopen_s(&fp, "CONOUT$", "w", stdout);
+#ifdef PLATFORM_VR
+    // The VR build (jkdf2xr.exe) ships as a windowed app (no console subsystem). Only enable debug
+    // output when the user explicitly passes -console.
+    skipConsoleWindow = 1;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] && (!__strcmpi(argv[i], "-console") || !__strcmpi(argv[i], "/console"))) {
+            skipConsoleWindow = 0;
+            break;
+        }
     }
+#endif
 
-    int can_has_crashdumps = 1;
-
-    OSVERSIONINFOEX info;
-    ZeroMemory(&info, sizeof(OSVERSIONINFOEX));
-    info.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
-    GetVersionEx((LPOSVERSIONINFO)&info);//info requires typecasting
-
-    // Apparently Windows 7 has a security update kb4507456
-    // which is required for api-ms-win-downlevel-kernel32-l2-1-0.dll.
-    // So only try and load drmingw on Win8+ for now.
-    //if (info.dwMajorVersion >= 6 && info.dwMinorVersion > 1) {
-    //    can_has_crashdumps = 1;
-    //}
-
-    if (can_has_crashdumps) {
-        HMODULE hLib = LoadLibrary("exchndl.dll");
-        if (hLib) {
-            void (*pfnExcHndlInit)(void) = GetProcAddress(hLib, "ExcHndlInit");
-            pfnExcHndlInit();
+    if (!skipConsoleWindow) {
+        // -console: open a console window for debug output. Use plain freopen (not freopen_s) so a
+        // GUI-subsystem build, where the std streams aren't console-backed at startup, doesn't trip
+        // the CRT invalid-parameter handler. Gated on AllocConsole so we only redirect once a
+        // console exists. (The "-console crash" was actually the Main.c arg parser rejecting
+        // -console -> Main_ShowHelp -> jk_exit; that's fixed separately.)
+        if (AllocConsole()) {
+            freopen("CONOUT$", "w", stdout);
+            freopen("CONOUT$", "w", stderr);
         }
     }
 #endif // WIN64_STANDALONE

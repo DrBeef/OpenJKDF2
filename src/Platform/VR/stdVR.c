@@ -1648,6 +1648,17 @@ void stdVR_SyncConfigFromJkPlayer(void)
     if (stdVR_config.supersampling <= 0.0f) {
         stdVR_config.supersampling = 1.0f;
     }
+    // If the supersampling (VR render scale) changed, ask the OpenXR backend to rebuild the
+    // MultiView swapchain at the new size. The request is a no-op until a session is running
+    // (the initial swapchain is already built at the loaded value) and the rebuild itself is
+    // deferred to between-frames inside the backend.
+    {
+        static float stdVR_lastAppliedSupersampling = -1.0f;
+        if (stdVR_config.supersampling != stdVR_lastAppliedSupersampling) {
+            stdVR_lastAppliedSupersampling = stdVR_config.supersampling;
+            stdVR_OpenXR_RequestSupersampleRebuild();
+        }
+    }
 
     //Motion Config
     stdVR_motionConfig.weaponPitchAdjust = (float)jkPlayer_vrWeaponPitchAdjust;

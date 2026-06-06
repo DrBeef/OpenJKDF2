@@ -1005,6 +1005,12 @@ int std3D_StartScene()
         && std3D_vrTargetWidth > 0 && std3D_vrTargetHeight > 0)
     {
         double vr_supersample = stdVR_config.supersampling > 0.0 ? stdVR_config.supersampling : 1.0;
+        // In MultiView mode (all VR gameplay) the VR target size already includes supersampling
+        // (the swapchain is created at recommended*supersampling and the scene renders straight
+        // into it), so don't apply the multiplier a second time here. The only other VR user of
+        // std3D_pFb is the per-eye MENU/GUI path (multiViewActive=0, native target), where the
+        // internal FBO is supersampled here and blitted down into the native per-eye swapchain.
+        if (std3D_multiViewActive) vr_supersample = 1.0;
         supersample_level = vr_supersample;
         tex_w = (int32_t)((double)std3D_vrTargetWidth * supersample_level);
         tex_h = (int32_t)((double)std3D_vrTargetHeight * supersample_level);
@@ -1594,6 +1600,22 @@ void std3D_DrawMenu()
         GL_tmpTrisAmt = 0;
 
         glBlendFunc(GL_SRC_ALPHA, GL_SRC_ALPHA);
+
+#ifdef PLATFORM_VR
+        // The cutscene is authored as a 640x480 (4:3) presentation (video in the upper rows,
+        // subtitles below). The VR render target is ~square, so fitting this canvas to the full
+        // target width left the video anchored to the top with a large black gap below. Fit the
+        // 4:3 canvas inside the target instead; shift_x/shift_y (below) then center it.
+        if (std3D_vrTargetActive && targetWidth > 0 && targetHeight > 0) {
+            if ((double)targetWidth / (double)targetHeight > (640.0 / 480.0)) {
+                fake_windowH = (double)targetHeight;            // target wider than 4:3 -> pillarbox
+                fake_windowW = fake_windowH * (640.0 / 480.0);
+            } else {
+                fake_windowW = (double)targetWidth;             // target taller than 4:3 -> letterbox
+                fake_windowH = fake_windowW * (480.0 / 640.0);
+            }
+        }
+#endif
 
         int video_height = Main_bMotsCompat ? 350 : 300;
         int subs_y = 350;

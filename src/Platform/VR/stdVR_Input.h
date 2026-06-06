@@ -50,6 +50,9 @@ int stdVR_Input_IsPrevWeaponTriggered(void);
 int stdVR_Input_IsCrouchToggled(void);
 void stdVR_Input_ResetCrouchToggle(void);
 
+// Melee punch: dominant hand thrust forward (fists are punch-activated, not trigger-fired)
+int stdVR_Input_IsPunchActive(void);
+
 #ifdef __cplusplus
 }
 #endif

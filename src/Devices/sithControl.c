@@ -733,10 +733,23 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
 
         int vrInput = 0;
         switch (funcIdx) {
-            case INPUT_FUNC_FIRE1:
-                // Dominant trigger = primary fire
-                vrInput = stdVR_Input_IsButtonDown(btnFire1);
+            case INPUT_FUNC_FIRE1: {
+                // VR melee is motion-controlled, not trigger-fired: the lightsaber is activated
+                // by swinging (handled in jkSaber.c) and the fists by punching forward. Ranged
+                // weapons still fire with the dominant trigger.
+                extern sithPlayerInfo* sithPlayer_pLocalPlayer;
+                int weap = sithPlayer_pLocalPlayer ? sithPlayer_pLocalPlayer->curWeapon : -1;
+                int isSaber = (weap == SITHBIN_LIGHTSABER || weap == SITHBIN_MOTS_LIGHTSABER);
+                int isFists = (weap == SITHBIN_FISTS || weap == SITHBIN_MOTS_FISTS);
+                if (isSaber && stdVR_motionConfig.bMotionSaberEnabled) {
+                    vrInput = 0;                              // swing-only; trigger does nothing
+                } else if (isFists) {
+                    vrInput = stdVR_Input_IsPunchActive();    // punch forward to attack
+                } else {
+                    vrInput = stdVR_Input_IsButtonDown(btnFire1); // ranged: dominant trigger
+                }
                 break;
+            }
             case INPUT_FUNC_FIRE2:
                 // Dominant face button (B/Y) = secondary fire
                 vrInput = stdVR_Input_IsButtonDown(btnAltFire);

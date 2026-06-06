@@ -426,6 +426,31 @@ void jkGuiRend_MenuSetEscapeKeyShortcutElement(jkGuiMenu *menu, jkGuiElement *el
     menu->pEscapeKeyShortcutElement = element;
 }
 
+// Added (VR): is a GUI menu (pause menu, options, dialogs, ...) currently showing?
+int jkGuiRend_IsMenuActive(void)
+{
+    return jkGuiRend_activeMenu != NULL;
+}
+
+// Added (VR): act as if Escape was pressed on the active menu — triggers its escape shortcut
+// (e.g. "Return to Game" on the pause menu, or Cancel/back on sub-menus). Lets the VR menu button
+// close/back out of a menu the same way the gamepad B button does (see KEY_JOY1_B2 handling).
+void jkGuiRend_TriggerEscape(void)
+{
+    if (!jkGuiRend_activeMenu) {
+        return;
+    }
+    jkGuiElement* pEsc = jkGuiRend_activeMenu->pEscapeKeyShortcutElement;
+    if (pEsc) {
+        // Click the escape target directly. This bypasses the visibility check in the VK_ESCAPE
+        // path so it still works when the target is hidden — the VR pause menu hides its
+        // "Return to Game" button (the VR menu button performs that action instead).
+        jkGuiRend_InvokeClicked(pEsc, jkGuiRend_activeMenu, pEsc->rect.x + 1, pEsc->rect.y + 1, 0);
+    } else {
+        jkGuiRend_WindowHandler(0, WM_KEYFIRST, VK_ESCAPE, 0, 0);
+    }
+}
+
 int32_t jkGuiRend_DisplayAndReturnClicked(jkGuiMenu *menu)
 {
     int32_t msgret; // eax

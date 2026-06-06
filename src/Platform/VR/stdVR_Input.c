@@ -17,6 +17,7 @@
 #include "Main/jkMain.h"
 #include "Main/jkSmack.h"
 #include "Main/jkDev.h"
+#include "Gui/jkGUIRend.h"
 
 #include <math.h>
 
@@ -41,6 +42,12 @@ static int stdVR_prevWeaponTriggered = 0;
 // Crouch toggle via right thumbstick down
 static int stdVR_crouchToggled = 0;
 static int stdVR_crouchToggleState = 0;  // debounce: 0 = neutral, -1 = already toggled this push
+
+// Fist punch state per controller (fists fire on a forward thrust of EITHER hand). Edge-detected
+// once per frame in stdVR_Input_MapToGame so the haptic buzzes once per punch; the level value is
+// read by stdVR_Input_IsPunchActive for FIRE1.
+static int stdVR_punchActive[STDVR_CONTROLLER_COUNT] = {0};
+static int stdVR_punchActiveLast[STDVR_CONTROLLER_COUNT] = {0};
 
 // Deadzone for thumbsticks
 #define STDVR_THUMBSTICK_DEADZONE 0.2f
@@ -265,7 +272,15 @@ void stdVR_Input_MapToGame(void)
     // Mirror JKXR-style logic: use screen layer when UI/cinematics/menus are active
     int guiState = jkSmack_GetCurrentGuiState();
     int inGameplay = (guiState == JK_GAMEMODE_GAMEPLAY);
-    if (inGameplay && stdVR_menuTriggeredThisFrame) {
+    int bMenuActive = jkGuiRend_IsMenuActive();  // a GUI menu (pause/options/dialog) is showing
+
+    if (stdVR_menuTriggeredThisFrame && bMenuActive) {
+        // A menu is already open: a second menu-button press closes it (triggers the menu's
+        // "Return to Game" / back shortcut), so the user doesn't have to point at and click
+        // "Return to Game" to get back into the game.
+        jkGuiRend_TriggerEscape();
+    }
+    else if (inGameplay && stdVR_menuTriggeredThisFrame) {
         if (Main_bMotsCompat) {
             if (!jkGuiMultiplayer_mpcInfo.pCutsceneCog) {
                 if (jkHud_bChatOpen)
@@ -284,8 +299,9 @@ void stdVR_Input_MapToGame(void)
         }
     }
 
-    // Simulate a controller escape key press on short menu release (one-frame pulse)
-    stdControl_bControllerEscapeKey = stdVR_menuTriggeredThisFrame ? 1 : 0;
+    // Simulate a controller escape key press on short menu release (one-frame pulse). Suppressed
+    // when a menu was open (we closed it directly above) to avoid a double-escape.
+    stdControl_bControllerEscapeKey = (stdVR_menuTriggeredThisFrame && !bMenuActive) ? 1 : 0;
 
     // VR Cheat combo: Hold both grips + both triggers for 1.5 seconds
     // This gives all weapons and force powers
@@ -354,8 +370,34 @@ void stdVR_Input_MapToGame(void)
         }
     }
 
-    // Off-hand thumbstick click = toggle run mode (INPUT_FUNC_FAST)
-    if (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_L) {
+    // Fist punch detection (both hands) + haptics. With the fists equipped, a forward thrust of
+    // either controller fires a punch (see stdVR_Input_IsPunchActive -> FIRE1) and buzzes the hand
+    // that threw it. Only active for the fists; other weapons fire via the trigger as normal.
+    {
+        extern sithPlayerInfo* sithPlayer_pLocalPlayer;
+        int weap = sithPlayer_pLocalPlayer ? sithPlayer_pLocalPlayer->curWeapon : -1;
+        int bFists = (weap == SITHBIN_FISTS || weap == SITHBIN_MOTS_FISTS);
+        float punchThreshold = stdVR_motionConfig.weaponVelocityTrigger;
+        if (punchThreshold <= 0.0f) punchThreshold = 2.0f;
+
+        for (int h = 0; h < STDVR_CONTROLLER_COUNT; h++) {
+            stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[h];
+            int active = (bFists && pCtrl->bTracking
+                          && pCtrl->motion.forwardSpeed >= punchThreshold) ? 1 : 0;
+            if (active && !stdVR_punchActiveLast[h]) {
+                // Punch just started — buzz the punching hand.
+                stdVR_TriggerHaptic(h, 0.6f, 0.12f, 100.0f);
+            }
+            stdVR_punchActive[h] = active;
+            stdVR_punchActiveLast[h] = active;
+        }
+    }
+
+    // Off-hand thumbstick click = toggle run mode (INPUT_FUNC_FAST).
+    // Gated on inGameplay so a thumbstick click in a menu/intro/cutscene doesn't get acted on
+    // (otherwise the action "buffers" into gameplay — e.g. clicking the stick in the menu would
+    // leave the holomap open once gameplay starts).
+    if (inGameplay && (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_L)) {
         stdVR_runToggled = !stdVR_runToggled;
         // Haptic feedback: longer pulse for run, short pulse for walk
         if (stdVR_runToggled) {
@@ -367,8 +409,8 @@ void stdVR_Input_MapToGame(void)
         }
     }
 
-    // Added: Right thumbstick click = toggle 3D map
-    if (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_R) {
+    // Added: Right thumbstick click = toggle 3D map (gameplay only; see note above).
+    if (inGameplay && (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_R)) {
         stdVR_Map3D_Toggle();
         // Haptic feedback on both controllers
         stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.4f, 0.15f, 120.0f);
@@ -512,6 +554,18 @@ int stdVR_Input_IsCrouchToggled(void)
         return 0;
     }
     return stdVR_crouchToggled;
+}
+
+// Check if the dominant hand is thrusting forward fast enough to register a melee punch (fists).
+// Uses the signed forward-axis velocity so a forward jab fires but the backswing/retract does not;
+// the weapon's own fire rate gates repeats, giving roughly one hit per punch.
+int stdVR_Input_IsPunchActive(void)
+{
+    if (!stdVR_bEnabled) {
+        return 0;
+    }
+    // Either hand punching counts (computed per-frame in stdVR_Input_MapToGame).
+    return (stdVR_punchActive[STDVR_CONTROLLER_LEFT] || stdVR_punchActive[STDVR_CONTROLLER_RIGHT]) ? 1 : 0;
 }
 
 // Reset crouch toggle (e.g. on level transitions)

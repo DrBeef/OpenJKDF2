@@ -40,6 +40,7 @@ static wchar_t vr_snap_angle_text[8] = {0};
 static wchar_t vr_smooth_speed_text[8] = {0};
 static wchar_t vr_height_text[16] = {0};
 static wchar_t vr_ss_text[256] = {0};
+static wchar_t vr_pitch_text[16] = {0};
 // HUD layout tuning sliders: per-field label + value text, plus slider config and the
 // jkPlayer globals each slider targets. base/inc/n map slider step <-> value consistently
 // across the draw callback, the populate-on-show, and the save-on-OK.
@@ -59,6 +60,8 @@ void jkGuiDisplay_VRVignetteDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuf
 void jkGuiDisplay_VRSnapAngleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRSmoothSpeedDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRHeightDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
+void jkGuiDisplay_VRSupersampleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
+void jkGuiDisplay_VRPitchDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRHudSliderDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 
 // Element indices for VR Options menu
@@ -82,8 +85,12 @@ enum {
     VR_EL_HEIGHT_LABEL,      // 20
     VR_EL_HEIGHT_SLIDER,     // 21
     VR_EL_HEIGHT_VAL,        // 22
-    VR_EL_SS_LABEL,          // 23
-    VR_EL_SS_TEXTBOX,        // 24
+    VR_EL_SS_LABEL,          // Supersampling: label
+    VR_EL_SS_VAL,            // Supersampling: inline value text
+    VR_EL_SS_SLIDER,         // Supersampling: slider (0.80 .. 1.25)
+    VR_EL_PITCH_LABEL,       // Weapon Pitch: label
+    VR_EL_PITCH_SLIDER,      // Weapon Pitch: slider (-25 .. +25 deg)
+    VR_EL_PITCH_VAL,         // Weapon Pitch: value text
     VR_EL_HUD_LAYOUT_BTN,    // opens the HUD Layout sub-page
     VR_EL_END,
 };
@@ -104,10 +111,11 @@ static jkGuiElement jkGuiDisplay_aElements[VR_EL_END + 1] = {
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_WEAPON_CROSSHAIR",0, {30, 170, 270, 20},  1, 0, "GUIEXT_VR_WEAPON_CROSSHAIR_HINT", 0, 0, 0, {0}, 0},
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_MOVE_DIRECTION",  0, {30, 200, 270, 20},  1, 0, "GUIEXT_VR_MOVE_DIRECTION_HINT",   0, 0, 0, {0}, 0},
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_SNAP_TURN",       0, {30, 230, 270, 20},  1, 0, "GUIEXT_VR_SNAP_TURN_HINT",        0, 0, 0, {0}, 0},
-    // Left column: vignette slider (y=240..300)
-    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_COMFORT_VIGNETTE",0, {30, 240, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER,      0,            0, (const char*)10,             0, {30, 260, 270, 30},  1, 0, "GUIEXT_VR_COMFORT_VIGNETTE_HINT", jkGuiDisplay_VRVignetteDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,        0,            0, vr_vignette_text,            3, {30, 290, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+    // Left column: comfort vignette slider (moved down to y=262 so the label clears the
+    // Snap Turn checkbox at y=230; it was previously clipping into it)
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_COMFORT_VIGNETTE",0, {30, 262, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)10,             0, {30, 282, 270, 30},  1, 0, "GUIEXT_VR_COMFORT_VIGNETTE_HINT", jkGuiDisplay_VRVignetteDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_vignette_text,            3, {30, 312, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
     // Right column: sliders (x=330..620)
     { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SNAP_ANGLE",      0, {330, 130, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
     { ELEMENT_SLIDER,      0,            0, (const char*)2,              0, {330, 150, 280, 30}, 1, 0, "GUIEXT_VR_SNAP_ANGLE_HINT",       jkGuiDisplay_VRSnapAngleDraw, 0, slider_images, {0}, 0},
@@ -121,11 +129,19 @@ static jkGuiElement jkGuiDisplay_aElements[VR_EL_END + 1] = {
     { ELEMENT_SLIDER,      0,            0, (const char*)100,            0, {330, 310, 280, 30}, 1, 0, "GUIEXT_VR_HEIGHT_OFFSET_HINT",    jkGuiDisplay_VRHeightDraw, 0, slider_images, {0}, 0},
     { ELEMENT_TEXT,        0,            0, vr_height_text,              3, {330, 340, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
 
-    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SUPERSAMPLING",   2, {330, 370, 150, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
-    { ELEMENT_TEXTBOX,     0,            0, NULL,                        100,{490, 370, 80, 20}, 1, 0, "GUIEXT_VR_SUPERSAMPLING_HINT",    0, 0, 0, {0}, 0},
+    // Right column: supersampling slider (0.80 .. 1.25) with inline value text
+    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SUPERSAMPLING",   2, {330, 366, 180, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_ss_text,                  2, {510, 366, 100, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)45,             0, {330, 386, 280, 30}, 1, 0, "GUIEXT_VR_SUPERSAMPLING_HINT",    jkGuiDisplay_VRSupersampleDraw, 0, slider_images, {0}, 0},
+
+    // Left column: weapon pitch adjust slider (-25 .. +25 degrees). Label set in Startup.
+    { ELEMENT_TEXT,        0,            0, NULL,                        0, {30, 340, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)50,             0, {30, 360, 270, 30},  1, 0, NULL,                              jkGuiDisplay_VRPitchDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_pitch_text,               3, {30, 390, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
 
     // Button to open the dedicated HUD Layout sub-page (full-width sliders need their own page).
-    { ELEMENT_TEXTBUTTON, 500, 2, NULL,      3, { 30, 330, 270, 30}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    // Placed on the bottom button row (between Cancel and OK) to free the left column for sliders.
+    { ELEMENT_TEXTBUTTON, 500, 2, NULL,      3, { 220, 430, 200, 40}, 1, 0, NULL, 0, 0, 0, {0}, 0},
 
     { ELEMENT_END,         0,            0, NULL,                        0, {0},                 0, 0, NULL,                              0, 0, 0, {0}, 0},
 };
@@ -276,9 +292,13 @@ void jkGuiDisplay_Startup()
     jkGui_InitMenu(&jkGuiDisplay_menu, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
 
 #ifdef PLATFORM_VR
-    // VR Options: set up supersampling textbox
-    jkGuiDisplay_aElements[VR_EL_SS_TEXTBOX].wstr = vr_ss_text;
+    // VR Options: supersampling slider's inline value text (slider drives it; see VRSupersampleDraw)
+    jkGuiDisplay_aElements[VR_EL_SS_VAL].wstr = vr_ss_text;
     jk_snwprintf(vr_ss_text, 255, L"%.2f", (flex32_t)jkPlayer_vrSupersampling);
+
+    // Weapon pitch slider: static label + value text (slider drives the value; see VRPitchDraw)
+    jkGuiDisplay_aElements[VR_EL_PITCH_LABEL].wstr = L"Weapon Pitch";
+    jkGuiDisplay_aElements[VR_EL_PITCH_VAL].wstr = vr_pitch_text;
 
     // "HUD Layout" button label on the main VR Options menu.
     jkGuiDisplay_aElements[VR_EL_HUD_LAYOUT_BTN].wstr = L"HUD Layout...";
@@ -360,6 +380,26 @@ void jkGuiDisplay_VRHeightDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffe
     jkGuiDisplay_aElements[VR_EL_HEIGHT_VAL].wstr = vr_height_text;
     jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
     jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_HEIGHT_VAL], menu, 1);
+}
+
+void jkGuiDisplay_VRSupersampleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
+{
+    // Slider step 0..45 -> 0.80 .. 1.25 supersampling, in 0.01 increments
+    float ss = 0.80f + 0.01f * (float)jkGuiDisplay_aElements[VR_EL_SS_SLIDER].selectedTextEntry;
+    jk_snwprintf(vr_ss_text, 255, L"%.2f", (flex32_t)ss);
+    jkGuiDisplay_aElements[VR_EL_SS_VAL].wstr = vr_ss_text;
+    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
+    jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_SS_VAL], menu, 1);
+}
+
+void jkGuiDisplay_VRPitchDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
+{
+    // Slider step 0..50 -> -25 .. +25 degrees (step 25 = 0)
+    int deg = jkGuiDisplay_aElements[VR_EL_PITCH_SLIDER].selectedTextEntry - 25;
+    jk_snwprintf(vr_pitch_text, 16, L"%d deg", deg);
+    jkGuiDisplay_aElements[VR_EL_PITCH_VAL].wstr = vr_pitch_text;
+    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
+    jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_PITCH_VAL], menu, 1);
 }
 
 // Shared draw for the 5 HUD layout sliders. Identifies which one by element pointer, maps the
@@ -550,8 +590,21 @@ int jkGuiDisplay_Show()
     // Height: map float -0.5..+0.5 to slider 0..100
     jkGuiDisplay_aElements[VR_EL_HEIGHT_SLIDER].selectedTextEntry = (int)((jkPlayer_vrHeightOffset + 0.5f) * 100.0f);
 
-    // Supersampling textbox
-    jk_snwprintf(vr_ss_text, 255, L"%.2f", (flex32_t)jkPlayer_vrSupersampling);
+    // Supersampling slider: 0.80..1.25 in 0.01 steps (slider step 0..45)
+    {
+        int ssStep = (int)((jkPlayer_vrSupersampling - 0.80f) / 0.01f + 0.5f);
+        if (ssStep < 0) ssStep = 0;
+        if (ssStep > 45) ssStep = 45;
+        jkGuiDisplay_aElements[VR_EL_SS_SLIDER].selectedTextEntry = ssStep;
+    }
+
+    // Weapon pitch slider: -25..+25 degrees (slider step 0..50, 25 = 0 deg)
+    {
+        int pitchStep = jkPlayer_vrWeaponPitchAdjust + 25;
+        if (pitchStep < 0) pitchStep = 0;
+        if (pitchStep > 50) pitchStep = 50;
+        jkGuiDisplay_aElements[VR_EL_PITCH_SLIDER].selectedTextEntry = pitchStep;
+    }
 
 vr_redisplay:
     v0 = jkGuiRend_DisplayAndReturnClicked(&jkGuiDisplay_menu);
@@ -585,17 +638,11 @@ vr_redisplay:
         // Height offset (-0.5 to +0.5 meters)
         jkPlayer_vrHeightOffset = ((float)jkGuiDisplay_aElements[VR_EL_HEIGHT_SLIDER].selectedTextEntry / 100.0f) - 0.5f;
 
-        // Supersampling (parse textbox)
-        {
-            char tmp[256];
-            flex32_t ftmp;
-            stdString_WcharToChar(tmp, vr_ss_text, 255);
-            if (_sscanf(tmp, "%f", &ftmp) != 1 || ftmp <= 0.0f) {
-                jkPlayer_vrSupersampling = 1.0f;
-            } else {
-                jkPlayer_vrSupersampling = ftmp;
-            }
-        }
+        // Supersampling (slider: 0.80 .. 1.25)
+        jkPlayer_vrSupersampling = 0.80f + 0.01f * (float)jkGuiDisplay_aElements[VR_EL_SS_SLIDER].selectedTextEntry;
+
+        // Weapon pitch adjust (slider: -25 .. +25 degrees)
+        jkPlayer_vrWeaponPitchAdjust = jkGuiDisplay_aElements[VR_EL_PITCH_SLIDER].selectedTextEntry - 25;
 
         // (HUD layout values are edited on the HUD Layout sub-page, not here.)
 

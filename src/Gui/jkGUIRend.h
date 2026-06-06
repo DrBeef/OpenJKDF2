@@ -92,6 +92,8 @@ void jkGuiRend_Paint(jkGuiMenu *menu);
 void jkGuiRend_ElementSetClickShortcutScancode(jkGuiElement *element, int32_t idk);
 void jkGuiRend_MenuSetReturnKeyShortcutElement(jkGuiMenu *menu, jkGuiElement *element);
 void jkGuiRend_MenuSetEscapeKeyShortcutElement(jkGuiMenu *menu, jkGuiElement *element);
+int jkGuiRend_IsMenuActive(void);   // Added (VR): a GUI menu is currently showing
+void jkGuiRend_TriggerEscape(void); // Added (VR): act as if Escape was pressed on the active menu
 int32_t jkGuiRend_DisplayAndReturnClicked(jkGuiMenu *menu);
 void jkGuiRend_sub_50FAD0(jkGuiMenu *menu);
 void jkGuiRend_gui_sets_handler_framebufs(jkGuiMenu *menu);

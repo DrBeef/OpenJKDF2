@@ -39,8 +39,17 @@ macro(plat_link_and_package)
         # the PE image version field.
         VERSION ${CMAKE_SYSTEM_VERSION}
     )
-    # Use console subsystem - project uses main() not WinMain()
-    set_target_properties(${BIN_NAME} PROPERTIES WIN32_EXECUTABLE FALSE)
+    # Subsystem: the project uses main() (not WinMain). The non-VR build uses the CONSOLE
+    # subsystem so command-line/debug output gets a console window. The VR build (jkdf2xr.exe)
+    # is an end-user product, so ship it as a WINDOWS (windowed) app with NO console window by
+    # default; keep main() as the entry point via /ENTRY:mainCRTStartup. A console can still be
+    # attached on demand with the -console flag (see WIN64_STANDALONE handling in main.c).
+    if(TARGET_USE_VR)
+        set_target_properties(${BIN_NAME} PROPERTIES WIN32_EXECUTABLE TRUE)
+        target_link_options(${BIN_NAME} PRIVATE /ENTRY:mainCRTStartup)
+    else()
+        set_target_properties(${BIN_NAME} PROPERTIES WIN32_EXECUTABLE FALSE)
+    endif()
 
     set_target_properties(${BIN_NAME} PROPERTIES
       LINK_SEARCH_START_STATIC ON

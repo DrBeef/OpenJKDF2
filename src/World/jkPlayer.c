@@ -111,6 +111,38 @@ static rdModel3* pVRFistsModel3 = NULL;
 static rdThing vrOffhandThing;
 static int bVROffhandReady = 0;
 static rdVector3 vrOffhandLhandOffset = {0}; // Cached K_Lhand bind-pose offset for centering
+
+// VR "hands only" rendering: show just the hand by suppressing the meshes of its ancestor
+// arm nodes (shoulder/upper-arm/forearm). Amputation can't do this because it hides a node AND
+// its whole subtree, and the hand is a descendant of the arm; but the draw only skips a node's
+// own mesh when meshIdx == -1 (it still recurses into children), so temporarily clearing each
+// ancestor's meshIdx hides the arm while keeping the hand (and fingers) visible.
+#define JKPLAYER_VR_MAX_ARM_NODES 16
+typedef struct { rdHierarchyNode* node; int meshIdx; } jkPlayerVRSavedMesh;
+
+static int jkPlayer_VRHideArmKeepHand(rdModel3* model, int handNodeIdx, jkPlayerVRSavedMesh* saved)
+{
+    int n = 0;
+    if (!model || handNodeIdx < 0 || handNodeIdx >= model->numHierarchyNodes) return 0;
+    rdHierarchyNode* node = model->hierarchyNodes[handNodeIdx].parent;
+    while (node && n < JKPLAYER_VR_MAX_ARM_NODES) {
+        if (node->meshIdx != -1) {
+            saved[n].node = node;
+            saved[n].meshIdx = node->meshIdx;
+            node->meshIdx = -1;  // suppress this arm segment's mesh for the upcoming draw
+            n++;
+        }
+        node = node->parent;
+    }
+    return n;
+}
+
+static void jkPlayer_VRRestoreArmMeshes(jkPlayerVRSavedMesh* saved, int n)
+{
+    for (int i = 0; i < n; i++) {
+        saved[i].node->meshIdx = saved[i].meshIdx;
+    }
+}
 #endif // PLATFORM_VR
 
 #ifdef JKM_DSS
@@ -1175,6 +1207,7 @@ void jkPlayer_DrawPov()
         // hides it and all its children (forearm, hand).
         int vrAmputatedNodeIdx = -1;
         int bVRHideLeftArm = 0;
+        int bVRFistsHandsOnly = 0;
         if (stdVR_bEnabled && vrMotionWeapon) {
             sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
             // Altered: Check weapon ID, not saber jkFlags — the flags persist after
@@ -1184,8 +1217,10 @@ void jkPlayer_DrawPov()
                 bVRHideLeftArm = 1;
             if (curWeap == SITHBIN_THERMAL_DETONATOR)
                 bVRHideLeftArm = 1;
-            if (curWeap == SITHBIN_FISTS)
+            if (curWeap == SITHBIN_FISTS || curWeap == SITHBIN_MOTS_FISTS) {
                 bVRHideLeftArm = 1;
+                bVRFistsHandsOnly = 1;   // fists: show only the hand, not the whole arm
+            }
         }
         if (bVRHideLeftArm
             && playerThings[playerThingIdx].povModel.amputatedJoints
@@ -1201,6 +1236,14 @@ void jkPlayer_DrawPov()
                 vrAmputatedNodeIdx = node->idx;
                 playerThings[playerThingIdx].povModel.amputatedJoints[vrAmputatedNodeIdx] = 1;
             }
+        }
+
+        // Fists: hide the dominant arm segments so only the hand (K_Rhand, node 5) shows.
+        jkPlayerVRSavedMesh vrArmSaved[JKPLAYER_VR_MAX_ARM_NODES];
+        int vrArmSavedCount = 0;
+        if (bVRFistsHandsOnly && playerThings[playerThingIdx].povModel.model3) {
+            vrArmSavedCount = jkPlayer_VRHideArmKeepHand(
+                playerThings[playerThingIdx].povModel.model3, 5, vrArmSaved);
         }
 
         // VR motion controls: disable software backface culling for the weapon model.
@@ -1232,6 +1275,8 @@ void jkPlayer_DrawPov()
         if (vrAmputatedNodeIdx >= 0) {
             playerThings[playerThingIdx].povModel.amputatedJoints[vrAmputatedNodeIdx] = 0;
         }
+        // Restore suppressed fists arm meshes
+        jkPlayer_VRRestoreArmMeshes(vrArmSaved, vrArmSavedCount);
 #endif
         //jkPlayer_checkPov = 0;
         //printf("pov done\n");
@@ -1339,9 +1384,17 @@ void jkPlayer_DrawPov()
                         vrOffhandThing.amputatedJoints[offhandAmputatedNodeIdx] = 1;
                     }
 
+                    // Hands-only: hide the off-hand arm segments so only K_Lhand (node 2) shows.
+                    jkPlayerVRSavedMesh vrOffhandArmSaved[JKPLAYER_VR_MAX_ARM_NODES];
+                    int vrOffhandArmSavedCount =
+                        jkPlayer_VRHideArmKeepHand(pVRFistsModel3, 2, vrOffhandArmSaved);
+
                     // Force hierarchy matrix rebuild for off-hand position
                     vrOffhandThing.frameTrue = 0;
                     rdThing_Draw(&vrOffhandThing, &offhandViewMat);
+
+                    // Restore suppressed arm meshes
+                    jkPlayer_VRRestoreArmMeshes(vrOffhandArmSaved, vrOffhandArmSavedCount);
 
                     // Restore amputated joints
                     if (offhandAmputatedNodeIdx >= 0) {

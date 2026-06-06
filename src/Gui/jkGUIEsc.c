@@ -114,6 +114,13 @@ void jkGuiEsc_Show()
         }
     }
 
+#ifdef PLATFORM_VR
+    // In VR the menu button (system menu / Y) closes the pause menu and returns to the game, so the
+    // on-screen "Return to Game" button is redundant — hide it. It stays the Escape-shortcut target
+    // (jkGuiRend_TriggerEscape clicks it directly, bypassing the visibility check).
+    jkGuiEsc_aElements[JKGUIESC_ELMT_RETURNTOGAME].bIsVisible = stdVR_bEnabled ? 0 : 1;
+#endif
+
     while ( 1 )
     {
         jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiEsc_menu, &jkGuiEsc_aElements[JKGUIESC_ELMT_RETURNTOGAME]);

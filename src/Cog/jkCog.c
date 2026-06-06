@@ -1385,10 +1385,11 @@ void jkCogExt_IsAdjoin(sithCog* ctx)
 
 void jkCogExt_SetGameSpeed(sithCog* ctx)
 {
+    // No-op (consumes its two stack args for balance). Force Speed is a player-speed effect
+    // (extraSpeed), not a world time-dilation, so we intentionally do NOT scale game time here.
     cog_flex_t val = sithCogExec_PopFlex(ctx);
     cog_flex_t val2 = sithCogExec_PopFlex(ctx);
-    //TODO
-    Windows_ErrorMsgboxWide("Unimplemented %s\n", __func__);
+    (void)val; (void)val2;
 }
 
 void jkCogExt_GetThingHeadLvec(sithCog* ctx)
