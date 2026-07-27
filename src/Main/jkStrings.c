@@ -52,7 +52,6 @@ static void jkStrings_RegisterVRStrings(stdStrTable* pTable)
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_JUMP",                 L"Press A to jump");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_ACTIVATE",             L"Press X to open doors and use switches");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_HOLOMAP",              L"Click the %ls thumbstick for the 3D map");
-    jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_RECENTER",             L"Hold the menu button to recenter your view");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_ITEMS",                L"Hold the %ls grip and push the stick to reach your items");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_DEATH_LOAD",           L"Press Y for the menu, then Load to restore your last save");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_HOLOMAP_GRAB",         L"Use the grip buttons to grab, rotate and scale the map");

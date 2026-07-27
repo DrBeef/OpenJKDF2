@@ -590,8 +590,10 @@ void stdVR_UpdateTracking(void)
         rdVector_Copy3(&stdVR_clientInfo.moveForward, &stdVR_clientInfo.hmdPoseMatrix.lvec);
         stdVR_clientInfo.moveYaw = stdVR_clientInfo.hmdOrientation.y;
     } else {
-        // Use dominant hand controller orientation
-        int hand = stdVR_config.dominantHand;
+        // Steer with the hand actually holding the movement stick, not the weapon hand: you push
+        // the stick with one thumb and expect to travel where that hand points. The move stick is
+        // the left one unless Swap Thumbsticks is on, independent of handedness.
+        int hand = stdVR_config.bSwapSticks ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
         if (stdVR_clientInfo.controllers[hand].bTracking) {
             rdVector_Copy3(&stdVR_clientInfo.moveForward, &stdVR_clientInfo.controllers[hand].poseMatrix.lvec);
             stdVR_clientInfo.moveYaw = stdVR_clientInfo.controllers[hand].orientation.y;

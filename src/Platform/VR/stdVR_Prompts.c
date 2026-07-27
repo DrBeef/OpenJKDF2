@@ -358,11 +358,11 @@ static void stdVR_Prompts_TickIntro(uint32_t now)
                                    L"Press A to jump", NULL, NULL);
             stdVR_Prompts_ShowOnce(STDVR_PROMPT_ACTIVATE, "GUIEXT_VR_PROMPT_ACTIVATE",
                                    L"Press X to open doors and use switches", NULL, NULL);
+            // The holomap prompt is deliberately last in this batch, so the first thing shown
+            // after the player opens the map is STDVR_PROMPT_HOLOMAP_GRAB.
             stdVR_Prompts_ShowOnce(STDVR_PROMPT_HOLOMAP, "GUIEXT_VR_PROMPT_HOLOMAP",
                                    L"Click the %ls thumbstick for the 3D map",
                                    stdVR_Prompts_TurnStickWord(), NULL);
-            stdVR_Prompts_ShowOnce(STDVR_PROMPT_RECENTER, "GUIEXT_VR_PROMPT_RECENTER",
-                                   L"Hold the menu button to recenter your view", NULL, NULL);
             next = STDVR_INTRO_DONE;
             break;
 
@@ -391,7 +391,12 @@ static void stdVR_Prompts_TickEvents(void)
                                NULL, NULL);
     }
 
-    if (!stdVR_WasPromptShown(STDVR_PROMPT_ITEMS) && stdVR_Prompts_HasAnyItem()) {
+    // Gated on the intro chain being finished: the player starts holding the field light, so
+    // HasAnyItem() is true from the first tick and this would otherwise be the very first prompt
+    // of the game - before crouch, run or the weapon wheel have been taught.
+    if (!stdVR_WasPromptShown(STDVR_PROMPT_ITEMS)
+        && stdVR_promptIntroStep == STDVR_INTRO_DONE
+        && stdVR_Prompts_HasAnyItem()) {
         stdVR_Prompts_ShowOnce(STDVR_PROMPT_ITEMS, "GUIEXT_VR_PROMPT_ITEMS",
                                L"Hold the %ls grip and push the stick to reach your items",
                                stdVR_Prompts_OffHandWord(), NULL);

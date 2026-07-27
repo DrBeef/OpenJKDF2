@@ -1522,10 +1522,12 @@ void sithControl_PlayerMovementMots(sithThing *player)
         float moveX = 0.0f, moveY = 0.0f;
         stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
-        // Transform movement by HMD yaw so forward = where you're looking
-        float hmdYawRad = stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f);
-        float cosYaw = cosf(hmdYawRad);
-        float sinYaw = sinf(hmdYawRad);
+        // Transform movement by moveYaw, which stdVR_UpdateTracking sets from the Movement
+        // Direction option - head or dominant controller. Reading hmdOrientation directly here
+        // made the setting a no-op, so it was always head-relative.
+        float moveYawRad = stdVR_clientInfo.moveYaw * (MATH_PI / 180.0f);
+        float cosYaw = cosf(moveYawRad);
+        float sinYaw = sinf(moveYawRad);
         float worldMoveX = cosYaw * moveX - sinYaw * moveY;
         float worldMoveY = sinYaw * moveX + cosYaw * moveY;
 
@@ -1830,10 +1832,12 @@ void sithControl_PlayerMovement(sithThing *player)
                 float moveX = 0.0f, moveY = 0.0f;
                 stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
-                // Transform movement by HMD yaw so forward = where you're looking
-                float hmdYawRad = stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f);
-                float cosYaw = cosf(hmdYawRad);
-                float sinYaw = sinf(hmdYawRad);
+                // Transform movement by moveYaw, which stdVR_UpdateTracking sets from the
+                // Movement Direction option - head or dominant controller. Reading
+                // hmdOrientation directly here made the setting a no-op, so it was always head.
+                float moveYawRad = stdVR_clientInfo.moveYaw * (MATH_PI / 180.0f);
+                float cosYaw = cosf(moveYawRad);
+                float sinYaw = sinf(moveYawRad);
                 float worldMoveX = cosYaw * moveX - sinYaw * moveY;
                 float worldMoveY = sinYaw * moveX + cosYaw * moveY;
 

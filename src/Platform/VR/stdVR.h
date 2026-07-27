@@ -81,8 +81,10 @@ void stdVR_StopHaptic(int hand);
 // On-screen instructional prompts. These go through the engine's message log (jkDev), so
 // they queue, expire and get baked into the VR HUD alongside the game's own messages.
 // Prompt ids index a per-profile "already shown" bitmask, so a prompt taught once stays
-// taught. Keep the list under 32 entries and NEVER renumber it - the mask is saved to the
-// player profile, so reordering would re-show or wrongly suppress prompts on existing saves.
+// taught. Keep the list under 32 entries. Renumbering is still free right now (nothing has
+// shipped, so no profiles exist in the wild) but stops being so at the first public release -
+// from then on the mask is saved to the player profile, and reordering would re-show or wrongly
+// suppress prompts on existing saves. Retire ids in place rather than renumbering after that.
 enum
 {
     STDVR_PROMPT_SABER_SWING = 0,   // equipped the lightsaber
@@ -97,10 +99,9 @@ enum
     STDVR_PROMPT_JUMP        = 9,   // basics tail, after the intro chain
     STDVR_PROMPT_ACTIVATE    = 10,
     STDVR_PROMPT_HOLOMAP     = 11,
-    STDVR_PROMPT_RECENTER    = 12,
-    STDVR_PROMPT_ITEMS       = 13,  // first usable inventory item acquired
-    STDVR_PROMPT_DEATH_LOAD  = 14,  // first death
-    STDVR_PROMPT_HOLOMAP_GRAB= 15,  // holomap opened for the first time
+    STDVR_PROMPT_ITEMS       = 12,  // usable inventory item, once the intro chain has finished
+    STDVR_PROMPT_DEATH_LOAD  = 13,  // first death
+    STDVR_PROMPT_HOLOMAP_GRAB= 14,  // holomap opened for the first time
     STDVR_PROMPT_COUNT              // <= 32
 };
 

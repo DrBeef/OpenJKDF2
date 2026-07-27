@@ -43,18 +43,19 @@ static int sithWeapon_IsVRFastBoltTemplate(sithThing *pProjectileTemplate)
          || !strcmp(pProjectileTemplate->template_name, "+stlaser"));
 }
 
-// Altered: the MOTS sequencer charge's primary mode is a 1 second fuse (+seqchrg: timer=1)
-// laid at your feet - vel=(0/.1/0) with surfdrag=5 is barely any movement at all. On a
-// flatscreen you fire it mid-stride and your own momentum carries you clear; standing still in
-// VR there is no way out of the blast. Give that one template a forward toss so backing off
-// works. Scoped by exact name: the proximity mode (+seqchrg2) and both manual-sequencer modes
-// (+seqchrg3/+seqchrg4, timer=300) are fine as authored and must not be touched.
+// Altered: the MOTS sequencer charges barely move when thrown - vel=(0/.1/0) with surfdrag=5
+// drops them at your feet. On a flatscreen you fire mid-stride and your own momentum carries you
+// clear; standing still in VR there is no way out of the blast, and the primary mode's fuse is
+// only 1 second (+seqchrg: timer=1). Give both modes a forward toss so backing off works.
+// Scoped by exact name: the manual-sequencer templates (+seqchrg3/+seqchrg4, timer=300) are
+// command-detonated and have no escape problem, so they are left as authored.
 #define SITHWEAPON_VR_SEQCHARGE_TOSS_SPEED (1.0f)
 
 static int sithWeapon_IsVRTossedChargeTemplate(sithThing *pProjectileTemplate)
 {
     return pProjectileTemplate
-        && !strcmp(pProjectileTemplate->template_name, "+seqchrg");
+        && (!strcmp(pProjectileTemplate->template_name, "+seqchrg")      // primary, 1s fuse
+         || !strcmp(pProjectileTemplate->template_name, "+seqchrg2"));   // secondary, proximity
 }
 #endif
 
@@ -597,11 +598,12 @@ sithThing* sithWeapon_FireProjectile_0(sithThing *sender, sithThing *projectileT
             rdVector_Scale3Acc(&v9->physicsParams.vel, SITHWEAPON_VR_BRYAR_BOLT_SPEED_SCALE);
         }
 
-        // Local +y is forward, so this tosses the charge along the aim direction - point the
-        // controller down or at a wall and it still goes where you put it.
+        // sithThing_Create has already rotated the template velocity into world space, so the
+        // toss has to follow the projectile's own forward vector - adding to a world axis sent
+        // every charge the same way no matter where the controller pointed.
         if ( stdVR_bEnabled && v9->moveType == SITH_MT_PHYSICS && sithWeapon_IsVRTossedChargeTemplate(projectileTemplate) )
         {
-            v9->physicsParams.vel.y += SITHWEAPON_VR_SEQCHARGE_TOSS_SPEED;
+            rdVector_MultAcc3(&v9->physicsParams.vel, &v9->lookOrientation.lvec, SITHWEAPON_VR_SEQCHARGE_TOSS_SPEED);
         }
 #endif
         if (scaleFlags & 2)
