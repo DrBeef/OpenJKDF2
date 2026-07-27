@@ -53,6 +53,13 @@ void jkDev_Close();
 void jkDev_DrawLog();
 void jkDev_BlitLogToScreen();
 int jkDev_PrintUniString(const wchar_t *str);
+// Added: same queue, caller-chosen dwell time (instructional prompts want longer than the
+// stock 5s), plus the Y the message column starts at so VR can place it comfortably.
+int jkDev_PrintUniStringTimed(const wchar_t *str, uint32_t dwellMs);
+// Retire a displayed message early (the player did the thing it was asking for)
+void jkDev_ExpireEntryByText(const wchar_t *str);
+extern int jkDev_msgTopY;
+#define JKDEV_MSG_DEFAULT_DWELL_MS (5000)
 int jkDev_DebugLog(const char *lParam);
 int jkDev_sub_41FB80(int a1, const wchar_t *a2);
 int jkDev_sub_41FC40(int a1, const char *a2);

@@ -1065,6 +1065,32 @@ void InstallHelper_SetCwd()
     SDL_free(base_path);
 #endif
 
+    // Added: MoTS is a separate game with its own resource/ and episode/ trees, so it lives in a
+    // `mots` folder beside the executable rather than overlaying the DF2 install.
+    if (Main_bMotsCompat) {
+        char motsPath[512];
+        motsPath[0] = 0;
+#if !defined(MACOS)
+        // The macOS branch above already parked us at the install root; elsewhere the cwd is
+        // wherever the user launched from, so anchor to the executable instead.
+        char* pBasePath = SDL_GetBasePath();
+        if (pBasePath) {
+            stdFnames_MakePath(motsPath, sizeof(motsPath), pBasePath, "mots");
+            SDL_free(pBasePath);
+        }
+#endif
+        if (!motsPath[0]) {
+            stdString_SafeStrCopy(motsPath, "mots", sizeof(motsPath));
+        }
+
+        if (chdir(motsPath)) {
+            stdPlatform_Printf("MoTS: could not enter '%s', staying in the current directory.\n", motsPath);
+        }
+        else {
+            stdPlatform_Printf("MoTS: using data from '%s'\n", motsPath);
+        }
+    }
+
     int found_override = 0;
     
     char data_home[256];
@@ -1124,6 +1150,12 @@ void InstallHelper_SetCwd()
 #if defined(TARGET_ANDROID)
     // Use /sdcard/JKDF2XR for game data (requires MANAGE_EXTERNAL_STORAGE permission)
     chdir("/sdcard/JKDF2XR");
+
+    // Added: MoTS data sits in a `mots` subfolder, matching the desktop layout. Reached by
+    // putting -motsCompat in /sdcard/JKDF2XR/commandline.txt.
+    if (Main_bMotsCompat && chdir("mots")) {
+        stdPlatform_Printf("MoTS: could not enter '/sdcard/JKDF2XR/mots'.\n");
+    }
 #elif defined(TARGET_TWL)
     char tmp[128];
     extern char openjkdf2_aOrigCwd[512];

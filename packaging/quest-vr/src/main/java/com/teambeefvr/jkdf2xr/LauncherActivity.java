@@ -1,6 +1,7 @@
 package com.teambeefvr.jkdf2xr;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
@@ -10,14 +11,24 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
 import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
 import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.Manifest;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.List;
 
 /**
  * Launcher Activity that checks for storage permission before starting the VR app.
@@ -30,7 +41,9 @@ public class LauncherActivity extends Activity {
     private static final int REQUEST_MANAGE_ALL_FILES = 2296;
     private static final int REQUEST_STORAGE_PERMISSION = 2297;
     private static final String GAME_FOLDER = "/sdcard/JKDF2XR";
+    private static final String MOTS_FOLDER = GAME_FOLDER + "/mots";
     private static final String VR_WEAPON_OFFSETS_FILE = "jkdf2xr_vr_weapons.json";
+    private static final String COMMANDLINE_FILE = "commandline.txt";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -75,10 +88,177 @@ public class LauncherActivity extends Activity {
         // Create game folder and copy assets if needed
         copyAssetsIfNeeded();
 
+        // Only worth asking if both games are actually installed. This activity is deliberately
+        // flat (no VR categories in the manifest) so the headset composites the dialog - with
+        // them the compositor takes over and the dialog draws but stays invisible.
+        if (hasMotsAssets()) {
+            showGameChooser();
+        } else {
+            startGame(false);
+        }
+    }
+
+    /**
+     * Built as the activity's own content view rather than an AlertDialog: a dialog lives in a
+     * separate window, and the headset's volumetric window only composites the task's main
+     * window, so a dialog draws but is never visible.
+     */
+    private void showGameChooser() {
+        Log.v(TAG, "MotS assets present, showing game chooser");
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setBackgroundColor(0xFF101014);
+        root.setPadding(80, 80, 80, 80);
+
+        TextView title = new TextView(this);
+        title.setText("JKDF2-XR");
+        title.setTextColor(0xFFFFFFFF);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 34);
+        title.setGravity(Gravity.CENTER);
+        root.addView(title);
+
+        TextView prompt = new TextView(this);
+        prompt.setText("Which game would you like to play?");
+        prompt.setTextColor(0xFFB0B0B8);
+        prompt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        prompt.setGravity(Gravity.CENTER);
+        prompt.setPadding(0, 24, 0, 56);
+        root.addView(prompt);
+
+        root.addView(makeGameButton("Dark Forces II", false));
+        root.addView(makeGameButton("Mysteries of the Sith", true));
+
+        setContentView(root);
+    }
+
+    private Button makeGameButton(String label, final boolean bMots) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24);
+        button.setAllCaps(false);
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(900, 140);
+        lp.setMargins(0, 16, 0, 16);
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        button.setLayoutParams(lp);
+
+        button.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startGame(bMots);
+            }
+        });
+        return button;
+    }
+
+    private void startGame(boolean bMots) {
+        setMotsFlag(bMots);
+        startVRActivity();
+    }
+
+    private void startVRActivity() {
+        // The engine keeps its configuration in globals initialised when the .so loads, and
+        // Main_bMotsCompat is one of them. Relaunching only restarts the activity - the process
+        // and its loaded library survive - so a previous MotS run would leave that flag set and
+        // every subsequent launch would be MotS regardless of the choice. Kill the VR process
+        // (it is its own :vr_process) so the library reloads and the globals start clean.
+        killVRProcess();
+
         Intent intent = new Intent(this, VRActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         startActivity(intent);
         finish();
+    }
+
+    private void killVRProcess() {
+        ActivityManager manager = (ActivityManager)getSystemService(ACTIVITY_SERVICE);
+        if (manager == null) return;
+
+        List<ActivityManager.RunningAppProcessInfo> running = manager.getRunningAppProcesses();
+        if (running == null) return;
+
+        String vrProcessName = getPackageName() + ":vr_process";
+        for (ActivityManager.RunningAppProcessInfo info : running) {
+            if (vrProcessName.equals(info.processName)) {
+                Log.v(TAG, "Killing stale VR process pid " + info.pid + " so engine globals reset");
+                android.os.Process.killProcess(info.pid);
+            }
+        }
+    }
+
+    /**
+     * The engine reads its arguments from commandline.txt, so the chooser drives the game by
+     * managing the -motsCompat token in there. Anything else the user put in that file is
+     * preserved - only that one token is added or removed.
+     */
+    private void setMotsFlag(boolean bMots) {
+        File cmdFile = new File(GAME_FOLDER + "/" + COMMANDLINE_FILE);
+
+        String existing = "";
+        if (cmdFile.isFile()) {
+            BufferedReader reader = null;
+            try {
+                reader = new BufferedReader(new FileReader(cmdFile));
+                String line = reader.readLine();
+                if (line != null) existing = line;
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to read " + COMMANDLINE_FILE, e);
+            } finally {
+                try { if (reader != null) reader.close(); } catch (IOException ignored) {}
+            }
+        }
+
+        StringBuilder args = new StringBuilder();
+        for (String token : existing.trim().split("\\s+")) {
+            if (token.isEmpty()) continue;
+            if (token.equalsIgnoreCase("-motsCompat") || token.equalsIgnoreCase("/motsCompat")) continue;
+            if (args.length() > 0) args.append(' ');
+            args.append(token);
+        }
+        if (bMots) {
+            if (args.length() > 0) args.append(' ');
+            args.append("-motsCompat");
+        }
+
+        FileWriter writer = null;
+        try {
+            writer = new FileWriter(cmdFile, false);
+            writer.write(args.toString());
+            writer.write("\n");
+            Log.v(TAG, COMMANDLINE_FILE + " -> '" + args.toString() + "'");
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to write " + COMMANDLINE_FILE, e);
+        } finally {
+            try { if (writer != null) writer.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    /**
+     * MotS is installed only if its two big archives are actually there - the mots folder itself
+     * is created unconditionally above, so its presence proves nothing. Matched case-insensitively
+     * because the engine reaches these through casepath() and users push them in either case.
+     */
+    private boolean hasMotsAssets() {
+        File motsFolder = new File(MOTS_FOLDER);
+        File episode = findChildIgnoreCase(motsFolder, "Episode");
+        File resource = findChildIgnoreCase(motsFolder, "Resource");
+
+        return findChildIgnoreCase(episode, "JKM.GOO") != null
+            && findChildIgnoreCase(resource, "JKMRES.GOO") != null;
+    }
+
+    private static File findChildIgnoreCase(File parent, String name) {
+        if (parent == null || !parent.isDirectory()) return null;
+
+        File[] children = parent.listFiles();
+        if (children == null) return null;
+
+        for (File child : children) {
+            if (child.getName().equalsIgnoreCase(name)) return child;
+        }
+        return null;
     }
 
     private void copyAssetsIfNeeded() {
@@ -98,6 +278,19 @@ public class LauncherActivity extends Activity {
         copyAssetFolderIfNeeded("resource", GAME_FOLDER + "/resource");
         copyAssetFolderIfNeeded("episode", GAME_FOLDER + "/episode");
         copyAssetFile(VR_WEAPON_OFFSETS_FILE, GAME_FOLDER + "/" + VR_WEAPON_OFFSETS_FILE);
+
+        // Mysteries of the Sith runs out of a subfolder (-motsCompat in commandline.txt chdirs
+        // into it), so it needs its own copy of the offsets. The file covers both games' bins.
+        File motsFolder = new File(MOTS_FOLDER);
+        if (!motsFolder.exists()) {
+            motsFolder.mkdirs();
+        }
+        if (motsFolder.exists()) {
+            File motsOffsets = new File(MOTS_FOLDER + "/" + VR_WEAPON_OFFSETS_FILE);
+            if (!motsOffsets.exists()) {
+                copyAssetFile(VR_WEAPON_OFFSETS_FILE, motsOffsets.getPath());
+            }
+        }
     }
 
     private void copyAssetFolderIfNeeded(String assetFolder, String destPath) {

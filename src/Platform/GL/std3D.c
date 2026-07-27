@@ -150,10 +150,6 @@ static int std3D_activeFb = 1;
 
 int init_once = 0;
 GLuint programDefault, programMenu;
-static GLuint programVignette = 0;
-static GLint programVignette_attribute_coord3d = -1;
-static GLint programVignette_attribute_v_color = -1;
-static GLint programVignette_uniform_mvp = -1;
 static GLuint programCrosshair = 0;
 static GLint programCrosshair_attribute_coord3d = -1;
 static GLint programCrosshair_attribute_v_color = -1;
@@ -653,15 +649,6 @@ int init_resources()
         }
     }
 #endif
-    stdPlatform_Printf("std3D: Loading shader 'vignette'...\n");
-    programVignette = std3D_loadProgram("shaders/vignette");
-    if (programVignette) {
-        programVignette_attribute_coord3d = glGetAttribLocation(programVignette, "coord3d");
-        programVignette_attribute_v_color = glGetAttribLocation(programVignette, "v_color");
-        programVignette_uniform_mvp = glGetUniformLocation(programVignette, "mvp");
-    } else {
-        stdPlatform_Printf("std3D: WARNING - vignette shader not loaded (vignette disabled)\n");
-    }
     stdPlatform_Printf("std3D: Loading shader 'crosshair'...\n");
     programCrosshair = std3D_loadProgram("shaders/crosshair");
     if (programCrosshair) {
@@ -3634,86 +3621,6 @@ void std3D_DebugSaveInternalFbo(const char* filename)
     glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
 }
 
-// Added: Draw a small colored dot at a world position.
-// Uses the vignette shader (proven to work on MultiView) with screen-space coords.
-// Call this while the VR camera is still active (before sithCamera_RestoreVRView).
-void std3D_DrawWorldDot(rdVector3* pWorldPos, float size, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
-{
-    if (Main_bHeadless || !programVignette || !pWorldPos) return;
-
-    extern rdCamera* rdCamera_pCurCamera;
-    if (!rdCamera_pCurCamera) return;
-
-    // Transform to view space and check if in front of camera
-    rdVector3 viewPos;
-    rdMatrix_TransformPoint34(&viewPos, pWorldPos, &rdCamera_pCurCamera->view_matrix);
-    if (viewPos.y <= 0.01f) return;  // Behind camera (Y is forward in JK view space)
-
-    // Project to screen coordinates
-    rdVector3 projected;
-    rdCamera_pCurCamera->fnProject(&projected, &viewPos);
-
-    // Get current viewport (this is the eye/swapchain FBO dimensions)
-    GLint viewport[4];
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    float fboW = (float)viewport[2];
-    float fboH = (float)viewport[3];
-    if (fboW < 1.0f || fboH < 1.0f) return;
-
-    // Scale from engine screen coords (Window_xSize x Window_ySize) to FBO pixel coords
-    float dotX = projected.x * (fboW / (float)Window_xSize);
-    float dotY = projected.y * (fboH / (float)Window_ySize);
-
-    // Dot size in pixels — scale with distance for consistent angular size
-    float dotPx = (size * fboW) / (viewPos.y * 0.5f);
-    if (dotPx < 3.0f) dotPx = 3.0f;
-    if (dotPx > 30.0f) dotPx = 30.0f;
-
-    // Use the vignette shader (proven MultiView compatible) with ortho projection
-    glDepthMask(GL_FALSE);
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    glUseProgram(programVignette);
-
-    float d3dmat[16] = {
-         2.0f/fboW,  0,          0, 0,
-         0,         -2.0f/fboH,  0, 0,
-         0,          0,          1, 0,
-        -1.0f,       1.0f,       0, 1
-    };
-    glUniformMatrix4fv(programVignette_uniform_mvp, 1, GL_FALSE, d3dmat);
-
-    typedef struct { float x, y, z; uint8_t cr, cg, cb, ca; } DotVert;
-    DotVert verts[4] = {
-        { dotX - dotPx, dotY - dotPx, 0.0f, r, g, b, a },
-        { dotX + dotPx, dotY - dotPx, 0.0f, r, g, b, a },
-        { dotX + dotPx, dotY + dotPx, 0.0f, r, g, b, a },
-        { dotX - dotPx, dotY + dotPx, 0.0f, r, g, b, a },
-    };
-    GLushort indices[6] = { 0, 1, 2, 0, 2, 3 };
-
-    glEnableVertexAttribArray(programVignette_attribute_coord3d);
-    glEnableVertexAttribArray(programVignette_attribute_v_color);
-
-    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
-    glBufferData(GL_ARRAY_BUFFER, 4 * sizeof(DotVert), verts, GL_STREAM_DRAW);
-    glVertexAttribPointer(programVignette_attribute_coord3d, 3, GL_FLOAT, GL_FALSE, sizeof(DotVert), (GLvoid*)0);
-    glVertexAttribPointer(programVignette_attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(DotVert), (GLvoid*)(3 * sizeof(float)));
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, 6 * sizeof(GLushort), indices, GL_STREAM_DRAW);
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
-
-    glDisableVertexAttribArray(programVignette_attribute_coord3d);
-    glDisableVertexAttribArray(programVignette_attribute_v_color);
-
-    // Restore
-    glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST);
-}
-
 // Added: Get internal rendering FBO info
 int std3D_GetInternalFBO(int* pWidth, int* pHeight)
 {
@@ -3721,163 +3628,6 @@ int std3D_GetInternalFBO(int* pWidth, int* pHeight)
     if (pWidth) *pWidth = std3D_pFb->w;
     if (pHeight) *pHeight = std3D_pFb->h;
     return (int)std3D_pFb->fbo;
-}
-
-// Added: VR comfort vignette - draws a radial dark gradient over the current FBO
-// Uses a dedicated vignette shader with MultiView support.
-// intensity: 0.0 = no vignette, 1.0 = full vignette
-void std3D_DrawVignetteToCurrentFBO(int fboWidth, int fboHeight, float intensity)
-{
-    if (Main_bHeadless || intensity <= 0.001f) return;
-    if (!programVignette) return;
-    if (intensity > 1.0f) intensity = 1.0f;
-
-    // GL state for overlay blending
-    glDepthMask(GL_FALSE);
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    glUseProgram(programVignette);
-
-    // Orthographic projection: maps pixel coords to NDC
-    float w = (float)fboWidth;
-    float h = (float)fboHeight;
-    float d3dmat[16] = {
-         2.0f/w,  0,       0, 0,
-         0,      -2.0f/h,  0, 0,
-         0,       0,       1, 0,
-        -1.0f,    1.0f,    0, 1
-    };
-    glUniformMatrix4fv(programVignette_uniform_mvp, 1, GL_FALSE, d3dmat);
-    glViewport(0, 0, fboWidth, fboHeight);
-
-    // Build triangle fan: center (transparent) + ring of edge vertices (opaque black)
-    #define VIG_SEGS 32
-    #define VIG_VERTS (VIG_SEGS + 2)
-
-    // Simple vertex: just position + color (packed tightly)
-    typedef struct { float x, y, z; uint8_t r, g, b, a; } VigVert;
-    VigVert verts[VIG_VERTS];
-    GLushort indices[VIG_SEGS * 3];
-
-    float cx = w * 0.5f;
-    float cy = h * 0.5f;
-    // The vignette is an annular gradient: clear center, dark edges.
-    // We use TWO rings of vertices:
-    //   - Inner ring at the "clear zone" boundary: alpha=0
-    //   - Outer ring covering screen corners: alpha=edgeAlpha
-    // Center vertex connects to inner ring (all transparent = no effect).
-    // Inner-to-outer ring creates the darkening gradient.
-
-    // Inner radius: how much of the center stays clear
-    // intensity 0.1 (level 1) → 70% of half-screen (gentle)
-    // intensity 1.0 (level 10) → 10% of half-screen (extreme tunnel vision)
-    // Inner factor determines the clear center size.
-    // With multiple draw passes compounding the darkening, the gradient
-    // becomes steeper, so the inner radius can be a bit larger to keep
-    // the center completely clear.
-    float innerFactor = 0.60f - (intensity * 0.45f);
-    if (innerFactor < 0.10f) innerFactor = 0.10f;
-    float irx = w * 0.5f * innerFactor;
-    float iry = h * 0.5f * innerFactor;
-
-    // Outer radius: must cover screen corners (diagonal)
-    float orx = w * 0.80f;
-    float ory = h * 0.80f;
-
-    // Edge always fully opaque black
-    uint8_t edgeAlpha = 255;
-
-    // Redefine vertex count: center + inner ring + outer ring
-    #undef VIG_VERTS
-    #define VIG_VERTS (1 + (VIG_SEGS + 1) * 2)
-    VigVert allVerts[VIG_VERTS];
-    // Max indices: center-to-inner fan + inner-to-outer strip
-    GLushort allIndices[(VIG_SEGS * 3) + (VIG_SEGS * 6)];
-
-    // Center vertex — transparent (clear view)
-    allVerts[0] = (VigVert){cx, cy, 0.0f, 0, 0, 0, 0};
-
-    // Inner ring — transparent (boundary of clear zone)
-    for (int i = 0; i <= VIG_SEGS; i++) {
-        float angle = (float)i / (float)VIG_SEGS * 6.28318530718f;
-        allVerts[1 + i] = (VigVert){
-            cx + cosf(angle) * irx,
-            cy + sinf(angle) * iry,
-            0.0f, 0, 0, 0, 0
-        };
-    }
-
-    // Outer ring — opaque black (screen edges)
-    int outerStart = 1 + (VIG_SEGS + 1);
-    for (int i = 0; i <= VIG_SEGS; i++) {
-        float angle = (float)i / (float)VIG_SEGS * 6.28318530718f;
-        allVerts[outerStart + i] = (VigVert){
-            cx + cosf(angle) * orx,
-            cy + sinf(angle) * ory,
-            0.0f, 0, 0, 0, edgeAlpha
-        };
-    }
-
-    int idxCount = 0;
-
-    // Center-to-inner ring fan (all transparent — fills center, no visual effect)
-    for (int i = 0; i < VIG_SEGS; i++) {
-        allIndices[idxCount++] = 0;
-        allIndices[idxCount++] = (GLushort)(1 + i);
-        allIndices[idxCount++] = (GLushort)(1 + i + 1);
-    }
-
-    // Inner-to-outer ring strip (gradient from transparent to dark)
-    for (int i = 0; i < VIG_SEGS; i++) {
-        int inner0 = 1 + i;
-        int inner1 = 1 + i + 1;
-        int outer0 = outerStart + i;
-        int outer1 = outerStart + i + 1;
-        allIndices[idxCount++] = (GLushort)inner0;
-        allIndices[idxCount++] = (GLushort)outer0;
-        allIndices[idxCount++] = (GLushort)inner1;
-        allIndices[idxCount++] = (GLushort)inner1;
-        allIndices[idxCount++] = (GLushort)outer0;
-        allIndices[idxCount++] = (GLushort)outer1;
-    }
-
-    // Triangle fan as indexed triangles
-    for (int i = 0; i < VIG_SEGS; i++) {
-        indices[i * 3 + 0] = 0;
-        indices[i * 3 + 1] = (GLushort)(i + 1);
-        indices[i * 3 + 2] = (GLushort)(i + 2);
-    }
-
-    // Upload and draw
-    glEnableVertexAttribArray(programVignette_attribute_coord3d);
-    glEnableVertexAttribArray(programVignette_attribute_v_color);
-
-    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
-    glBufferData(GL_ARRAY_BUFFER, VIG_VERTS * sizeof(VigVert), allVerts, GL_STREAM_DRAW);
-    glVertexAttribPointer(programVignette_attribute_coord3d, 3, GL_FLOAT, GL_FALSE, sizeof(VigVert), (GLvoid*)0);
-    glVertexAttribPointer(programVignette_attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(VigVert), (GLvoid*)(3 * sizeof(float)));
-
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, menu_ibo_triangle);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, idxCount * sizeof(GLushort), allIndices, GL_STREAM_DRAW);
-
-    // Draw multiple passes to compound the darkening.
-    // Each pass multiplies scene by (1-alpha), so N passes = scene * (1-alpha)^N.
-    int numPasses = 2 + (int)(intensity * 6.0f);  // 2-8 passes based on intensity
-    for (int pass = 0; pass < numPasses; pass++) {
-        glDrawElements(GL_TRIANGLES, idxCount, GL_UNSIGNED_SHORT, 0);
-    }
-
-    glDisableVertexAttribArray(programVignette_attribute_coord3d);
-    glDisableVertexAttribArray(programVignette_attribute_v_color);
-
-    // Restore
-    glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST);
-
-    #undef VIG_SEGS
-    #undef VIG_VERTS
 }
 
 // Added: Render overlay buffer to currently bound FBO for VR HUD

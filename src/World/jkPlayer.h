@@ -184,11 +184,18 @@ extern int jkPlayer_vrSnapTurnAngle;     // Snap turn angle: 0, 30, 45, 90 degre
 extern int jkPlayer_vrSmoothTurnSpeed;   // Smooth turn speed in deg/sec
 extern int jkPlayer_vrWeaponPitchAdjust;   //
 extern float jkPlayer_vrHeightOffset;    // Player height offset in meters
-extern int jkPlayer_vrComfortVignette;   // Comfort vignette intensity (0=off, 1-10)
 extern int jkPlayer_vrWeaponCrosshair;   // Show in-world weapon crosshair (0/1)
 extern int jkPlayer_vrDominantHand;      // 0=left, 1=right
+extern int jkPlayer_vrSwapSticks;        // Move on the right stick, turn on the left
+extern int jkPlayer_vrPromptsShown;      // Bitmask of instructional prompts already taught
 extern int jkPlayer_vrMoveDirection;     // 0=head, 1=controller
 extern float jkPlayer_vrSupersampling;   // VR render scale multiplier
+extern float jkPlayer_vr6DoFScale;       // 6DoF head->body movement scale (0 = disabled / camera-float)
+extern int jkPlayer_vrCameraInterp;      // Interpolate the camera across the fixed physics step
+extern int jkPlayer_vrMoveQuakeFeel;     // Quake-style short accel/decel ramps for ground movement
+extern flex_t jkPlayer_vrMoveAccel;      // Approach rate toward top speed (1/sec)
+extern flex_t jkPlayer_vrMoveFriction;   // Slow-down rate when releasing the stick (1/sec)
+extern flex_t jkPlayer_vrMoveStopFrac;   // Below this fraction of top speed, decel goes linear
 extern float jkPlayer_vrHudWidth;        // Baked HUD half-width in NDC
 extern float jkPlayer_vrHudHeight;       // Baked HUD half-height in NDC
 extern float jkPlayer_vrHudPosX;         // Baked HUD horizontal centre in NDC

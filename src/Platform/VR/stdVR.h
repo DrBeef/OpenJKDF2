@@ -78,8 +78,47 @@ void stdVR_MapInputToGame(void);        // Map VR input to game actions
 void stdVR_TriggerHaptic(int hand, float amplitude, float duration, float frequency);
 void stdVR_StopHaptic(int hand);
 
+// On-screen instructional prompts. These go through the engine's message log (jkDev), so
+// they queue, expire and get baked into the VR HUD alongside the game's own messages.
+// Prompt ids index a per-profile "already shown" bitmask, so a prompt taught once stays
+// taught. Keep the list under 32 entries and NEVER renumber it - the mask is saved to the
+// player profile, so reordering would re-show or wrongly suppress prompts on existing saves.
+enum
+{
+    STDVR_PROMPT_SABER_SWING = 0,   // equipped the lightsaber
+    STDVR_PROMPT_FISTS_PUNCH = 1,   // equipped the fists
+    STDVR_PROMPT_CROUCH      = 2,   // gameplay start
+    STDVR_PROMPT_STAND       = 3,   // once crouched
+    STDVR_PROMPT_RUN         = 4,   // once stood back up
+    STDVR_PROMPT_WEAPON_WHEEL= 5,   // once run has been toggled
+    STDVR_PROMPT_FORCE_WHEEL = 6,   // first force power acquired
+    STDVR_PROMPT_FORCE_USE   = 7,   // once the force wheel has been opened
+    STDVR_PROMPT_ALT_FIRE    = 8,   // equipped a weapon that has a secondary fire
+    STDVR_PROMPT_JUMP        = 9,   // basics tail, after the intro chain
+    STDVR_PROMPT_ACTIVATE    = 10,
+    STDVR_PROMPT_HOLOMAP     = 11,
+    STDVR_PROMPT_RECENTER    = 12,
+    STDVR_PROMPT_ITEMS       = 13,  // first usable inventory item acquired
+    STDVR_PROMPT_DEATH_LOAD  = 14,  // first death
+    STDVR_PROMPT_HOLOMAP_GRAB= 15,  // holomap opened for the first time
+    STDVR_PROMPT_COUNT              // <= 32
+};
+
+#define STDVR_PROMPT_DWELL_MS (9000)
+
+void stdVR_ShowPrompt(const wchar_t* pText);
+void stdVR_ShowPromptOnce(int promptId, const wchar_t* pText);
+int stdVR_WasPromptShown(int promptId);
+void stdVR_ResetPromptsShown(void);
+// Write the taught-prompt bitmask to the profile. Only safe outside gameplay - see the note
+// on the implementation.
+void stdVR_FlushPromptsShown(void);
+
 // Utility
 void stdVR_RecenterView(void);
+// 6DoF head-driven body movement: per-frame horizontal head delta (tracking space, metres).
+void stdVR_ConsumeHeadDelta(float* outDx, float* outDy);
+void stdVR_ResetHeadDelta(void);
 void stdVR_GetRecommendedRenderSize(int* pWidth, int* pHeight);
 const char* stdVR_GetRuntimeName(void);
 

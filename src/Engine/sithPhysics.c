@@ -10,6 +10,165 @@
 #include "Platform/VR/stdVR.h"
 #include "jk.h"
 
+#ifdef PLATFORM_VR
+#define SITHPHYSICS_VR_HEAD_DELTA_EPSILON_METERS (0.00025f)
+
+static void sithPhysics_VRApplyHeadMovement(sithThing *player)
+{
+    extern int jkGame_isDDraw;
+    static float sithPhysics_vrHeadAccumX = 0.0f;
+    static float sithPhysics_vrHeadAccumY = 0.0f;
+
+    if (!player) return;
+    if (player != sithPlayer_pLocalPlayerThing) return;
+    if (!stdVR_bEnabled || !stdVR_IsSessionRunning()) return;
+    if (stdVR_config.sixDoFScale <= 0.0f) {
+        sithPhysics_vrHeadAccumX = 0.0f;
+        sithPhysics_vrHeadAccumY = 0.0f;
+        stdVR_ResetHeadDelta();
+        return;
+    }
+    if (!jkGame_isDDraw) {
+        sithPhysics_vrHeadAccumX = 0.0f;
+        sithPhysics_vrHeadAccumY = 0.0f;
+        stdVR_ResetHeadDelta();
+        return;
+    }
+
+    float headDX = 0.0f, headDY = 0.0f;
+    stdVR_ConsumeHeadDelta(&headDX, &headDY);   // tracking space metres; x=right, y=forward
+    if (headDX == 0.0f && headDY == 0.0f) {
+        return;
+    }
+
+    // Altered: OpenXR position noise is rarely exact zero. Accumulate tiny
+    // deltas so slow real movement still applies, but sub-millimetre jitter
+    // does not force a collision sweep every physics tick while standing still.
+    sithPhysics_vrHeadAccumX += headDX;
+    sithPhysics_vrHeadAccumY += headDY;
+    float accumLenSq = (sithPhysics_vrHeadAccumX * sithPhysics_vrHeadAccumX)
+                     + (sithPhysics_vrHeadAccumY * sithPhysics_vrHeadAccumY);
+    if (accumLenSq < (SITHPHYSICS_VR_HEAD_DELTA_EPSILON_METERS * SITHPHYSICS_VR_HEAD_DELTA_EPSILON_METERS)) {
+        return;
+    }
+
+    float worldScale = stdVR_config.worldScale;
+    if (worldScale <= 0.0f) {
+        worldScale = 1.0f;
+    }
+    float moveScale = worldScale * stdVR_config.sixDoFScale;
+
+    // Added: synthesize the headset's lateral displacement as a collision-respecting
+    // physics displacement. Use the same VR world scale as camera/controller poses,
+    // with sixDoFScale as an additional tuning multiplier.
+    rdVector3 localDisp;
+    localDisp.x = sithPhysics_vrHeadAccumX * moveScale;
+    localDisp.y = sithPhysics_vrHeadAccumY * moveScale;
+    localDisp.z = 0.0f;
+    sithPhysics_vrHeadAccumX = 0.0f;
+    sithPhysics_vrHeadAccumY = 0.0f;
+
+    rdVector3 worldDisp;
+    rdMatrix_TransformVector34(&worldDisp, &localDisp, &player->lookOrientation);
+    rdVector_Add3Acc(&player->physicsParams.velocityMaybe, &worldDisp);
+}
+#endif
+
+#ifdef PLATFORM_VR
+// Added: Quake-style ground movement for the local player.
+// Stock JK lets one drag coefficient set BOTH the top speed and the ramp, so the player
+// takes most of a second to wind up, while the static-drag cutoff snaps them to a dead stop
+// the moment the stick is released. Here the stock terminal velocity (thrust/drag) is kept
+// as the TARGET speed, but the approach and the slow-down each run at their own rate -
+// Quake 3's PM_Accelerate / PM_Friction. Both phases end up short but continuous.
+// Only the horizontal axes are touched; gravity, jumping and slope handling are untouched,
+// and external impulses (explosions, kickback) decay through friction rather than being
+// overwritten, so they still read as knockback.
+static void sithPhysics_VRQuakeGroundMove(sithThing *pThing, flex_t thrustScale, flex_t dragRate, flex_t deltaSeconds)
+{
+    // Remembered so releasing the stick still has a sensible speed scale to stop against.
+    static flex_t sithPhysics_vrLastWishSpeed = 0.0;
+
+    if (deltaSeconds <= 0.0)
+    {
+        return;
+    }
+
+    rdVector3 wishVel;
+    rdVector_Zero3(&wishVel);
+    if ((pThing->physicsParams.physflags & SITH_PF_USESTHRUST)
+        && !rdVector_IsZero3(&pThing->physicsParams.acceleration)
+        && dragRate > 0.0)
+    {
+        // The speed the stock model would have converged to for this thrust: the stock loop
+        // adds acceleration*thrustScale*dt per step against a drag of dragRate.
+        rdVector_Scale3(&wishVel, &pThing->physicsParams.acceleration, thrustScale / dragRate);
+        rdMatrix_TransformVector34Acc(&wishVel, &pThing->lookOrientation);
+    }
+
+    flex_t velX = pThing->physicsParams.vel.x;
+    flex_t velY = pThing->physicsParams.vel.y;
+    flex_t wishSpeed = stdMath_Sqrt(wishVel.x * wishVel.x + wishVel.y * wishVel.y);
+    if (wishSpeed > 0.0)
+    {
+        sithPhysics_vrLastWishSpeed = wishSpeed;
+    }
+
+    // Friction. Below stopFrac of top speed the drop becomes linear, so the player settles
+    // to a complete stop in bounded time instead of trailing off asymptotically.
+    flex_t speed = stdMath_Sqrt(velX * velX + velY * velY);
+    if (speed > 0.0)
+    {
+        flex_t stopSpeed = sithPhysics_vrLastWishSpeed * jkPlayer_vrMoveStopFrac;
+        flex_t control = (speed < stopSpeed) ? stopSpeed : speed;
+        flex_t newSpeed = speed - (control * jkPlayer_vrMoveFriction * deltaSeconds);
+        if (newSpeed < 0.0)
+        {
+            newSpeed = 0.0;
+        }
+        flex_t scale = newSpeed / speed;
+        velX *= scale;
+        velY *= scale;
+    }
+
+    // Accelerate toward the wish velocity, never past it.
+    if (wishSpeed > 0.0)
+    {
+        flex_t invWishSpeed = 1.0 / wishSpeed;
+        flex_t wishDirX = wishVel.x * invWishSpeed;
+        flex_t wishDirY = wishVel.y * invWishSpeed;
+
+        flex_t curSpeed = (velX * wishDirX) + (velY * wishDirY);
+        flex_t addSpeed = wishSpeed - curSpeed;
+        if (addSpeed > 0.0)
+        {
+            flex_t accelSpeed = jkPlayer_vrMoveAccel * wishSpeed * deltaSeconds;
+            if (accelSpeed > addSpeed)
+            {
+                accelSpeed = addSpeed;
+            }
+            velX += accelSpeed * wishDirX;
+            velY += accelSpeed * wishDirY;
+        }
+    }
+
+    pThing->physicsParams.vel.x = velX;
+    pThing->physicsParams.vel.y = velY;
+}
+
+static int sithPhysics_VRUsesQuakeGroundMove(sithThing *pThing)
+{
+    // Thrust sectors (air shafts, conveyors) keep the stock model - their push is balanced
+    // against the surface drag, and re-rating the friction would change level puzzles.
+    return jkPlayer_vrMoveQuakeFeel
+        && pThing == sithPlayer_pLocalPlayerThing
+        && (pThing->physicsParams.physflags & SITH_PF_USESTHRUST)
+        && pThing->physicsParams.surfaceDrag != 0.0
+        && pThing->sector
+        && !(pThing->sector->flags & SITH_SECTOR_HASTHRUST);
+}
+#endif // PLATFORM_VR
+
 void sithPhysics_FindFloor(sithThing *pThing, int a3)
 {
     int v4; // ecx
@@ -202,6 +361,12 @@ void sithPhysics_ThingTick(sithThing *pThing, flex_t deltaSecs)
     {
         sithPhysics_ThingPhysGeneral(pThing, deltaSecs);
     }
+
+#ifdef PLATFORM_VR
+    if (pThing->type == SITH_THING_PLAYER) {
+        sithPhysics_VRApplyHeadMovement(pThing);
+    }
+#endif
 }
 
 void sithPhysics_ThingApplyForce(sithThing *pThing, rdVector3 *forceVec)
@@ -718,6 +883,7 @@ void sithPhysics_ThingPhysPlayer(sithThing *player, flex_t deltaSeconds)
         rdVector_Add3Acc(&player->physicsParams.vel, &a1a);
         rdVector_MultAcc3(&player->physicsParams.velocityMaybe, &player->physicsParams.vel, OLDSTEP_DELTA_50FPS);
     }
+
 }
 
 // MOTS altered
@@ -960,6 +1126,15 @@ void sithPhysics_ThingPhysAttached(sithThing *pThing, flex_t deltaSeconds)
         possibly_undef_2 = 1.0;
     }
 
+#ifdef PLATFORM_VR
+    // Added: the local player's horizontal movement runs on its own accel/friction rates.
+    // The stock drag still runs (it owns the vertical axis and the SITH_PF_8000 handshake),
+    // but x/y are restored afterwards and driven by sithPhysics_VRQuakeGroundMove instead.
+    int bQuakeMove = sithPhysics_VRUsesQuakeGroundMove(pThing);
+    flex_t quakeVelX = pThing->physicsParams.vel.x;
+    flex_t quakeVelY = pThing->physicsParams.vel.y;
+#endif
+
     if (!rdVector_IsZero3(&pThing->physicsParams.vel) && pThing->physicsParams.surfaceDrag != 0.0)
     {
         if ( (pThing->physicsParams.physflags & SITH_PF_8000) == 0 )
@@ -984,6 +1159,18 @@ void sithPhysics_ThingPhysAttached(sithThing *pThing, flex_t deltaSeconds)
         }
     }
 
+#ifdef PLATFORM_VR
+    if (bQuakeMove)
+    {
+        pThing->physicsParams.vel.x = quakeVelX;
+        pThing->physicsParams.vel.y = quakeVelY;
+
+        flex_t quakeThrustScale = (pThing->physicsParams.physflags & SITH_PF_CROUCHING) ? 0.8 : possibly_undef_2;
+        sithPhysics_VRQuakeGroundMove(pThing, quakeThrustScale,
+                                      pThing->physicsParams.surfaceDrag * possibly_undef_2, deltaSeconds);
+    }
+    else
+#endif
     if ( (pThing->physicsParams.physflags & SITH_PF_USESTHRUST) != 0
       && !rdVector_IsZero3(&pThing->physicsParams.acceleration) )
     {

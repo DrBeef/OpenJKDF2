@@ -136,6 +136,11 @@ typedef struct stdVR_ControllerState {
     int bTracking;                  // Is controller being tracked
     int bActive;                    // Is controller active/connected
 
+    // Added: this hand's own thumbstick, before the move/turn role routing, in the plain
+    // convention: [0] = horizontal (left/right), [1] = vertical (up/down). Consumers that
+    // care about a physical hand rather than a role (the wheel's page flip) use this.
+    float thumbstick[2];
+
     // Motion tracking data
     stdVR_MotionState motion;       // Velocity and swing tracking
 } stdVR_ControllerState;
@@ -209,14 +214,18 @@ typedef struct stdVR_Config {
     // Speed
     float walkSpeedScale;           // Walk speed multiplier (default 1.0, applied to base thrust)
 
+    // 6DoF head-driven body movement: scale factor mapping physical head metres to in-game
+    // movement (0 = disabled, body stays put and the camera floats with the head as before).
+    float sixDoFScale;
+
     // Scale and comfort
     float worldScale;               // World scale multiplier (default 1.0)
     float heightOffset;             // Player height offset in meters
     float fixedHeightAdjustment;          // Adjustment to make floor line up
-    int bComfortVignette;           // Enable comfort vignette during movement
 
     // Handedness
     int dominantHand;               // 0=left, 1=right
+    int bSwapSticks;                // Move on the right stick and turn on the left
 
     // Crosshair
     int bWeaponCrosshair;           // Show in-world weapon crosshair dot

@@ -53,8 +53,20 @@ android {
         }
     }
 
+    signingConfigs {
+        // Sideload-only: the standard Android debug key, so release APKs install without having
+        // to provision a real keystore. Swap this for a proper key before any public release.
+        debugKey {
+            storeFile file("${System.properties['user.home']}/.android/debug.keystore")
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig signingConfigs.debugKey
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             externalNativeBuild {

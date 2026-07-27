@@ -60,6 +60,9 @@ MATH_FUNC void sithCamera_UpdateZoom(sithCamera *pCamera);
 void sithCamera_PrepareFrameVR(void);
 void sithCamera_SetVRViewMultiView(void);
 void sithCamera_RestoreVRView(void);
+// Render-time camera interpolation over the fixed physics step (see sithCamera.c)
+void sithCamera_VRRecordSimStep(void);
+void sithCamera_VRResetInterp(void);
 #endif
 
 // Added: Option to disable POV shake

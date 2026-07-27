@@ -7,6 +7,7 @@
 #include "stdVR.h"
 #include "stdVR_Types.h"
 #include "stdVR_Map3D.h"
+#include "stdVR_Prompts.h"
 #include "Platform/stdControl.h"
 #include "stdPlatform.h"
 #include "General/stdMath.h"
@@ -17,6 +18,7 @@
 #include "Main/jkMain.h"
 #include "Main/jkSmack.h"
 #include "Main/jkDev.h"
+#include "Main/jkStrings.h"
 #include "Gui/jkGUIRend.h"
 
 #include <math.h>
@@ -38,6 +40,11 @@ static int stdVR_weaponSwitchState = 0;  // 0 = neutral, 1 = up triggered, -1 = 
 static int stdVR_nextWeaponTriggered = 0;
 static int stdVR_prevWeaponTriggered = 0;
 #define STDVR_WEAPON_SWITCH_THRESHOLD 0.7f
+// Crouch shares the turn stick, so it needs a deeper, more deliberate push than a weapon
+// switch, and both need the vertical axis to dominate the horizontal by this ratio before
+// they count as an up/down gesture at all.
+#define STDVR_CROUCH_THRESHOLD 0.9f
+#define STDVR_STICK_AXIS_DOMINANCE 2.0f
 
 // Crouch toggle via right thumbstick down
 static int stdVR_crouchToggled = 0;
@@ -108,9 +115,32 @@ void stdVR_Input_ProcessSnapTurn(void)
     }
 }
 
+// Added: which physical stick currently carries movement / turning. The axes themselves are
+// already routed by hand in stdVR_OpenXR_UpdateInput; these are for the stick-CLICK actions,
+// which have to follow the same stick.
+uint32_t stdVR_Input_GetMoveStickButton(void)
+{
+    return stdVR_config.bSwapSticks ? STDVR_BTN_THUMBSTICK_R : STDVR_BTN_THUMBSTICK_L;
+}
+
+uint32_t stdVR_Input_GetTurnStickButton(void)
+{
+    return stdVR_config.bSwapSticks ? STDVR_BTN_THUMBSTICK_L : STDVR_BTN_THUMBSTICK_R;
+}
+
 void stdVR_Input_GetMovementDirection(float* pMoveX, float* pMoveY)
 {
     if (!stdVR_bEnabled || !pMoveX || !pMoveY) {
+        return;
+    }
+
+    // Added: no locomotion while a wheel is open. Time is already slowed to 0.1x and the
+    // off-hand stick is the wheel's page-flip control, so letting it also strafe would send
+    // the player sliding sideways every time they change page. Turning is suppressed the
+    // same way in stdVR_Input_GetSmoothTurnSpeed.
+    if (stdVR_WeaponWheel_IsActive()) {
+        *pMoveX = 0.0f;
+        *pMoveY = 0.0f;
         return;
     }
 
@@ -191,8 +221,25 @@ void stdVR_Input_MapToGame(void)
     // Weapon switching via dominant hand thumbstick up/down
     // Disabled while weapon wheel is active (thumbstick used for wheel selection)
     if (!stdVR_WeaponWheel_IsActive()) {
-        // Use the turn stick (right thumbstick) Y axis
+        // Use the turn stick's Y axis (right stick by default, left if the sticks are swapped
+        // - analogTurn is already routed by stdVR_OpenXR_UpdateInput)
         float weaponSwitchY = stdVR_clientInfo.analogTurn[1];  // Y axis of turn stick
+
+        // Altered: turning lives on this same stick, so a diagonal push used to crouch by
+        // accident constantly. Require a deliberate, near-vertical push: the vertical axis
+        // must clearly dominate the horizontal, and crouch needs a deeper deflection than
+        // weapon-switch because it is the one that was being triggered unintentionally.
+        float weaponSwitchXMag = stdVR_clientInfo.analogTurn[0];
+        if (weaponSwitchXMag < 0.0f) {
+            weaponSwitchXMag = -weaponSwitchXMag;
+        }
+        float weaponSwitchYMag = (weaponSwitchY < 0.0f) ? -weaponSwitchY : weaponSwitchY;
+        int bVerticalDominant = (weaponSwitchYMag > weaponSwitchXMag * STDVR_STICK_AXIS_DOMINANCE);
+
+        if (!bVerticalDominant) {
+            // Mostly a turn, not an up/down gesture - ignore, but let the state reset below.
+            weaponSwitchY = 0.0f;
+        }
 
         if (weaponSwitchY > STDVR_WEAPON_SWITCH_THRESHOLD) {
             // Thumbstick pushed up - next weapon
@@ -201,7 +248,7 @@ void stdVR_Input_MapToGame(void)
                 stdVR_weaponSwitchState = 1;
                 stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
             }
-        } else if (weaponSwitchY < -STDVR_WEAPON_SWITCH_THRESHOLD) {
+        } else if (weaponSwitchY < -STDVR_CROUCH_THRESHOLD) {
             // Thumbstick pushed down - toggle crouch
             if (stdVR_crouchToggleState != -1) {
                 stdVR_crouchToggled = !stdVR_crouchToggled;
@@ -347,28 +394,10 @@ void stdVR_Input_MapToGame(void)
     // Instead, the VR button state is read directly by the modified
     // sithControl code when PLATFORM_VR is defined.
 
-    // Trigger haptic feedback for fire
-    {
-        int dominantHand = stdVR_config.dominantHand;
-        int offhand = 1 - dominantHand;
-        uint32_t btnFire = (dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_BTN_TRIGGER_L : STDVR_BTN_TRIGGER_R;
-        uint32_t btnAlt = (dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_BTN_GRIP_L : STDVR_BTN_GRIP_R;
-        uint32_t btnForce = (dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_BTN_TRIGGER_R : STDVR_BTN_TRIGGER_L;
-
-        if (stdVR_clientInfo.buttonPressed & btnFire) {
-            stdVR_TriggerHaptic(dominantHand, 0.5f, 0.1f, 100.0f);
-        }
-
-        // Trigger haptic feedback for alt fire (grip)
-        if (stdVR_clientInfo.buttonPressed & btnAlt) {
-            stdVR_TriggerHaptic(dominantHand, 0.3f, 0.1f, 50.0f);
-        }
-
-        // Trigger haptic feedback for force power
-        if (stdVR_clientInfo.buttonPressed & btnForce) {
-            stdVR_TriggerHaptic(offhand, 0.4f, 0.15f, 75.0f);
-        }
-    }
+    // Removed: fire/alt-fire/force haptics used to buzz on the raw button press, so the
+    // controller vibrated whether or not anything happened - out of ammo, mid fire-wait,
+    // while switching weapons, or with a weapon that does not shoot. The weapon buzz now
+    // comes from sithWeapon_FireProjectile, once a shot has actually been created.
 
     // Fist punch detection (both hands) + haptics. With the fists equipped, a forward thrust of
     // either controller fires a punch (see stdVR_Input_IsPunchActive -> FIRE1) and buzzes the hand
@@ -377,6 +406,8 @@ void stdVR_Input_MapToGame(void)
         extern sithPlayerInfo* sithPlayer_pLocalPlayer;
         int weap = sithPlayer_pLocalPlayer ? sithPlayer_pLocalPlayer->curWeapon : -1;
         int bFists = (weap == SITHBIN_FISTS || weap == SITHBIN_MOTS_FISTS);
+
+
         float punchThreshold = stdVR_motionConfig.weaponVelocityTrigger;
         if (punchThreshold <= 0.0f) punchThreshold = 2.0f;
 
@@ -393,29 +424,36 @@ void stdVR_Input_MapToGame(void)
         }
     }
 
-    // Off-hand thumbstick click = toggle run mode (INPUT_FUNC_FAST).
+    // Move-stick click = toggle run mode (INPUT_FUNC_FAST).
+    // Altered: follows the movement stick rather than a fixed side, so the run toggle stays
+    // under the thumb that is doing the walking when the sticks are swapped.
     // Gated on inGameplay so a thumbstick click in a menu/intro/cutscene doesn't get acted on
     // (otherwise the action "buffers" into gameplay — e.g. clicking the stick in the menu would
     // leave the holomap open once gameplay starts).
-    if (inGameplay && (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_L)) {
+    if (inGameplay && (stdVR_clientInfo.buttonPressed & stdVR_Input_GetMoveStickButton())) {
         stdVR_runToggled = !stdVR_runToggled;
+        int moveHand = stdVR_config.bSwapSticks ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
         // Haptic feedback: longer pulse for run, short pulse for walk
         if (stdVR_runToggled) {
             // Run mode: one longer pulse
-            stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.5f, 0.15f, 150.0f);
+            stdVR_TriggerHaptic(moveHand, 0.5f, 0.15f, 150.0f);
         } else {
             // Walk mode: short pulse
-            stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.3f, 0.1f, 100.0f);
+            stdVR_TriggerHaptic(moveHand, 0.3f, 0.1f, 100.0f);
         }
     }
 
-    // Added: Right thumbstick click = toggle 3D map (gameplay only; see note above).
-    if (inGameplay && (stdVR_clientInfo.buttonPressed & STDVR_BTN_THUMBSTICK_R)) {
+    // Added: turn-stick click = toggle 3D map (gameplay only; see note above).
+    if (inGameplay && (stdVR_clientInfo.buttonPressed & stdVR_Input_GetTurnStickButton())) {
         stdVR_Map3D_Toggle();
         // Haptic feedback on both controllers
         stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.4f, 0.15f, 120.0f);
         stdVR_TriggerHaptic(STDVR_CONTROLLER_RIGHT, 0.4f, 0.15f, 120.0f);
     }
+
+    // Added: onboarding prompts. Reads the same toggles/wheel state resolved above, so it
+    // runs last.
+    stdVR_Prompts_Tick(inGameplay);
 }
 
 // Check if menu button just triggered escape (short press release)

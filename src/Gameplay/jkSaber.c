@@ -42,6 +42,18 @@ static rdMaterial jkSaber_vrDebugMat = {0};
 static int jkSaber_vrSwingActive = 0;
 static uint32_t jkSaber_vrSwingEndTime = 0;
 #define JKSABER_VR_SWING_LINGER_MS 200  // Keep damage active briefly after swing slows
+
+// Added: buzz the saber hand when the blade actually connects with something. Safe to call
+// from every hit branch: in motion-saber mode collision only runs while a swing is active,
+// and each thing/surface is recorded in saberCollideInfo so it can only be hit once per
+// swing - resting the blade against geometry cannot produce a continuous buzz.
+static void jkSaber_VRHitHaptic(sithThing *pPlayerThing, float amplitude)
+{
+    if (!stdVR_bEnabled || pPlayerThing != sithPlayer_pLocalPlayerThing)
+        return;
+
+    stdVR_TriggerHaptic(stdVR_GetDominantHand(), amplitude, 0.12f, 120.0f);
+}
 #endif
 
 #define JKSABER_EXTENDTIME (0.3000000)
@@ -285,6 +297,9 @@ void  jkSaber_UpdateCollision2(sithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
 
                 sithThing_Damage(searchResult->receiver, pPlayerThing, pCollideInfo->damage, SITH_DAMAGE_SABER);
                 pCollideInfo->damagedThings[pCollideInfo->numDamagedThings++] = searchResult->receiver;
+#ifdef PLATFORM_VR
+                jkSaber_VRHitHaptic(pPlayerThing, 0.7f);
+#endif
                 break;
             }
 
@@ -314,6 +329,9 @@ void  jkSaber_UpdateCollision2(sithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
 
                     sithCog_SendMessageFromThing(resultThing, 0, SITH_MESSAGE_BLOCKED);
                     pCollideInfo->damagedThings[pCollideInfo->numDamagedThings++] = searchResult->receiver;
+#ifdef PLATFORM_VR
+                    jkSaber_VRHitHaptic(pPlayerThing, 0.6f);  // parried - blade on blade
+#endif
                     break;
                 }
             }
@@ -322,6 +340,9 @@ void  jkSaber_UpdateCollision2(sithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
 
             sithThing_Damage(resultThing, pPlayerThing, pCollideInfo->damage, SITH_DAMAGE_SABER);
             pCollideInfo->damagedThings[pCollideInfo->numDamagedThings++] = searchResult->receiver;
+#ifdef PLATFORM_VR
+            jkSaber_VRHitHaptic(pPlayerThing, 0.7f);
+#endif
             break;
         }
         else if (searchResult->hitType & SITHCOLLISION_WORLD)
@@ -343,6 +364,9 @@ void  jkSaber_UpdateCollision2(sithThing *pPlayerThing,rdVector3 *pSaberPos,rdVe
                 {
                     sithSurface_SendDamageToThing(searchResult->surface, pPlayerThing, pCollideInfo->damage, SITH_DAMAGE_SABER);
                     pCollideInfo->damagedSurfaces[pCollideInfo->numDamagedSurfaces++] = searchResult->surface;
+#ifdef PLATFORM_VR
+                    jkSaber_VRHitHaptic(pPlayerThing, 0.45f);  // blade into world geometry
+#endif
                 }
             }
             break;

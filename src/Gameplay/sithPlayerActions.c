@@ -18,6 +18,7 @@
 
 #ifdef PLATFORM_VR
 #include "Platform/VR/stdVR.h"
+#include "Platform/VR/stdVR_Input.h"
 #endif
 
 static int lastDoorOpenTime = 0;
@@ -110,9 +111,20 @@ void sithPlayerActions_JumpWithVel(sithThing *thing, flex_t vel)
     // MoTS Added: SITH_AF_FREEZE_MOVEMENT
     if ( (thing->type == SITH_THING_ACTOR || thing->type == SITH_THING_PLAYER) && (thing->actorParams.typeflags & SITH_AF_COMBO_FREEZE) == 0 )
     {
-        final_vel = thing->actorParams.jumpSpeed * vel;
+        if ( (thing->physicsParams.physflags & SITH_PF_WATERSURFACE) == 0 && !thing->attach_flags )
+            return;
+
+        // Added: jumping cancels crouch first so VR crouch-toggle jumps stand up
+        // immediately and use normal jump velocity.
         if ( (thing->physicsParams.physflags & SITH_PF_CROUCHING) != 0 )
-            final_vel = final_vel * 0.7;
+        {
+            thing->physicsParams.physflags &= ~SITH_PF_CROUCHING;
+#ifdef PLATFORM_VR
+            stdVR_Input_ResetCrouchToggle();
+#endif
+        }
+
+        final_vel = thing->actorParams.jumpSpeed * vel;
         if ( (thing->physicsParams.physflags & SITH_PF_WATERSURFACE) != 0 )
         {
             rdVector_MultAcc3(&thing->physicsParams.vel, &rdroid_zVector3, final_vel);
@@ -120,8 +132,6 @@ void sithPlayerActions_JumpWithVel(sithThing *thing, flex_t vel)
         }
         else
         {
-            if ( !thing->attach_flags )
-                return;
             isAttachedAndIsSurface = (thing->attach_flags & (SITH_ATTACH_THING|SITH_ATTACH_THINGSURFACE)) == 0;
             
             rdVector_MultAcc3(&thing->physicsParams.vel, &rdroid_zVector3, final_vel);

@@ -14,6 +14,12 @@
 #include "General/stdString.h"
 #include "Main/jkDev.h"
 
+// Added: VR haptics on force power use
+#ifdef PLATFORM_VR
+#include "Platform/VR/stdVR.h"
+#include "Gameplay/sithPlayer.h"
+#endif
+
 // MOTS added
 static int sithInventory_008d60f8;
 static int sithInventory_008d60fc;
@@ -1184,7 +1190,26 @@ int sithInventory_HandleInvSkillKeys(sithThing *player, flex_t deltaSecs)
                         {
                             v17 = sithInventory_aDescriptors[v16].cog;
                             if ( v17 )
+                            {
+#ifdef PLATFORM_VR
+                                // Added: buzz the off hand when a force power actually goes
+                                // off, not when the trigger is pulled. The COG runs inline
+                                // from SendMessage and does its own mana check, so compare
+                                // mana and the bin cooldown across the call - a power that
+                                // refused (not enough mana) changes neither.
+                                flex_t vrManaBefore = sithInventory_GetBinAmount(v1, SITHBIN_FORCEMANA);
+                                flex_t vrWaitBefore = v15->iteminfo[v16].binWait;
+#endif
                                 sithCog_SendMessage(v17, SITH_MESSAGE_ACTIVATE, SITH_MESSAGE_ACTIVATE, v16, SENDERTYPE_THING, v1->thingIdx, SENDERTYPE_0);
+#ifdef PLATFORM_VR
+                                if ( stdVR_bEnabled && v1 == sithPlayer_pLocalPlayerThing
+                                  && (sithInventory_GetBinAmount(v1, SITHBIN_FORCEMANA) < vrManaBefore - 0.001
+                                   || v15->iteminfo[v16].binWait > vrWaitBefore) )
+                                {
+                                    stdVR_TriggerHaptic(1 - stdVR_config.dominantHand, 0.4f, 0.15f, 75.0f);
+                                }
+#endif
+                            }
                         }
                     }
                 }

@@ -85,8 +85,7 @@ GLuint load_shader_file(const char* filepath, GLenum type)
     int enableMultiView =
         g_shaderForceMultiView ||
         (strstr(filepath, "default") != NULL) ||
-        (strstr(filepath, "crosshair") != NULL) ||
-        (strstr(filepath, "vignette") != NULL);
+        (strstr(filepath, "crosshair") != NULL);
 
     GLuint ret = create_shader(shader_contents, type, enableMultiView);
     stdPlatform_Printf("std3D: Shader compiled, result=%u\n", ret);
@@ -176,7 +175,7 @@ GLuint create_shader(const char* shader, GLenum type, int enableMultiView) {
 #if defined(PLATFORM_VR) && !defined(TARGET_ANDROID) && !defined(ARCH_WASM)
     // Desktop PCVR: enable single-pass MultiView stereo, but ONLY for the 3D-scene shaders
     // that render into the multiview array FBO (enableMultiView). default_v.glsl (and the
-    // crosshair/vignette shaders) branch on MULTIVIEW_ENABLED and use
+    // crosshair shader) branch on MULTIVIEW_ENABLED and use
     // layout(num_views=2)/gl_ViewID_OVR, which require the GL_OVR_multiview2 extension and a
     // multiview FBO. UI/menu shaders render to plain 2D FBOs (HUD quad layer, menus) and
     // must stay mono, so they keep the non-multiview extensions/defines set above.

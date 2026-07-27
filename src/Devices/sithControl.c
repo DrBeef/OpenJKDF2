@@ -33,7 +33,12 @@
 // Added
 static int sithControl_followingPlayer = 0;
 #ifdef PLATFORM_VR
-static int sithControl_vrWasMoving = 0;  // Was thumbstick active last frame
+// VR thumbstick locomotion: last frame's injected world-frame velocity. Removed before
+// adding this frame's target so stick acceleration/deceleration is effectively instant
+// while unrelated forces can still affect the player.
+static flex_t sithControl_vrStickInjVelX = 0.0f;
+static flex_t sithControl_vrStickInjVelY = 0.0f;
+static flex_t sithControl_vrStickInjVelZ = 0.0f;
 #endif
 static int sithControl_curDebugCam = 0;
 static wchar_t sithControl_debugWStrTmp[256];
@@ -732,6 +737,11 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
         uint32_t btnAltFire  = STDVR_BTN_B;
 
         int vrInput = 0;
+        // Altered: some VR actions must be the ONLY source for their function. Clearing
+        // vrInput is not enough - execution falls through to the legacy keybind scan below,
+        // which still sees the physical trigger through the normal gamepad mapping and fires
+        // anyway. vrOwnsFunc makes the VR answer final.
+        int vrOwnsFunc = 0;
         switch (funcIdx) {
             case INPUT_FUNC_FIRE1: {
                 // VR melee is motion-controlled, not trigger-fired: the lightsaber is activated
@@ -743,8 +753,10 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                 int isFists = (weap == SITHBIN_FISTS || weap == SITHBIN_MOTS_FISTS);
                 if (isSaber && stdVR_motionConfig.bMotionSaberEnabled) {
                     vrInput = 0;                              // swing-only; trigger does nothing
+                    vrOwnsFunc = 1;
                 } else if (isFists) {
                     vrInput = stdVR_Input_IsPunchActive();    // punch forward to attack
+                    vrOwnsFunc = 1;
                 } else {
                     vrInput = stdVR_Input_IsButtonDown(btnFire1); // ranged: dominant trigger
                 }
@@ -790,6 +802,9 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
         if (vrInput) {
             v6 = 1;
             if (pOut) *pOut = 1;
+        }
+        if (vrOwnsFunc) {
+            return v6;  // VR is authoritative here - do not let the keybind scan re-add it
         }
     }
 #endif // PLATFORM_VR
@@ -1364,6 +1379,84 @@ LABEL_20:
 }
 
 
+#ifdef PLATFORM_VR
+static void sithControl_VRRemoveInjectedStickVelocity(sithThing *player)
+{
+    rdVector3 injected;
+    injected.x = sithControl_vrStickInjVelX;
+    injected.y = sithControl_vrStickInjVelY;
+    injected.z = sithControl_vrStickInjVelZ;
+
+    flex_t injectedLenSq = rdVector_Dot3(&injected, &injected);
+    if (injectedLenSq > 0.000001f) {
+        // Altered: physics drag/collision may have already reduced last frame's
+        // injected velocity. Remove only the remaining same-direction component so
+        // releasing the stick cannot overshoot into a backwards bounce.
+        flex_t remainingScale = rdVector_Dot3(&player->physicsParams.vel, &injected) / injectedLenSq;
+        if (remainingScale > 1.0f) {
+            remainingScale = 1.0f;
+        }
+        if (remainingScale > 0.0f) {
+            player->physicsParams.vel.x -= injected.x * remainingScale;
+            player->physicsParams.vel.y -= injected.y * remainingScale;
+            player->physicsParams.vel.z -= injected.z * remainingScale;
+        }
+    }
+
+    sithControl_vrStickInjVelX = 0.0f;
+    sithControl_vrStickInjVelY = 0.0f;
+    sithControl_vrStickInjVelZ = 0.0f;
+}
+
+static void sithControl_VRApplyInstantStickVelocity(sithThing *player, const rdVector3 *pLocalAccel, flex_t moveMultiplier, int bApplyZ)
+{
+    if (!player || !pLocalAccel) return;
+
+    sithControl_VRRemoveInjectedStickVelocity(player);
+
+    // Altered: on foot the Quake-style ramps in sithPhysics own acceleration and
+    // deceleration, so snapping the velocity here would defeat both - just clean up what
+    // was injected. Swimming and flying keep the instant response (they have no ground
+    // friction model), and the airborne case stays off too so jumping out of a run does
+    // not lurch as the injection switches back on.
+    if (jkPlayer_vrMoveQuakeFeel
+        && !(player->physicsParams.physflags & SITH_PF_FLY)
+        && !(player->sector && (player->sector->flags & SITH_SECTOR_UNDERWATER))) {
+        return;
+    }
+
+    if (rdVector_IsZero3(pLocalAccel)) {
+        return;
+    }
+
+    flex_t drag = player->physicsParams.airDrag;
+    if (drag <= 0.0f) {
+        drag = 0.5f;
+    }
+
+    flex_t thrustScale = (player->physicsParams.physflags & SITH_PF_FLY) ? 1.0f : 0.3f;
+    rdVector3 localVel;
+    rdVector_Scale3(&localVel, pLocalAccel, (thrustScale * moveMultiplier) / drag);
+    if (!bApplyZ) {
+        localVel.z = 0.0f;
+    }
+
+    rdVector3 worldVel;
+    rdMatrix_TransformVector34(&worldVel, &localVel, &player->lookOrientation);
+    player->physicsParams.vel.x += worldVel.x;
+    player->physicsParams.vel.y += worldVel.y;
+    if (bApplyZ) {
+        player->physicsParams.vel.z += worldVel.z;
+        sithControl_vrStickInjVelZ = worldVel.z;
+    }
+    sithControl_vrStickInjVelX = worldVel.x;
+    sithControl_vrStickInjVelY = worldVel.y;
+}
+
+#endif // PLATFORM_VR
+
+#define MATH_PI 3.14159265358979323846f
+
 void sithControl_PlayerMovementMots(sithThing *player)
 {
     uint32_t uVar1;
@@ -1416,6 +1509,96 @@ void sithControl_PlayerMovementMots(sithThing *player)
     if ((thing->type != 2) && (thing->type != 10)) {
         return;
     }
+
+// Added: VR decoupled movement, duplicated from sithControl_PlayerMovement because MOTS
+// dispatches here instead. MOTS routes every player motion through sithThing_MotsTick so COGs
+// can veto it (4 = acceleration.x, 5 = turn, 6 = acceleration.y), so the sticks feed those same
+// gates rather than writing the physics fields directly as the DF2 path does.
+#ifdef PLATFORM_VR
+    int vrMovementActive = 0;
+    if (stdVR_bEnabled && stdVR_IsSessionRunning()) {
+        vrMovementActive = 1;
+
+        float moveX = 0.0f, moveY = 0.0f;
+        stdVR_Input_GetMovementDirection(&moveX, &moveY);
+
+        // Transform movement by HMD yaw so forward = where you're looking
+        float hmdYawRad = stdVR_clientInfo.hmdOrientation.y * (MATH_PI / 180.0f);
+        float cosYaw = cosf(hmdYawRad);
+        float sinYaw = sinf(hmdYawRad);
+        float worldMoveX = cosYaw * moveX - sinYaw * moveY;
+        float worldMoveY = sinYaw * moveX + cosYaw * moveY;
+
+        int snapAngle = stdVR_Input_GetSnapTurnAngle();
+        if (snapAngle != 0) {
+            if (sithThing_MotsTick(5, 0, (flex_t)snapAngle)) {
+                rdVector3 rot = { 0.0f, (flex_t)snapAngle, 0.0f };
+                rdMatrix_PostRotate34(&thing->lookOrientation, &rot);
+            }
+            thing->physicsParams.angVel.y = 0.0;
+            sithControl_008d7f50 = 0;
+        }
+        else {
+            flex_t turnVal = stdVR_Input_GetSmoothTurnSpeed();
+            if (turnVal == 0.0) {
+                if (sithControl_008d7f50 != 0) {
+                    sithThing_MotsTick(5, 0, turnVal);
+                    sithControl_008d7f50 = 0;
+                }
+                thing->physicsParams.angVel.y = turnVal;
+            }
+            else {
+                sithControl_008d7f50 = 1;
+                thing->physicsParams.angVel.y = sithThing_MotsTick(5, 0, turnVal) ? turnVal : 0.0;
+            }
+        }
+
+        // No sign flip on the strafe component here: the -1 MOTS applies elsewhere corrects for
+        // its INPUT_FUNC_SLIDE axis convention, and the sticks never touch that axis.
+        flex_t thrust = thing->actorParams.maxThrust + thing->actorParams.extraSpeed;
+        flex_t vrAccelX = worldMoveY * thrust * stdVR_config.walkSpeedScale;
+        flex_t vrAccelY = -worldMoveX * thrust * stdVR_config.walkSpeedScale;
+
+        if (vrAccelX == 0.0) {
+            if (sithControl_008d7f54 != 0) {
+                sithThing_MotsTick(4, 0, 0.0);
+            }
+            sithControl_008d7f54 = 0;
+            thing->physicsParams.acceleration.x = 0.0;
+        }
+        else {
+            sithControl_008d7f54 = 1;
+            thing->physicsParams.acceleration.x =
+                sithThing_MotsTick(4, 0, vrAccelX * move_multiplier) ? vrAccelX : 0.0;
+        }
+
+        if (vrAccelY == 0.0) {
+            if (sithControl_008d7f4c != 0) {
+                sithThing_MotsTick(6, 0, 0.0);
+                sithControl_008d7f4c = 0;
+            }
+            thing->physicsParams.acceleration.y = 0.0;
+        }
+        else {
+            sithControl_008d7f4c = 1;
+            thing->physicsParams.acceleration.y =
+                sithThing_MotsTick(6, 0, vrAccelY * move_multiplier) ? vrAccelY : 0.0;
+        }
+
+        // Altered: VR stick movement should reach its target speed immediately. The normal
+        // acceleration ramp feels sluggish and can be nauseating. Fed the post-gate values so a
+        // COG that vetoed the move does not get overridden here.
+        rdVector3 vrStickAccel = thing->physicsParams.acceleration;
+        vrStickAccel.z = 0.0f;
+        sithControl_VRApplyInstantStickVelocity(thing, &vrStickAccel, move_multiplier, 0);
+    }
+    else {
+        sithControl_VRApplyInstantStickVelocity(thing, &rdroid_zeroVector3, 1.0f, 1);
+    }
+
+    if (!vrMovementActive)
+#endif
+    {
     iVar2 = sithControl_ReadFunctionMap(INPUT_FUNC_SLIDETOGGLE,&local_4);
     if (iVar2 == 0) {
         fVar4 = sithControl_GetAxisNonTimeCorrectedRaw(INPUT_FUNC_TURN);
@@ -1541,6 +1724,8 @@ LAB_00527d1c:
        (uVar1 = thing->actorParams.typeflags, (uVar1 & SITH_AF_HEAD_IS_CENTERED) == 0)) {
         thing->actorParams.typeflags = uVar1 | SITH_AF_CENTER_VIEW;
     }
+    }
+
     thing->physicsParams.acceleration.z = 0.0;
     if (move_multiplier != 1.0) {
         fVar4 = thing->physicsParams.acceleration.x;
@@ -1562,9 +1747,6 @@ LAB_00527d1c:
         sithPlayerActions_JumpWithVel(thing,1.0);
     }
 }
-
-#define MATH_PI 3.14159265358979323846f
-
 
 void sithControl_PlayerMovement(sithThing *player)
 {
@@ -1674,19 +1856,17 @@ void sithControl_PlayerMovement(sithThing *player)
                 player->physicsParams.acceleration.x = worldMoveY * thrust * stdVR_config.walkSpeedScale;   // Forward/back
                 player->physicsParams.acceleration.y = -worldMoveX * thrust * stdVR_config.walkSpeedScale;  // Strafe
 
-                // In VR, kill movement velocity on the frame the thumbstick is released
-                // so the player doesn't slide. Only zero on the transition from moving to
-                // stopped — once stopped, leave velocity alone so external forces (weapon
-                // kickback, explosions, etc.) can push the player normally.
-                int vrIsMoving = (moveX != 0.0f || moveY != 0.0f);
-                if (!vrIsMoving && sithControl_vrWasMoving) {
-                    player->physicsParams.vel.x = 0.0f;
-                    player->physicsParams.vel.y = 0.0f;
-                }
-                sithControl_vrWasMoving = vrIsMoving;
+                // Altered: VR stick movement should reach its target speed immediately.
+                // The normal acceleration ramp feels sluggish and can be nauseating.
+                rdVector3 vrStickAccel = player->physicsParams.acceleration;
+                vrStickAccel.z = 0.0f;
+                sithControl_VRApplyInstantStickVelocity(player, &vrStickAccel, move_multiplier, 0);
             } else
 #endif // PLATFORM_VR
             {
+#ifdef PLATFORM_VR
+            sithControl_VRApplyInstantStickVelocity(player, &rdroid_zeroVector3, 1.0f, 1);
+#endif
             // Player yaw handling
 
             // These base values only come from raw axis fetches
@@ -1811,6 +1991,13 @@ void sithControl_FreeCam(sithThing *player)
                 rdMatrix_BuildRotate34(&a, &v1->actorParams.eyePYR);
                 rdMatrix_TransformVector34Acc(&v1->physicsParams.acceleration, &a);
             }
+
+            // Altered: make VR stick locomotion effectively instant here too so
+            // swimming/flying doesn't retain the slow acceleration ramp.
+            sithControl_VRApplyInstantStickVelocity(v1, &v1->physicsParams.acceleration, 1.0f, v2);
+        }
+        else {
+            sithControl_VRApplyInstantStickVelocity(v1, &rdroid_zeroVector3, 1.0f, 1);
         }
 #endif // PLATFORM_VR
 

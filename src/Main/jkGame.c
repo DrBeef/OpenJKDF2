@@ -41,9 +41,6 @@
 #include "Win95/Window.h"  // For Window_VRMirrorPresent (desktop VR mirror)
 extern sithThing* sithPlayer_pLocalPlayerThing;
 extern flex_t sithTime_deltaSeconds;
-
-// Comfort vignette state — smooth intensity ramp
-static float jkGame_vignetteIntensity = 0.0f;
 #endif
 
 int jkGame_Startup()
@@ -295,39 +292,6 @@ int jkGame_Update()
                     // (In MultiView mode this is a no-op — scene already rendered to swapchain)
                     std3D_DrawSceneFbo();
 
-                    // Added: Comfort vignette for MultiView path
-                    // In MultiView, the scene renders directly to the swapchain FBO (not
-                    // the internal FBO), so we draw the vignette to the swapchain after
-                    // the scene.
-                    // bComfortVignette: 0=off, 1-10=intensity level
-                    if (stdVR_config.bComfortVignette > 0 && !stdVR_clientInfo.bUseScreenLayer) {
-                        float dt = sithTime_deltaSeconds;
-                        if (dt <= 0.0f || dt > 0.1f) dt = 0.014f;
-
-                        float vignetteScale = (float)stdVR_config.bComfortVignette / 10.0f;
-                        float targetIntensity = 0.0f;
-                        if (sithPlayer_pLocalPlayerThing) {
-                            rdVector3* pVel = &sithPlayer_pLocalPlayerThing->physicsParams.vel;
-                            float speedSq = pVel->x * pVel->x + pVel->y * pVel->y;
-                            if (speedSq > 0.001f) {
-                                targetIntensity = vignetteScale;
-                            }
-                        }
-                        if (targetIntensity > jkGame_vignetteIntensity) {
-                            jkGame_vignetteIntensity += 10.0f * dt;
-                            if (jkGame_vignetteIntensity > targetIntensity)
-                                jkGame_vignetteIntensity = targetIntensity;
-                        } else {
-                            jkGame_vignetteIntensity -= 4.0f * dt;
-                            if (jkGame_vignetteIntensity < 0.0f)
-                                jkGame_vignetteIntensity = 0.0f;
-                        }
-                        if (jkGame_vignetteIntensity > 0.01f) {
-                            glViewport(0, 0, stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight);
-                            std3D_DrawVignetteToCurrentFBO(stdVR_clientInfo.renderWidth, stdVR_clientInfo.renderHeight, jkGame_vignetteIntensity);
-                        }
-                    }
-
                     // Bake the HUD into the multiview eye buffer (BOTH eyes), instead of a
                     // separate quad layer — not all OpenXR runtimes (e.g. SteamVR) composite
                     // the quad, but they all show what's in the projection. std3D_multiViewActive
@@ -358,6 +322,15 @@ int jkGame_Update()
                                 }
                             }
                             jkHudInv_Draw();
+
+                            // Added: bake the message log (COG jkPrintUNIString, item/key
+                            // messages, VR prompts) into the eye buffer. The desktop path
+                            // does this further down; without it these are invisible in VR.
+                            // Push the column down from the canvas top so it lands in a
+                            // comfortable part of the HUD rect rather than on its edge.
+                            jkDev_msgTopY = (int)((flex_t)Window_ySize * 0.28f);
+                            jkDev_BlitLogToScreen();
+                            jkDev_msgTopY = 4;  // restore for the desktop/mirror path
                         }
 
 #ifdef VR_WEAPON_ALIGNMENT_TOOL

@@ -35,7 +35,6 @@ static int slider_images[2] = {JKGUI_BM_SLIDER_BACK, JKGUI_BM_SLIDER_THUMB};
 // ============================================================================
 // VR Options menu (replaces Display settings in VR builds)
 // ============================================================================
-static wchar_t vr_vignette_text[16] = {0};
 static wchar_t vr_snap_angle_text[8] = {0};
 static wchar_t vr_smooth_speed_text[8] = {0};
 static wchar_t vr_height_text[16] = {0};
@@ -44,19 +43,23 @@ static wchar_t vr_pitch_text[16] = {0};
 // HUD layout tuning sliders: per-field label + value text, plus slider config and the
 // jkPlayer globals each slider targets. base/inc/n map slider step <-> value consistently
 // across the draw callback, the populate-on-show, and the save-on-OK.
-static wchar_t vr_hud_val[5][16] = {0};
-static const struct { float base, inc; int n; const wchar_t* label; } s_hudCfg[5] = {
+// 6 full-width tuning sliders share this sub-page. The first 5 are HUD layout; the 6th is the
+// 6DoF head->body movement scale (a temporary tuning aid — easy to drop later by removing its
+// row/cfg/global entry and reverting the loop counts to 5).
+static wchar_t vr_hud_val[6][16] = {0};
+static const struct { float base, inc; int n; const wchar_t* label; } s_hudCfg[6] = {
     { 0.05f, 0.02f,  73, L"Width"  },   // 0.05 .. 1.49  (half-width  NDC)
     { 0.05f, 0.02f,  73, L"Height" },   // 0.05 .. 1.49  (half-height NDC)
     {-1.00f, 0.02f, 101, L"X"      },   // -1.00 .. 1.00 (centre NDC, + = right)
     {-1.30f, 0.02f, 116, L"Y"      },   // -1.30 .. 1.00 (centre NDC, - = lower)
     { 0.00f, 0.05f,  61, L"Dist"   },   // 0.00 .. 3.00 m (0 = infinity / no depth)
+    { 0.00f, 0.05f,  81, L"6DoF"   },   // 0.00 .. 4.00  (head->body movement scale, 0 = off)
 };
-static float* const s_hudGlobals[5] = {
-    &jkPlayer_vrHudWidth, &jkPlayer_vrHudHeight, &jkPlayer_vrHudPosX, &jkPlayer_vrHudPosY, &jkPlayer_vrHudDepth
+static float* const s_hudGlobals[6] = {
+    &jkPlayer_vrHudWidth, &jkPlayer_vrHudHeight, &jkPlayer_vrHudPosX, &jkPlayer_vrHudPosY, &jkPlayer_vrHudDepth,
+    &jkPlayer_vr6DoFScale
 };
 
-void jkGuiDisplay_VRVignetteDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRSnapAngleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRSmoothSpeedDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
 void jkGuiDisplay_VRHeightDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw);
@@ -73,24 +76,22 @@ enum {
     VR_EL_WEAPON_CROSSHAIR,  // 10
     VR_EL_MOVE_DIRECTION,    // 11
     VR_EL_SNAP_TURN,         // 12
-    VR_EL_VIGNETTE_LABEL,    // 12
-    VR_EL_VIGNETTE_SLIDER,   // 13
-    VR_EL_VIGNETTE_VAL,      // 14
-    VR_EL_SNAP_ANGLE_LABEL,  // 15
-    VR_EL_SNAP_ANGLE_SLIDER, // 15
-    VR_EL_SNAP_ANGLE_VAL,    // 16
-    VR_EL_SMOOTH_SPEED_LABEL,// 17
-    VR_EL_SMOOTH_SPEED_SLIDER,// 18
-    VR_EL_SMOOTH_SPEED_VAL,  // 19
-    VR_EL_HEIGHT_LABEL,      // 20
-    VR_EL_HEIGHT_SLIDER,     // 21
-    VR_EL_HEIGHT_VAL,        // 22
+    VR_EL_SNAP_ANGLE_LABEL,  // 13
+    VR_EL_SNAP_ANGLE_SLIDER, // 14
+    VR_EL_SNAP_ANGLE_VAL,    // 15
+    VR_EL_SMOOTH_SPEED_LABEL,// 16
+    VR_EL_SMOOTH_SPEED_SLIDER,// 17
+    VR_EL_SMOOTH_SPEED_VAL,  // 18
+    VR_EL_HEIGHT_LABEL,      // 19
+    VR_EL_HEIGHT_SLIDER,     // 20
+    VR_EL_HEIGHT_VAL,        // 21
     VR_EL_SS_LABEL,          // Supersampling: label
     VR_EL_SS_VAL,            // Supersampling: inline value text
     VR_EL_SS_SLIDER,         // Supersampling: slider (0.80 .. 1.25)
     VR_EL_PITCH_LABEL,       // Weapon Pitch: label
     VR_EL_PITCH_SLIDER,      // Weapon Pitch: slider (-25 .. +25 deg)
     VR_EL_PITCH_VAL,         // Weapon Pitch: value text
+    VR_EL_SWAP_STICKS,       // Swap thumbsticks (move <-> turn)
     VR_EL_HUD_LAYOUT_BTN,    // opens the HUD Layout sub-page
     VR_EL_END,
 };
@@ -111,11 +112,6 @@ static jkGuiElement jkGuiDisplay_aElements[VR_EL_END + 1] = {
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_WEAPON_CROSSHAIR",0, {30, 170, 270, 20},  1, 0, "GUIEXT_VR_WEAPON_CROSSHAIR_HINT", 0, 0, 0, {0}, 0},
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_MOVE_DIRECTION",  0, {30, 200, 270, 20},  1, 0, "GUIEXT_VR_MOVE_DIRECTION_HINT",   0, 0, 0, {0}, 0},
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_SNAP_TURN",       0, {30, 230, 270, 20},  1, 0, "GUIEXT_VR_SNAP_TURN_HINT",        0, 0, 0, {0}, 0},
-    // Left column: comfort vignette slider (moved down to y=262 so the label clears the
-    // Snap Turn checkbox at y=230; it was previously clipping into it)
-    { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_COMFORT_VIGNETTE",0, {30, 262, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER,      0,            0, (const char*)10,             0, {30, 282, 270, 30},  1, 0, "GUIEXT_VR_COMFORT_VIGNETTE_HINT", jkGuiDisplay_VRVignetteDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,        0,            0, vr_vignette_text,            3, {30, 312, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
     // Right column: sliders (x=330..620)
     { ELEMENT_TEXT,        0,            0, "GUIEXT_VR_SNAP_ANGLE",      0, {330, 130, 280, 20}, 1, 0, NULL,                              0, 0, 0, {0}, 0},
     { ELEMENT_SLIDER,      0,            0, (const char*)2,              0, {330, 150, 280, 30}, 1, 0, "GUIEXT_VR_SNAP_ANGLE_HINT",       jkGuiDisplay_VRSnapAngleDraw, 0, slider_images, {0}, 0},
@@ -135,9 +131,13 @@ static jkGuiElement jkGuiDisplay_aElements[VR_EL_END + 1] = {
     { ELEMENT_SLIDER,      0,            0, (const char*)45,             0, {330, 386, 280, 30}, 1, 0, "GUIEXT_VR_SUPERSAMPLING_HINT",    jkGuiDisplay_VRSupersampleDraw, 0, slider_images, {0}, 0},
 
     // Left column: weapon pitch adjust slider (-25 .. +25 degrees). Label set in Startup.
-    { ELEMENT_TEXT,        0,            0, NULL,                        0, {30, 340, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER,      0,            0, (const char*)50,             0, {30, 360, 270, 30},  1, 0, NULL,                              jkGuiDisplay_VRPitchDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,        0,            0, vr_pitch_text,               3, {30, 390, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+    // y=262 so the label clears the Snap Turn checkbox at y=230.
+    { ELEMENT_TEXT,        0,            0, NULL,                        0, {30, 262, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER,      0,            0, (const char*)50,             0, {30, 282, 270, 30},  1, 0, NULL,                              jkGuiDisplay_VRPitchDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,        0,            0, vr_pitch_text,               3, {30, 312, 270, 20},  1, 0, NULL,                              0, 0, 0, {0}, 0},
+
+    // Left column: swap the movement and turning thumbsticks
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_SWAP_STICKS",     0, {30, 345, 270, 20},  1, 0, "GUIEXT_VR_SWAP_STICKS_HINT",      0, 0, 0, {0}, 0},
 
     // Button to open the dedicated HUD Layout sub-page (full-width sliders need their own page).
     // Placed on the bottom button row (between Cancel and OK) to free the left column for sliders.
@@ -225,6 +225,7 @@ enum {
     VRHUD_X_LABEL, VRHUD_X_SLIDER, VRHUD_X_VAL,
     VRHUD_Y_LABEL, VRHUD_Y_SLIDER, VRHUD_Y_VAL,
     VRHUD_D_LABEL, VRHUD_D_SLIDER, VRHUD_D_VAL,
+    VRHUD_M_LABEL, VRHUD_M_SLIDER, VRHUD_M_VAL,       // 6DoF movement scale tuning slider
     VRHUD_END
 };
 static wchar_t vrhud_title_text[32] = {0};
@@ -241,21 +242,25 @@ static jkGuiElement jkGuiDisplay_aElementsVRHud[VRHUD_END + 1] = {
     { ELEMENT_TEXT,   0, 0, NULL,            3, {0, 0, 0, 0}, 0, 0, NULL, 0, 0, 0, {0}, 0},
     // Row pitch 64px with 28px-tall sliders so each slider's rect clears the +/-32px hit-pad
     // of the neighbouring sliders (otherwise the lower part of one slider grabs the next one).
-    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 111,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER, 0, 0, (const char*)73, 0, {140, 110, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 111,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 175,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER, 0, 0, (const char*)73, 0, {140, 174, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 175,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 239,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER, 0, 0, (const char*)101,0, {140, 238, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 239,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 303,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER, 0, 0, (const char*)116,0, {140, 302, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 303,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 367,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
-    { ELEMENT_SLIDER, 0, 0, (const char*)61, 0, {140, 366, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
-    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 367,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    // 6 rows packed from y=80 (just under the title) down to y=400 (clears the button row).
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40,  81,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)73, 0, {140,  80, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420,  81,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 145,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)73, 0, {140, 144, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 145,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 209,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)101,0, {140, 208, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 209,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 273,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)116,0, {140, 272, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 273,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 337,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)61, 0, {140, 336, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 337,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, { 40, 401,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
+    { ELEMENT_SLIDER, 0, 0, (const char*)81, 0, {140, 400, 270, 28}, 1, 0, NULL, jkGuiDisplay_VRHudSliderDraw, 0, slider_images, {0}, 0},
+    { ELEMENT_TEXT,   0, 0, NULL,            3, {420, 401,  90, 28}, 1, 0, NULL, 0, 0, 0, {0}, 0},
     { ELEMENT_END,    0, 0, NULL,            0, {0},                 0, 0, NULL, 0, 0, 0, {0}, 0},
 };
 static jkGuiMenu jkGuiDisplay_menuVRHud = { jkGuiDisplay_aElementsVRHud, 0, 0xFF, 0xE1, 0x0F, 0, 0, jkGui_stdBitmaps, jkGui_stdFonts, 0, 0, "thermloop01.wav", "thrmlpu2.wav", 0, 0, 0, 0, 0, 0 };
@@ -301,13 +306,13 @@ void jkGuiDisplay_Startup()
     jkGuiDisplay_aElements[VR_EL_PITCH_VAL].wstr = vr_pitch_text;
 
     // "HUD Layout" button label on the main VR Options menu.
-    jkGuiDisplay_aElements[VR_EL_HUD_LAYOUT_BTN].wstr = L"HUD Layout...";
+    jkGuiDisplay_aElements[VR_EL_HUD_LAYOUT_BTN].wstr = L"HUD & 6DoF...";
 
     // Init the HUD Layout sub-page and point its label/value elements at their buffers.
     jkGui_InitMenu(&jkGuiDisplay_menuVRHud, jkGui_stdBitmaps[JKGUI_BM_BK_SETUP]);
-    jk_snwprintf(vrhud_title_text, 31, L"VR HUD Layout");
+    jk_snwprintf(vrhud_title_text, 31, L"VR HUD & 6DoF");
     jkGuiDisplay_aElementsVRHud[VRHUD_TITLE].wstr = vrhud_title_text;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         jkGuiDisplay_aElementsVRHud[VRHUD_W_LABEL + i*3].wstr = s_hudCfg[i].label;
         jkGuiDisplay_aElementsVRHud[VRHUD_W_VAL   + i*3].wstr = vr_hud_val[i];
     }
@@ -339,18 +344,6 @@ void jkGuiDisplay_Shutdown()
 // ============================================================================
 // VR Options slider draw functions
 // ============================================================================
-
-void jkGuiDisplay_VRVignetteDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
-{
-    int val = jkGuiDisplay_aElements[VR_EL_VIGNETTE_SLIDER].selectedTextEntry;
-    if (val == 0)
-        jk_snwprintf(vr_vignette_text, 16, L"Off");
-    else
-        jk_snwprintf(vr_vignette_text, 16, L"%d", val);
-    jkGuiDisplay_aElements[VR_EL_VIGNETTE_VAL].wstr = vr_vignette_text;
-    jkGuiRend_SliderDraw(element, menu, vbuf, redraw);
-    jkGuiRend_UpdateAndDrawClickable(&jkGuiDisplay_aElements[VR_EL_VIGNETTE_VAL], menu, 1);
-}
 
 void jkGuiDisplay_VRSnapAngleDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
 {
@@ -407,7 +400,7 @@ void jkGuiDisplay_VRPitchDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer
 void jkGuiDisplay_VRHudSliderDraw(jkGuiElement *element, jkGuiMenu *menu, stdVBuffer *vbuf, int redraw)
 {
     int k = -1;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         if (element == &jkGuiDisplay_aElementsVRHud[VRHUD_W_SLIDER + i*3]) { k = i; break; }
     }
     if (k >= 0) {
@@ -433,7 +426,7 @@ int jkGuiDisplay_ShowVRHud(void)
     jkGuiSetup_sub_412EF0(&jkGuiDisplay_menuVRHud, 0);
 
     // Populate sliders from current globals.
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         int step = (int)(((*s_hudGlobals[i]) - s_hudCfg[i].base) / s_hudCfg[i].inc + 0.5f);
         if (step < 0) step = 0;
         if (step >= s_hudCfg[i].n) step = s_hudCfg[i].n - 1;
@@ -442,7 +435,7 @@ int jkGuiDisplay_ShowVRHud(void)
 
     v0 = jkGuiRend_DisplayAndReturnClicked(&jkGuiDisplay_menuVRHud);
     if (v0 != -1) {
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 6; i++) {
             int step = jkGuiDisplay_aElementsVRHud[VRHUD_W_SLIDER + i*3].selectedTextEntry;
             if (step < 0) step = 0;
             if (step >= s_hudCfg[i].n) step = s_hudCfg[i].n - 1;
@@ -565,14 +558,7 @@ int jkGuiDisplay_Show()
     jkGuiDisplay_aElements[VR_EL_WEAPON_CROSSHAIR].selectedTextEntry = jkPlayer_vrWeaponCrosshair;
     jkGuiDisplay_aElements[VR_EL_MOVE_DIRECTION].selectedTextEntry    = jkPlayer_vrMoveDirection;
     jkGuiDisplay_aElements[VR_EL_SNAP_TURN].selectedTextEntry         = (jkPlayer_vrSnapTurnAngle > 0) ? 1 : 0;
-
-    // Vignette slider: 0=off, 1-10=intensity
-    {
-        int vigVal = jkPlayer_vrComfortVignette;
-        if (vigVal < 0) vigVal = 0;
-        if (vigVal > 10) vigVal = 10;
-        jkGuiDisplay_aElements[VR_EL_VIGNETTE_SLIDER].selectedTextEntry = vigVal;
-    }
+    jkGuiDisplay_aElements[VR_EL_SWAP_STICKS].selectedTextEntry       = jkPlayer_vrSwapSticks;
 
     // Snap angle: map 30->0, 45->1, 90->2
     {
@@ -619,7 +605,7 @@ vr_redisplay:
         jkPlayer_vrDominantHand    = jkGuiDisplay_aElements[VR_EL_DOMINANT_HAND].selectedTextEntry;
         jkPlayer_vrWeaponCrosshair = jkGuiDisplay_aElements[VR_EL_WEAPON_CROSSHAIR].selectedTextEntry;
         jkPlayer_vrMoveDirection   = jkGuiDisplay_aElements[VR_EL_MOVE_DIRECTION].selectedTextEntry;
-        jkPlayer_vrComfortVignette = jkGuiDisplay_aElements[VR_EL_VIGNETTE_SLIDER].selectedTextEntry;
+        jkPlayer_vrSwapSticks      = jkGuiDisplay_aElements[VR_EL_SWAP_STICKS].selectedTextEntry;
 
         // Snap turn mode
         if (jkGuiDisplay_aElements[VR_EL_SNAP_TURN].selectedTextEntry) {

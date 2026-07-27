@@ -10,6 +10,8 @@
 #define MULTIVIEW_ENABLED
 #endif
 
+#define STDVR_HOTPATH_DEBUG 0
+
 // Include game headers first (they have correct Windows include order)
 extern "C" {
 #include "stdPlatform.h"
@@ -350,10 +352,12 @@ static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* la
 {
     static int waitSwapchainCount = 0;
     waitSwapchainCount++;
+#if STDVR_HOTPATH_DEBUG
     if (waitSwapchainCount <= 20 || waitSwapchainCount % 100 == 0) {
         stdPlatform_Printf("stdVR_OpenXR_WaitSwapchainImage(%s, eye=%d) ENTRY #%d\n",
             label ? label : "swapchain", eye, waitSwapchainCount);
     }
+#endif
 
     XrSwapchainImageWaitInfo waitInfo = { XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO };
     waitInfo.timeout = 100000000; // 100 ms per attempt
@@ -371,9 +375,11 @@ static int stdVR_OpenXR_WaitSwapchainImage(XrSwapchain swapchain, const char* la
         result = xrWaitSwapchainImage(swapchain, &waitInfo);
     }
 
+#if STDVR_HOTPATH_DEBUG
     if (waitSwapchainCount <= 20 || waitSwapchainCount % 100 == 0) {
         stdPlatform_Printf("stdVR_OpenXR_WaitSwapchainImage: result=%d\n", result);
     }
+#endif
 
     if (result == XR_TIMEOUT_EXPIRED) {
         VR_Log("stdVR_OpenXR: xrWaitSwapchainImage gave up after %d retries for %s eye %d (dropping frame)\n",
@@ -2105,16 +2111,20 @@ extern "C" int stdVR_OpenXR_EndFrame(void)
 {
     static int endFrameCount = 0;
     endFrameCount++;
+#if STDVR_HOTPATH_DEBUG
     if (endFrameCount <= 20 || endFrameCount % 100 == 0) {
         stdPlatform_Printf("stdVR_OpenXR_EndFrame ENTRY #%d: running=%d, inProgress=%d\n",
             endFrameCount, xrSessionRunning, xrFrameInProgress);
     }
+#endif
 
     if (!xrSessionRunning || !xrFrameInProgress) {
+#if STDVR_HOTPATH_DEBUG
         if (endFrameCount <= 20) {
             stdPlatform_Printf("stdVR_OpenXR_EndFrame: early exit (running=%d, inProgress=%d)\n",
                 xrSessionRunning, xrFrameInProgress);
         }
+#endif
         return 0;
     }
 
@@ -2318,26 +2328,32 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
 {
     static int prepareEntryCount = 0;
     prepareEntryCount++;
+#if STDVR_HOTPATH_DEBUG
     if (prepareEntryCount <= 20 || prepareEntryCount % 100 == 0) {
         stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d) ENTRY #%d\n", eye, prepareEntryCount);
     }
+#endif
 
     if (!xrSessionRunning || eye < 0 || eye >= STDVR_EYE_COUNT) {
         if (eye >= 0 && eye < STDVR_EYE_COUNT) {
             vrCurrentFBO[eye] = 0;
         }
+#if STDVR_HOTPATH_DEBUG
         if (prepareEntryCount <= 20) {
             stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d) early exit: running=%d\n", eye, xrSessionRunning);
         }
+#endif
         return 0;
     }
 
     // Track which eye is being rendered (set early for debug logging)
     stdVR_currentEye = eye;
 
+#if STDVR_HOTPATH_DEBUG
     if (prepareEntryCount <= 20) {
         stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): calling xrAcquireSwapchainImage\n", eye);
     }
+#endif
     bool swapchainAcquired = false;
     XrSwapchainImageAcquireInfo acquireInfo = { XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO };
     XrResult result = xrAcquireSwapchainImage(xrSwapchains[eye], &acquireInfo, &xrSwapchainImageIndex[eye]);
@@ -2347,22 +2363,28 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
         return 0;
     }
     swapchainAcquired = true;
+#if STDVR_HOTPATH_DEBUG
     if (prepareEntryCount <= 20) {
         stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): xrAcquireSwapchainImage OK, calling WaitSwapchainImage\n", eye);
     }
+#endif
 
     if (!stdVR_OpenXR_WaitSwapchainImage(xrSwapchains[eye], "main", eye)) {
         if (swapchainAcquired) {
             stdVR_OpenXR_ReleaseSwapchainImage(eye);
         }
+#if STDVR_HOTPATH_DEBUG
         if (prepareEntryCount <= 20) {
             stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): WaitSwapchainImage FAILED\n", eye);
         }
+#endif
         return 0;
     }
+#if STDVR_HOTPATH_DEBUG
     if (prepareEntryCount <= 20) {
         stdPlatform_Printf("stdVR_OpenXR_PrepareEyeBuffer(%d): WaitSwapchainImage OK\n", eye);
     }
+#endif
 
     // OPTIMIZATION: Track state manually instead of GPU queries (avoids pipeline stalls)
     // Only query once at start of VR frame, then track manually
@@ -2400,6 +2422,7 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     GLuint fbo = vrFBO[eye][imageIdx];
     vrCurrentFBO[eye] = fbo;
 
+#if STDVR_HOTPATH_DEBUG
     // DEBUG: Log texture and FBO info including GL context
     static int prepareLogCount = 0;
     if (++prepareLogCount <= 30 || prepareLogCount % 300 == 0) {
@@ -2414,18 +2437,21 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
         VR_Log("stdVR_OpenXR: PrepareEyeBuffer(%d) idx=%u tex=%u fbo=%u swapchain=%llu RC=%p DC=%p\n",
                eye, imageIdx, texture, fbo, (unsigned long long)xrSwapchains[eye], currentRC, currentDC);
     }
+#endif
 
     // Bind our VR FBO and attach the swapchain color texture
     // OPTIMIZATION: Depth is permanently attached, only need to swap color
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
 
+#if STDVR_HOTPATH_DEBUG
     // DEBUG: Verify FBO is actually bound after attaching texture
     GLint boundFbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &boundFbo);
     if (prepareLogCount <= 30 || prepareLogCount % 300 == 0) {
         VR_Log("stdVR_OpenXR:   After bind: boundFbo=%d (expected %u)\n", boundFbo, fbo);
     }
+#endif
 
     // OPTIMIZATION: Only validate FBO on first use of each swapchain image
     // This avoids expensive glCheckFramebufferStatus every frame
@@ -2468,6 +2494,7 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
     }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
+#if STDVR_HOTPATH_DEBUG
     // DEBUG: Read a pixel back to verify the clear worked
     if (prepareLogCount <= 10) {
         // Method 1: Read from currently bound FBO
@@ -2492,6 +2519,7 @@ extern "C" int stdVR_OpenXR_PrepareEyeBuffer(int eye)
                eye, pixel1[0], pixel1[1], pixel1[2], pixel1[3],
                pixel2[0], pixel2[1], pixel2[2], pixel2[3], texture);
     }
+#endif
 
     glDisable(GL_FRAMEBUFFER_SRGB);
 
@@ -2518,6 +2546,7 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
         glClear(GL_COLOR_BUFFER_BIT);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);  // Restore full color mask
 
+#if STDVR_HOTPATH_DEBUG
         // DEBUG: Read right after alpha clear (FBO still has texture attached)
         static int postAlphaLogCount = 0;
         if (++postAlphaLogCount <= 10) {
@@ -2526,6 +2555,7 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
             VR_Log("stdVR_OpenXR: PostAlpha eye=%d fbo=%u pixel=[%d,%d,%d,%d]\n",
                    eye, fbo, pixel[0], pixel[1], pixel[2], pixel[3]);
         }
+#endif
     }
 
     // Capture the left-eye content for the desktop mirror while the swapchain image is still
@@ -2555,6 +2585,7 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
     trackedFBO = previousFBO;
     memcpy(trackedViewport, previousViewport, sizeof(trackedViewport));
 
+#if STDVR_HOTPATH_DEBUG
     // DEBUG: Read texture content right before release to verify it still has content
     static int preReleaseLogCount = 0;
     if (++preReleaseLogCount <= 10) {
@@ -2580,6 +2611,7 @@ extern "C" int stdVR_OpenXR_FinishEyeBuffer(int eye)
                    eye, texture, pixel[0], pixel[1], pixel[2], pixel[3]);
         }
     }
+#endif
 
     // Release the swapchain image
     XrSwapchainImageReleaseInfo releaseInfo = { XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO };
@@ -2982,6 +3014,7 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
     centerPose.position.z = (xrViews[0].pose.position.z + xrViews[1].pose.position.z) * 0.5f;
     centerPose.orientation = xrViews[0].pose.orientation; // Use left eye orientation for simplicity
 
+#if STDVR_HOTPATH_DEBUG
     // Log raw HMD position before conversion
     static int hmdLogCounter = 0;
     hmdLogCounter++;
@@ -2989,6 +3022,7 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
         VR_Log("HMD OpenXR raw=(%.4f, %.4f, %.4f)\n",
             centerPose.position.x, centerPose.position.y, centerPose.position.z);
     }
+#endif
 
     // Convert from OpenXR coords to JKDF2 coords:
     // OpenXR: X=right, Y=up, Z=back
@@ -2998,10 +3032,12 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
     stdVR_clientInfo.hmdPosition.y = -centerPose.position.z;  // Forward = -back
     stdVR_clientInfo.hmdPosition.z = centerPose.position.y;   // Up = up
 
+#if STDVR_HOTPATH_DEBUG
     if (hmdLogCounter % 60 == 1) {
         VR_Log("HMD JKDF2 pos=(%.4f, %.4f, %.4f)\n",
             stdVR_clientInfo.hmdPosition.x, stdVR_clientInfo.hmdPosition.y, stdVR_clientInfo.hmdPosition.z);
     }
+#endif
 
     QuatToEuler(&centerPose.orientation, &stdVR_clientInfo.hmdOrientation);
     PoseToMatrix(&centerPose, &stdVR_clientInfo.hmdPoseMatrix);
@@ -3046,6 +3082,7 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
             stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
 
             if (aim_location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) {
+#if STDVR_HOTPATH_DEBUG
                 // Log raw OpenXR position before conversion
                 static int ctrlLogCounter = 0;
                 ctrlLogCounter++;
@@ -3053,6 +3090,7 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
                     VR_Log("Controller[%d] OpenXR raw=(%.4f, %.4f, %.4f)\n",
                         hand, aim_location.pose.position.x, aim_location.pose.position.y, aim_location.pose.position.z);
                 }
+#endif
 
                 // Convert from OpenXR coords to JKDF2 coords:
                 // OpenXR: X=right, Y=up, Z=back
@@ -3063,10 +3101,12 @@ extern "C" void stdVR_OpenXR_UpdateTracking(void)
                 pCtrl->position.z = aim_location.pose.position.y;   // Up = up
                 pCtrl->bTracking = 1;
 
+#if STDVR_HOTPATH_DEBUG
                 if (ctrlLogCounter % 60 == 1) {
                     VR_Log("Controller[%d] JKDF2 pos=(%.4f, %.4f, %.4f) tracking=%d\n",
                         hand, pCtrl->position.x, pCtrl->position.y, pCtrl->position.z, pCtrl->bTracking);
                 }
+#endif
             } else {
                 pCtrl->bTracking = 0;
             }
@@ -3178,10 +3218,12 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
     uint32_t prevButtonState = stdVR_clientInfo.buttonState;
     stdVR_clientInfo.buttonState = 0;
 
-    // Get thumbstick values (swap move/turn hands for left-handed mode)
-    // SB: Don't swap sticks!
-    int moveHand = STDVR_CONTROLLER_LEFT;//(stdVR_config.dominantHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
-    int turnHand = STDVR_CONTROLLER_RIGHT;//(moveHand == STDVR_CONTROLLER_LEFT) ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
+    // Get thumbstick values. Move is on the left stick and turn on the right by default, in
+    // BOTH handedness modes (only the hand-relative actions follow dominantHand). The
+    // "swap thumbsticks" option flips the two; stdVR_Input_GetMoveStickButton() keeps the
+    // stick-click actions on the matching stick.
+    int moveHand = stdVR_config.bSwapSticks ? STDVR_CONTROLLER_RIGHT : STDVR_CONTROLLER_LEFT;
+    int turnHand = stdVR_config.bSwapSticks ? STDVR_CONTROLLER_LEFT : STDVR_CONTROLLER_RIGHT;
     for (int hand = 0; hand < STDVR_CONTROLLER_COUNT; hand++) {
         XrActionStateGetInfo getInfo = { XR_TYPE_ACTION_STATE_GET_INFO };
         getInfo.subactionPath = xrHandPaths[hand];
@@ -3191,6 +3233,14 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
         XrActionStateVector2f vec2State = { XR_TYPE_ACTION_STATE_VECTOR2F };
         xrGetActionStateVector2f(xrSession, &getInfo, &vec2State);
         if (vec2State.isActive) {
+            // Added: keep each hand's own stick, unrouted, for consumers that need the
+            // physical controller rather than the move/turn role. Stored in the PLAIN
+            // convention - [0] horizontal, [1] vertical - measured on device: pushing the
+            // stick sideways swings currentState.x to +-0.97. (analogMove/analogTurn below
+            // keep their own historical axis handling; do not infer this one from those.)
+            stdVR_clientInfo.controllers[hand].thumbstick[0] = vec2State.currentState.x;
+            stdVR_clientInfo.controllers[hand].thumbstick[1] = vec2State.currentState.y;
+
             if (hand == moveHand) {
                 // Map thumbstick axes to game movement
                 // Based on user testing: X and Y axes are swapped

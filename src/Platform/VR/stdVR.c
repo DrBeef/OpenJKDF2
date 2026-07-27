@@ -16,6 +16,8 @@
 #include "World/sithThing.h"
 #include "World/sithTemplate.h"
 #include "Main/jkMain.h"
+#include "Main/jkDev.h"
+#include "World/jkPlayer.h"
 #include "stdPlatform.h"
 
 #include <string.h>
@@ -59,11 +61,12 @@ static void stdVR_InitDefaultConfig(void)
     stdVR_config.snapTurnAngle = 45;
     stdVR_config.smoothTurnSpeed = 120.0f;
     stdVR_config.walkSpeedScale = 1.0f;
+    stdVR_config.sixDoFScale = 1.0f;
     stdVR_config.worldScale = 0.09f;  // IPD/roomscale multiplier - reduced for less physical movement
     stdVR_config.heightOffset = 0.0f;
     stdVR_config.fixedHeightAdjustment = 0.11f;
-    stdVR_config.bComfortVignette = 1;
     stdVR_config.dominantHand = STDVR_CONTROLLER_RIGHT;
+    stdVR_config.bSwapSticks = 0;
     stdVR_config.supersampling = 1.0f;
 
     // Initialize motion controls config
@@ -214,19 +217,10 @@ int stdVR_WaitFrame(void)
 
     vrWaitFrameCallCount++;
 
-    // Debug: Log every 100 frames or first 10
-    if (vrWaitFrameCallCount <= 10 || vrWaitFrameCallCount % 100 == 0) {
-        stdPlatform_Printf("stdVR_WaitFrame #%d: enabled=%d, sessionRunning=%d\n",
-            vrWaitFrameCallCount, stdVR_bEnabled, stdVR_clientInfo.bSessionRunning);
-    }
-
     // Always poll events to allow session state transitions
     stdVR_OpenXR_PollEvents();
 
     if (!stdVR_clientInfo.bSessionRunning) {
-        if (vrWaitFrameCallCount <= 10) {
-            stdPlatform_Printf("stdVR_WaitFrame: session not running, returning 0\n");
-        }
         return 0;
     }
 
@@ -344,18 +338,11 @@ void stdVR_KeepAlive(void)
     }
 
     keepAliveCount++;
-    if (keepAliveCount <= 20 || keepAliveCount % 50 == 0) {
-        stdPlatform_Printf("stdVR: KeepAlive #%d called (pending=%d, running=%d)\n",
-            keepAliveCount, stdVR_bFramePending, stdVR_clientInfo.bSessionRunning);
-    }
 
     // Poll events to keep session state machine running
     stdVR_OpenXR_PollEvents();
 
     if (!stdVR_clientInfo.bSessionRunning) {
-        if (keepAliveCount <= 10) {
-            stdPlatform_Printf("stdVR: KeepAlive - session not running\n");
-        }
         return;
     }
 
@@ -462,9 +449,6 @@ int stdVR_PrepareMultiViewBuffer(void)
         return 0;
     }
 
-    if (mvPrepareWrapperCount <= 5 || mvPrepareWrapperCount % 100 == 0) {
-        VR_Log("stdVR_PrepareMultiViewBuffer #%d\n", mvPrepareWrapperCount);
-    }
     return stdVR_OpenXR_PrepareMultiViewBuffer();
 }
 
@@ -564,10 +548,15 @@ void stdVR_SetHudOffsetForDepth(float depthMeters)
     if (!stdVR_bEnabled || !stdVR_clientInfo.bSessionRunning) {
         return;
     }
-    float leftEyeX  = stdVR_clientInfo.eyes[0].viewMatrix.scale.x;
-    float rightEyeX = stdVR_clientInfo.eyes[1].viewMatrix.scale.x;
-    float ipdAbs = rightEyeX - leftEyeX;
-    if (ipdAbs < 0.0f) ipdAbs = -ipdAbs;
+    // Altered: measure the eye separation as the length of the full 3D vector between the eye
+    // positions, not the difference of their world X. The separation vector rotates with the
+    // head, so an X-only reading gives IPD*|cos(yaw)| - correct facing along X, but collapsing
+    // to zero at 90 degrees, which zeroed the convergence term and left the HUD with no stereo
+    // and apparently at infinity. The magnitude is rotation-invariant.
+    float ipdX = stdVR_clientInfo.eyes[1].viewMatrix.scale.x - stdVR_clientInfo.eyes[0].viewMatrix.scale.x;
+    float ipdY = stdVR_clientInfo.eyes[1].viewMatrix.scale.y - stdVR_clientInfo.eyes[0].viewMatrix.scale.y;
+    float ipdZ = stdVR_clientInfo.eyes[1].viewMatrix.scale.z - stdVR_clientInfo.eyes[0].viewMatrix.scale.z;
+    float ipdAbs = sqrtf(ipdX * ipdX + ipdY * ipdY + ipdZ * ipdZ);
 
     // The baked 2D HUD is laid out in each eye's NATIVE-eye NDC (the eye buffer now always holds
     // that eye's real per-eye frustum - the GPU projects per eye, so there is no union/remap and
@@ -721,6 +710,103 @@ void stdVR_StopHaptic(int hand)
     stdVR_OpenXR_StopHaptic(hand);
 }
 
+// Added: instructional prompts on the HUD. jkDev owns the queue, expiry and drawing; this
+// just gives VR text a longer dwell than a gameplay message and, for the "once" variant,
+// remembers in the player profile that the lesson has been taught.
+static int stdVR_promptsShownDirty = 0;
+
+void stdVR_ShowPrompt(const wchar_t* pText)
+{
+    if (!pText || !stdVR_bEnabled) {
+        return;
+    }
+
+    jkDev_PrintUniStringTimed(pText, STDVR_PROMPT_DWELL_MS);
+}
+
+void stdVR_ShowPromptOnce(int promptId, const wchar_t* pText)
+{
+    if (!pText || !stdVR_bEnabled) {
+        return;
+    }
+    if (promptId < 0 || promptId >= STDVR_PROMPT_COUNT) {
+        return;
+    }
+
+    uint32_t mask = 1u << promptId;
+    if ((uint32_t)jkPlayer_vrPromptsShown & mask) {
+        return;
+    }
+
+    jkPlayer_vrPromptsShown |= (int)mask;
+    stdVR_promptsShownDirty = 1;
+    stdVR_ShowPrompt(pText);
+}
+
+// Persist the taught-prompt bitmask. MUST NOT be called from a gameplay tick: WriteConf
+// drives the single global stdConffile object, and sithWorld_Load pumps VR frames between
+// level sections (the "VR KeepAlive" path), so writing from there closes the conffile that
+// the loader is reading and the next section faults on a dead handle. Call it only at a
+// boundary where no load can be in flight - leaving gameplay.
+void stdVR_FlushPromptsShown(void)
+{
+    if (!stdVR_promptsShownDirty) {
+        return;
+    }
+
+    stdVR_promptsShownDirty = 0;
+    jkPlayer_WriteConf(jkPlayer_playerShortName);
+}
+
+int stdVR_WasPromptShown(int promptId)
+{
+    if (promptId < 0 || promptId >= STDVR_PROMPT_COUNT) {
+        return 1;  // unknown id: treat as taught so a bad call cannot spam
+    }
+
+    return ((uint32_t)jkPlayer_vrPromptsShown & (1u << promptId)) != 0;
+}
+
+void stdVR_ResetPromptsShown(void)
+{
+    jkPlayer_vrPromptsShown = 0;
+}
+
+// 6DoF head-driven body movement: per-frame horizontal head delta (tracking space, metres).
+// We track the previous sample and emit the per-frame delta; the physics code feeds
+// this delta into collision movement so the body follows the head.
+static int   stdVR_headDeltaValid = 0;
+static float stdVR_prevHeadX = 0.0f;
+static float stdVR_prevHeadY = 0.0f;
+
+// Reset the head-delta reference so the next frame re-seeds prev and emits a zero delta.
+// Must be called whenever the tracking origin is re-based (recenter / session start) so we
+// don't inject a huge spurious movement from the position discontinuity.
+void stdVR_ResetHeadDelta(void)
+{
+    stdVR_headDeltaValid = 0;
+}
+
+// Return this frame's horizontal head movement (tracking space, metres; x=right, y=forward)
+// and advance the stored reference. Returns (0,0) on the first valid frame after a reset.
+void stdVR_ConsumeHeadDelta(float* outDx, float* outDy)
+{
+    float headX = stdVR_clientInfo.hmdPosition.x;
+    float headY = stdVR_clientInfo.hmdPosition.y;
+
+    float dx = 0.0f, dy = 0.0f;
+    if (stdVR_headDeltaValid) {
+        dx = headX - stdVR_prevHeadX;
+        dy = headY - stdVR_prevHeadY;
+    }
+    stdVR_prevHeadX = headX;
+    stdVR_prevHeadY = headY;
+    stdVR_headDeltaValid = 1;
+
+    if (outDx) *outDx = dx;
+    if (outDy) *outDy = dy;
+}
+
 void stdVR_RecenterView(void)
 {
     if (!stdVR_bEnabled) {
@@ -728,6 +814,9 @@ void stdVR_RecenterView(void)
     }
 
     stdVR_OpenXR_RecenterView();
+
+    // The tracking origin just moved; drop the head-delta reference so we don't lurch the body.
+    stdVR_ResetHeadDelta();
 }
 
 void stdVR_GetRecommendedRenderSize(int* pWidth, int* pHeight)
@@ -836,6 +925,15 @@ void stdVR_CombineCameraWithEye(const rdMatrix34* pGameCamera, int eye, rdMatrix
     ipdOffset.y = (eyePose.scale.y - hmdPose.scale.y) * worldScale;
     ipdOffset.z = (eyePose.scale.z - hmdPose.scale.z) * worldScale;
 
+    // 6DoF Model A: when head-driven body movement is active, the player BODY follows the
+    // head laterally (see sithPhysics_VRApplyHeadMovement), so the camera must NOT also add
+    // the horizontal head offset (that would double-count and let the view drift through
+    // walls). Keep only the vertical component so physical crouch/duck still lowers the view.
+    if (stdVR_config.sixDoFScale > 0.0f) {
+        hmdOffset.x = 0.0f;
+        hmdOffset.y = 0.0f;
+    }
+
     // Transform HMD offset by game camera orientation (body direction)
     // This makes physical movement relative to where your body is facing
     rdVector3 hmdOffsetWorld;
@@ -897,6 +995,13 @@ void stdVR_CombineCameraWithHMD(const rdMatrix34* pGameCamera, rdMatrix34* pOut)
     }
 
     hmdOffset.z += stdVR_config.fixedHeightAdjustment * worldScale;
+
+    // 6DoF Model A: body follows the head laterally, so drop the horizontal camera float
+    // (keep vertical for crouch/duck). See the matching note in stdVR_CombineCameraWithEye.
+    if (stdVR_config.sixDoFScale > 0.0f) {
+        hmdOffset.x = 0.0f;
+        hmdOffset.y = 0.0f;
+    }
 
     // Transform by game camera orientation
     rdVector3 hmdOffsetWorld;
@@ -980,9 +1085,6 @@ stdVR_ControllerState* stdVR_GetOffhandController(void)
 // the fire position to align with the rendered weapon.
 void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
 {
-    static int debugCounter = 0;
-    debugCounter++;
-
     if (!pWorldPos || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
         return;
     }
@@ -1083,6 +1185,14 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
     hmdOffset.y = hmdPos.y * worldScale;
     hmdOffset.z = hmdPos.z * worldScale;
 
+    // Altered: with head-driven body movement enabled, the player/body has
+    // already absorbed lateral HMD movement. Keep vertical HMD offset for
+    // crouch/height, but do not double-count lateral room-scale motion.
+    if (stdVR_config.sixDoFScale > 0.0f) {
+        hmdOffset.x = 0.0f;
+        hmdOffset.y = 0.0f;
+    }
+
     rdVector3 hmdOffsetWorld;
     rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pCamera);
 
@@ -1121,15 +1231,6 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
     pWorldPos->z += stdVR_config.heightOffset * worldScale;
     pWorldPos->z += stdVR_config.fixedHeightAdjustment * worldScale;
 
-    if (debugCounter % 100 == 0) {
-        VR_Log("ControllerToWorld: camera=(%.3f,%.3f,%.3f) hmdOffset=(%.3f,%.3f,%.3f) ctrlOffset=(%.3f,%.3f,%.3f)\n",
-            cameraPos.x, cameraPos.y, cameraPos.z,
-            hmdOffsetWorld.x, hmdOffsetWorld.y, hmdOffsetWorld.z,
-            worldOffset.x, worldOffset.y, worldOffset.z);
-        VR_Log("  fireOffset=(%.3f,%.3f,%.3f) RESULT worldPos=(%.3f,%.3f,%.3f)\n",
-            stdVR_motionConfig.fireOffsetX, stdVR_motionConfig.fireOffsetY, stdVR_motionConfig.fireOffsetZ,
-            pWorldPos->x, pWorldPos->y, pWorldPos->z);
-    }
 }
 
 // Get controller world matrix (for weapon rendering)
@@ -1227,30 +1328,17 @@ float stdVR_GetSwingSpeed(void)
 // Added: Internal helper for controller view matrix with optional weapon offsets
 static int stdVR_GetControllerViewMatrixInternal(int hand, rdMatrix34* pViewMat, int bApplyWeaponOffset)
 {
-    static int debugCounter = 0;
-    static int logEvery = 60; // Log every N frames
-    debugCounter++;
-
     if (!pViewMat || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
-        if (debugCounter % logEvery == 0) {
-            VR_Log("GetControllerViewMatrix: invalid params pViewMat=%p hand=%d\n", (void*)pViewMat, hand);
-        }
         return 0;
     }
 
     stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
     if (!pCtrl->bTracking) {
-        if (debugCounter % logEvery == 0) {
-            VR_Log("GetControllerViewMatrix: controller %d not tracking\n", hand);
-        }
         return 0;
     }
 
     // We need the game camera (body orientation/position) to combine with controller
     if (!stdVR_currentGameCameraValid) {
-        if (debugCounter % logEvery == 0) {
-            VR_Log("GetControllerViewMatrix: no game camera available\n");
-        }
         return 0;
     }
 
@@ -1353,6 +1441,14 @@ static int stdVR_GetControllerViewMatrixInternal(int hand, rdMatrix34* pViewMat,
     hmdOffset.y = hmdPos.y * worldScale;
     hmdOffset.z = hmdPos.z * worldScale;
 
+    // Altered: match stdVR_CombineCameraWithEye. The body follows lateral HMD
+    // movement when 6DoF is enabled, so controller weapons should be positioned
+    // relative to the followed body, not body plus absolute HMD X/Y again.
+    if (stdVR_config.sixDoFScale > 0.0f) {
+        hmdOffset.x = 0.0f;
+        hmdOffset.y = 0.0f;
+    }
+
     rdVector3 hmdOffsetWorld;
     rdMatrix_TransformVector34(&hmdOffsetWorld, &hmdOffset, pGameCamera);
 
@@ -1369,23 +1465,6 @@ static int stdVR_GetControllerViewMatrixInternal(int hand, rdMatrix34* pViewMat,
     }
 
     rdMatrix_Copy34(pViewMat, &combined);
-
-    if (debugCounter % logEvery == 0) {
-        VR_Log("=== GetControllerViewMatrix hand=%d frame=%d ===\n", hand, debugCounter);
-        VR_Log("  gameCamera pos=(%.3f, %.3f, %.3f)\n",
-            pGameCamera->scale.x, pGameCamera->scale.y, pGameCamera->scale.z);
-        VR_Log("  ctrlPose   ori: rvec=(%.3f,%.3f,%.3f) lvec=(%.3f,%.3f,%.3f)\n",
-            pCtrl->poseMatrix.rvec.x, pCtrl->poseMatrix.rvec.y, pCtrl->poseMatrix.rvec.z,
-            pCtrl->poseMatrix.lvec.x, pCtrl->poseMatrix.lvec.y, pCtrl->poseMatrix.lvec.z);
-        VR_Log("  offset (meters)=(%.4f, %.4f, %.4f)\n", offset.x, offset.y, offset.z);
-        VR_Log("  worldOffset    =(%.4f, %.4f, %.4f) scale=%.3f\n",
-            worldOffset.x, worldOffset.y, worldOffset.z, weaponScale);
-        VR_Log("  final pos      =(%.3f, %.3f, %.3f)\n",
-            pViewMat->scale.x, pViewMat->scale.y, pViewMat->scale.z);
-        VR_Log("  final ori: rvec=(%.3f,%.3f,%.3f) lvec=(%.3f,%.3f,%.3f)\n",
-            pViewMat->rvec.x, pViewMat->rvec.y, pViewMat->rvec.z,
-            pViewMat->lvec.x, pViewMat->lvec.y, pViewMat->lvec.z);
-    }
 
     return 1;
 }
@@ -1612,11 +1691,12 @@ void stdVR_SyncConfigFromJkPlayer(void)
     extern int jkPlayer_vrSmoothTurnSpeed;
     extern float jkPlayer_vrWorldScale;
     extern float jkPlayer_vrHeightOffset;
-    extern int jkPlayer_vrComfortVignette;
     extern int jkPlayer_vrWeaponCrosshair;
     extern int jkPlayer_vrDominantHand;
+    extern int jkPlayer_vrSwapSticks;
     extern int jkPlayer_vrMoveDirection;
     extern float jkPlayer_vrSupersampling;
+    extern float jkPlayer_vr6DoFScale;
 
     // Don't let profile load disable VR if it's already running
     // The enabled state should only be changed through explicit user action
@@ -1637,11 +1717,14 @@ void stdVR_SyncConfigFromJkPlayer(void)
 
     // Scale and comfort
     stdVR_config.heightOffset = jkPlayer_vrHeightOffset;
-    stdVR_config.bComfortVignette = jkPlayer_vrComfortVignette;
     stdVR_config.bWeaponCrosshair = jkPlayer_vrWeaponCrosshair;
 
     // Handedness
     stdVR_config.dominantHand = jkPlayer_vrDominantHand;
+    stdVR_config.bSwapSticks = jkPlayer_vrSwapSticks;
+
+    // 6DoF head-driven body movement scale
+    stdVR_config.sixDoFScale = jkPlayer_vr6DoFScale;
 
     // Quality
     stdVR_config.supersampling = jkPlayer_vrSupersampling;
@@ -1673,11 +1756,12 @@ void stdVR_SyncConfigToJkPlayer(void)
     extern int jkPlayer_vrWeaponPitchAdjust;
     extern float jkPlayer_vrWorldScale;
     extern float jkPlayer_vrHeightOffset;
-    extern int jkPlayer_vrComfortVignette;
     extern int jkPlayer_vrWeaponCrosshair;
     extern int jkPlayer_vrDominantHand;
+    extern int jkPlayer_vrSwapSticks;
     extern int jkPlayer_vrMoveDirection;
     extern float jkPlayer_vrSupersampling;
+    extern float jkPlayer_vr6DoFScale;
 
     jkPlayer_vrEnabled = stdVR_bEnabled;
     jkPlayer_vrMoveDirection = stdVR_config.moveDirection;
@@ -1688,10 +1772,11 @@ void stdVR_SyncConfigToJkPlayer(void)
     }
     jkPlayer_vrSmoothTurnSpeed = (int)stdVR_config.smoothTurnSpeed;
     jkPlayer_vrHeightOffset = stdVR_config.heightOffset;
-    jkPlayer_vrComfortVignette = stdVR_config.bComfortVignette;
     jkPlayer_vrWeaponCrosshair = stdVR_config.bWeaponCrosshair;
     jkPlayer_vrDominantHand = stdVR_config.dominantHand;
+    jkPlayer_vrSwapSticks = stdVR_config.bSwapSticks;
     jkPlayer_vrSupersampling = stdVR_config.supersampling;
+    jkPlayer_vr6DoFScale = stdVR_config.sixDoFScale;
 
     //Motion Config
     jkPlayer_vrWeaponPitchAdjust = (int)stdVR_motionConfig.weaponPitchAdjust;

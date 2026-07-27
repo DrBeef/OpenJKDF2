@@ -29,6 +29,35 @@
 #include "Platform/VR/stdVR.h"
 #endif
 
+#ifdef QOL_IMPROVEMENTS
+#define SITHWEAPON_BRYAR_QUICK_FIRE_RATE (0.05f)
+#endif
+
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_VR) && defined(SITH_DEBUG_STRUCT_NAMES)
+#define SITHWEAPON_VR_BRYAR_BOLT_SPEED_SCALE (2.0f)
+
+static int sithWeapon_IsVRFastBoltTemplate(sithThing *pProjectileTemplate)
+{
+    return pProjectileTemplate
+        && (!strcmp(pProjectileTemplate->template_name, "+bryarbolt")
+         || !strcmp(pProjectileTemplate->template_name, "+stlaser"));
+}
+
+// Altered: the MOTS sequencer charge's primary mode is a 1 second fuse (+seqchrg: timer=1)
+// laid at your feet - vel=(0/.1/0) with surfdrag=5 is barely any movement at all. On a
+// flatscreen you fire it mid-stride and your own momentum carries you clear; standing still in
+// VR there is no way out of the blast. Give that one template a forward toss so backing off
+// works. Scoped by exact name: the proximity mode (+seqchrg2) and both manual-sequencer modes
+// (+seqchrg3/+seqchrg4, timer=300) are fine as authored and must not be touched.
+#define SITHWEAPON_VR_SEQCHARGE_TOSS_SPEED (1.0f)
+
+static int sithWeapon_IsVRTossedChargeTemplate(sithThing *pProjectileTemplate)
+{
+    return pProjectileTemplate
+        && !strcmp(pProjectileTemplate->template_name, "+seqchrg");
+}
+#endif
+
 // MOTS added
 int sithWeapon_mots_5a3258 = -1;
 int sithWeapon_motsAConv[10] = {
@@ -561,6 +590,20 @@ sithThing* sithWeapon_FireProjectile_0(sithThing *sender, sithThing *projectileT
         {
             rdVector_Scale3Acc(&v9->physicsParams.vel, scale);
         }
+#if defined(QOL_IMPROVEMENTS) && defined(PLATFORM_VR) && defined(SITH_DEBUG_STRUCT_NAMES)
+        // Altered: Bryar/ST rifle bolts read too slow in VR; keep damage/range unchanged.
+        if ( stdVR_bEnabled && v9->moveType == SITH_MT_PHYSICS && sithWeapon_IsVRFastBoltTemplate(projectileTemplate) )
+        {
+            rdVector_Scale3Acc(&v9->physicsParams.vel, SITHWEAPON_VR_BRYAR_BOLT_SPEED_SCALE);
+        }
+
+        // Local +y is forward, so this tosses the charge along the aim direction - point the
+        // controller down or at a wall and it still goes where you put it.
+        if ( stdVR_bEnabled && v9->moveType == SITH_MT_PHYSICS && sithWeapon_IsVRTossedChargeTemplate(projectileTemplate) )
+        {
+            v9->physicsParams.vel.y += SITHWEAPON_VR_SEQCHARGE_TOSS_SPEED;
+        }
+#endif
         if (scaleFlags & 2)
             v9->weaponParams.damage *= scale;
         if (scaleFlags & 4)
@@ -1036,6 +1079,17 @@ void sithWeapon_handle_inv_msgs(sithThing *player)
 
 void sithWeapon_Activate(sithThing *weapon, sithCog *cogCtx, flex_t fireRate, int mode)
 {
+#ifdef QOL_IMPROVEMENTS
+    // Altered: let the player fire the Bryar primary as quickly as the trigger is pressed.
+    if ( weapon == sithPlayer_pLocalPlayerThing
+      && mode == 0
+      && sithInventory_GetCurWeapon(weapon) == SITHBIN_BRYARPISTOL
+      && fireRate > SITHWEAPON_BRYAR_QUICK_FIRE_RATE )
+    {
+        fireRate = SITHWEAPON_BRYAR_QUICK_FIRE_RATE;
+    }
+#endif
+
     sithWeapon_fireRate = fireRate;
     sithWeapon_CurWeaponMode = mode;
     sithWeapon_8BD0A0[mode] = sithTime_curSeconds;
@@ -1414,14 +1468,6 @@ sithThing* sithWeapon_FireProjectile(sithThing *sender, sithThing *projectileTem
             rdVector3 controllerWorldPos;
             stdVR_ControllerToWorld(stdVR_GetDominantHand(), &controllerWorldPos, 0);
 
-            // Debug: Log fire position and direction from controller
-            extern void VR_Log(const char* fmt, ...);
-            VR_Log("VR FIRE: controller pos=(%.3f, %.3f, %.3f) player pos=(%.3f, %.3f, %.3f)\n",
-                controllerWorldPos.x, controllerWorldPos.y, controllerWorldPos.z,
-                sender->position.x, sender->position.y, sender->position.z);
-            VR_Log("VR FIRE: aim direction (lvec)=(%.3f, %.3f, %.3f)\n",
-                out.lvec.x, out.lvec.y, out.lvec.z);
-
             // In VR, use controller position directly as the fire origin.
             // The COG script's fireOffset is designed for non-VR (relative to player body)
             // and applying it here with the pitch-adjusted orientation causes the projectile
@@ -1434,9 +1480,6 @@ sithThing* sithWeapon_FireProjectile(sithThing *sender, sithThing *projectileTem
             fireOffset->x = controllerWorldPos.x + out.lvec.x * muzzleOffset;
             fireOffset->y = controllerWorldPos.y + out.lvec.y * muzzleOffset;
             fireOffset->z = controllerWorldPos.z + out.lvec.z * muzzleOffset;
-
-            VR_Log("VR FIRE: final fireOffset=(%.3f, %.3f, %.3f)\n",
-                fireOffset->x, fireOffset->y, fireOffset->z);
         }
         else
         {
@@ -1512,6 +1555,18 @@ LABEL_31:
         sithAIAwareness_AddEntry(sender->sector, &sender->position, 1, 4.0, sender);
     result = sithWeapon_FireProjectile_0(sender, projectileTemplate, &v19, fireOffset, fireSound, mode, scale, scaleFlags, v16, extra);
     a1b = result;
+#ifdef PLATFORM_VR
+    // Added: buzz the weapon hand only once a shot has actually left the barrel. Hooking the
+    // trigger button instead would fire on every press - out of ammo, during the fire-wait,
+    // while the weapon is switching, or holding a weapon that does not shoot at all.
+    if ( result && stdVR_bEnabled && sender == sithPlayer_pLocalPlayerThing )
+    {
+        if ( mode == 1 )
+            stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.1f, 50.0f);   // alt fire
+        else
+            stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.5f, 0.1f, 100.0f);  // primary
+    }
+#endif
     if ( result )
     {
         if ( sithComm_multiplayerFlags )

@@ -89,11 +89,20 @@ int jkPlayer_vrSnapTurnAngle = 45;       // 0 = smooth turn, 30/45/90 = snap tur
 int jkPlayer_vrSmoothTurnSpeed = 120;   // degrees per second
 int jkPlayer_vrWeaponPitchAdjust = 0.f;
 float jkPlayer_vrHeightOffset = 0.0f;   // Player height offset in meters
-int jkPlayer_vrComfortVignette = 5;     // Comfort vignette intensity (0=off, 1-10=intensity)
 int jkPlayer_vrWeaponCrosshair = 0;     // Show in-world weapon crosshair (0/1)
 int jkPlayer_vrDominantHand = 1;        // 0=left, 1=right
+int jkPlayer_vrSwapSticks = 0;          // Move on the right stick, turn on the left
+int jkPlayer_vrPromptsShown = 0;        // Bitmask of instructional prompts already taught
 int jkPlayer_vrMoveDirection = 1;       // 0=head, 1=controller
 float jkPlayer_vrSupersampling = 1.0f;  // VR render scale multiplier
+float jkPlayer_vr6DoFScale = 1.0f;      // 6DoF head->body movement scale (0 = disabled / camera-float)
+int jkPlayer_vrCameraInterp = 1;        // Interpolate the camera across the fixed physics step
+// Quake-style ground movement for the local player: short accel and decel ramps instead of
+// the stock drag-limited ramp + hard static-drag stop. See sithPhysics_VRQuakeGroundMove.
+int jkPlayer_vrMoveQuakeFeel = 1;       // 0 = stock JK thrust/drag movement
+flex_t jkPlayer_vrMoveAccel = 14.0;     // Approach rate toward top speed (1/sec)
+flex_t jkPlayer_vrMoveFriction = 10.0;  // Slow-down rate when releasing the stick (1/sec)
+flex_t jkPlayer_vrMoveStopFrac = 0.35;  // Below this fraction of top speed, decel goes linear
 // Baked-HUD layout (multiview eye buffer), tunable in the VR Options menu. Half-extents and
 // centre are in NDC; depth is the virtual distance in metres for the per-eye convergence.
 float jkPlayer_vrHudWidth  = 0.60f;     // HUD half-width  in NDC (smaller = narrower)
@@ -273,6 +282,17 @@ void jkPlayer_StartupVars()
 #ifdef FIXED_TIMESTEP_PHYS
     sithCvar_RegisterBool("g_bJankyPhysics",             0,                         &jkPlayer_bJankyPhysics,            CVARFLAG_LOCAL);
 #endif
+
+#ifdef PLATFORM_VR
+    // Smooths the fixed-step physics staircase at the 72/90Hz VR refresh (sithCamera.c)
+    sithCvar_RegisterBool("g_vrCameraInterp",            1,                         &jkPlayer_vrCameraInterp,           CVARFLAG_LOCAL);
+    sithCvar_RegisterBool("g_vrSwapSticks",              0,                         &jkPlayer_vrSwapSticks,             CVARFLAG_LOCAL);
+    // Quake-style ground movement ramps (sithPhysics_VRQuakeGroundMove)
+    sithCvar_RegisterBool("g_vrMoveQuakeFeel",           1,                         &jkPlayer_vrMoveQuakeFeel,          CVARFLAG_LOCAL);
+    sithCvar_RegisterFlex("g_vrMoveAccel",               14.0,                      &jkPlayer_vrMoveAccel,              CVARFLAG_LOCAL);
+    sithCvar_RegisterFlex("g_vrMoveFriction",            10.0,                      &jkPlayer_vrMoveFriction,           CVARFLAG_LOCAL);
+    sithCvar_RegisterFlex("g_vrMoveStopFrac",            0.35,                      &jkPlayer_vrMoveStopFrac,           CVARFLAG_LOCAL);
+#endif
 }
 
 // Added: Clean reset
@@ -320,10 +340,17 @@ void jkPlayer_ResetVars()
     jkPlayer_vrSmoothTurnSpeed = 120;
     jkPlayer_vrWeaponPitchAdjust = 0;
     jkPlayer_vrHeightOffset = 0.0f;
-    jkPlayer_vrComfortVignette = 1;
     jkPlayer_vrDominantHand = 1;
+    jkPlayer_vrSwapSticks = 0;
+    jkPlayer_vrPromptsShown = 0;
     jkPlayer_vrMoveDirection = 1;
     jkPlayer_vrSupersampling = 1.0f;
+    jkPlayer_vr6DoFScale = 1.0f;
+    jkPlayer_vrCameraInterp = 1;
+    jkPlayer_vrMoveQuakeFeel = 1;
+    jkPlayer_vrMoveAccel = 14.0;
+    jkPlayer_vrMoveFriction = 10.0;
+    jkPlayer_vrMoveStopFrac = 0.35;
     jkPlayer_vrHudWidth  = 0.60f;
     jkPlayer_vrHudHeight = 0.60f;
 #if defined(TARGET_ANDROID_NATIVE_GLES)
@@ -670,15 +697,17 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveFloat(ext_fpath, "gamma", jkPlayer_gamma);
 #ifdef PLATFORM_VR
         stdJSON_SaveFloat(ext_fpath, "vrSupersampling", jkPlayer_vrSupersampling);
+        stdJSON_SaveFloat(ext_fpath, "vr6DoFScale", jkPlayer_vr6DoFScale);
         stdJSON_SaveInt(ext_fpath, "vrSnapTurnAngle", jkPlayer_vrSnapTurnAngle);
         stdJSON_SaveInt(ext_fpath, "vrSmoothTurnSpeed", jkPlayer_vrSmoothTurnSpeed);
         stdJSON_SaveInt(ext_fpath, "vrWeaponPitchAdjust", jkPlayer_vrWeaponPitchAdjust);
         stdJSON_SaveInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
+        stdJSON_SaveInt(ext_fpath, "vrSwapSticks", jkPlayer_vrSwapSticks);
+        stdJSON_SaveInt(ext_fpath, "vrPromptsShown", jkPlayer_vrPromptsShown);
         stdJSON_SaveInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
         // Added: these three were modifiable in the VR options menu but never
         // written back, so they reverted to defaults every session.
         stdJSON_SaveInt(ext_fpath, "vrMoveDirection", jkPlayer_vrMoveDirection);
-        stdJSON_SaveInt(ext_fpath, "vrComfortVignette", jkPlayer_vrComfortVignette);
         stdJSON_SaveFloat(ext_fpath, "vrHeightOffset", jkPlayer_vrHeightOffset);
         stdJSON_SaveFloat(ext_fpath, "vrHudWidth", jkPlayer_vrHudWidth);
         stdJSON_SaveFloat(ext_fpath, "vrHudHeight", jkPlayer_vrHudHeight);
@@ -883,15 +912,17 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_gamma = stdJSON_GetFloat(ext_fpath, "gamma", jkPlayer_gamma);
 #ifdef PLATFORM_VR
         jkPlayer_vrSupersampling = stdJSON_GetFloat(ext_fpath, "vrSupersampling", jkPlayer_vrSupersampling);
+        jkPlayer_vr6DoFScale = stdJSON_GetFloat(ext_fpath, "vr6DoFScale", jkPlayer_vr6DoFScale);
         jkPlayer_vrSnapTurnAngle = stdJSON_GetInt(ext_fpath, "vrSnapTurnAngle", jkPlayer_vrSnapTurnAngle);
         jkPlayer_vrWeaponPitchAdjust = stdJSON_GetInt(ext_fpath, "vrWeaponPitchAdjust", jkPlayer_vrWeaponPitchAdjust);
         jkPlayer_vrDominantHand = stdJSON_GetInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
+        jkPlayer_vrSwapSticks = stdJSON_GetInt(ext_fpath, "vrSwapSticks", jkPlayer_vrSwapSticks);
+        jkPlayer_vrPromptsShown = stdJSON_GetInt(ext_fpath, "vrPromptsShown", jkPlayer_vrPromptsShown);
         jkPlayer_vrWeaponCrosshair = stdJSON_GetInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
         // Added: mirror the write-side additions. vrSmoothTurnSpeed was also
         // missing here even though the writer already saved it.
         jkPlayer_vrSmoothTurnSpeed = stdJSON_GetInt(ext_fpath, "vrSmoothTurnSpeed", jkPlayer_vrSmoothTurnSpeed);
         jkPlayer_vrMoveDirection = stdJSON_GetInt(ext_fpath, "vrMoveDirection", jkPlayer_vrMoveDirection);
-        jkPlayer_vrComfortVignette = stdJSON_GetInt(ext_fpath, "vrComfortVignette", jkPlayer_vrComfortVignette);
         jkPlayer_vrHeightOffset = stdJSON_GetFloat(ext_fpath, "vrHeightOffset", jkPlayer_vrHeightOffset);
         jkPlayer_vrHudWidth  = stdJSON_GetFloat(ext_fpath, "vrHudWidth",  jkPlayer_vrHudWidth);
         jkPlayer_vrHudHeight = stdJSON_GetFloat(ext_fpath, "vrHudHeight", jkPlayer_vrHudHeight);
@@ -939,13 +970,12 @@ int jkPlayer_ReadConf(wchar_t *name)
 
 #ifdef PLATFORM_VR
         stdVR_SyncConfigFromJkPlayer();
-        jk_printf("OpenJKDF2 VR: synced config from profile (moveDir=%d snap=%d smooth=%d world=%.2f height=%.2f comfort=%d hand=%d ssaa=%.2f)\n",
+        jk_printf("OpenJKDF2 VR: synced config from profile (moveDir=%d snap=%d smooth=%d world=%.2f height=%.2f hand=%d ssaa=%.2f)\n",
             stdVR_config.moveDirection,
             stdVR_config.snapTurnAngle,
             (int)stdVR_config.smoothTurnSpeed,
             stdVR_config.worldScale,
             stdVR_config.heightOffset,
-            stdVR_config.bComfortVignette,
             stdVR_config.dominantHand,
             stdVR_config.supersampling);
 #endif
@@ -1001,16 +1031,7 @@ void jkPlayer_DrawPov()
     rdVector3 trans;
     rdMatrix34 viewMat;
 
-    // Debug: confirm function is being called
-    static int drawPovCallCount = 0;
-    drawPovCallCount++;
 #ifdef PLATFORM_VR
-    extern void VR_Log(const char* fmt, ...);
-    if (drawPovCallCount % 200 == 1) {
-        VR_Log("=== jkPlayer_DrawPov called #%d, povModel=%p ===\n",
-            drawPovCallCount, (void*)playerThings[playerThingIdx].povModel.model3);
-    }
-
     // Don't render weapon when 3D map is visible
     if (stdVR_Map3D_IsVisible()) {
         return;
@@ -1097,24 +1118,9 @@ void jkPlayer_DrawPov()
         extern stdVR_MotionConfig stdVR_motionConfig;
         int vrMotionWeapon = 0;
 
-        // Debug: log motion control state periodically
-        static int vrDebugCounter = 0;
-        vrDebugCounter++;
-        extern void VR_Log(const char* fmt, ...);
-
         if (stdVR_bEnabled && stdVR_motionConfig.bMotionAimEnabled) {
             // Motion controls: render weapon at controller position/orientation
             int hand = stdVR_GetDominantHand();
-            stdVR_ControllerState* pCtrl = stdVR_GetController(hand);
-
-            if (vrDebugCounter % 100 == 0) {
-                VR_Log("VR Motion: hand=%d, ctrl=%p, tracking=%d\n",
-                    hand, (void*)pCtrl, pCtrl ? pCtrl->bTracking : -1);
-                if (pCtrl) {
-                    VR_Log("  Controller pos: (%.3f, %.3f, %.3f)\n",
-                        pCtrl->position.x, pCtrl->position.y, pCtrl->position.z);
-                }
-            }
 
             if (stdVR_GetControllerViewMatrix(hand, &viewMat)) {
                 vrMotionWeapon = 1;
@@ -1136,12 +1142,7 @@ void jkPlayer_DrawPov()
                     viewMat.uvec.y *= weaponScale;
                     viewMat.uvec.z *= weaponScale;
                 }
-            } else if (vrDebugCounter % 100 == 0) {
-                VR_Log("  GetControllerViewMatrix FAILED\n");
             }
-        } else if (vrDebugCounter % 100 == 0) {
-            VR_Log("VR Motion DISABLED: enabled=%d, motionAim=%d\n",
-                stdVR_bEnabled, stdVR_motionConfig.bMotionAimEnabled);
         }
 
         if (!vrMotionWeapon) {

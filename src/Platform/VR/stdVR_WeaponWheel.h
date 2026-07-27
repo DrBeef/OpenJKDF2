@@ -16,8 +16,13 @@ extern "C" {
 #define STDVR_WHEEL_NONE    0
 #define STDVR_WHEEL_WEAPON  1
 #define STDVR_WHEEL_FORCE   2
+// Added: the off-hand wheel has two pages - Force powers and inventory items - flipped with
+// the off-hand thumbstick while the grip is held. Selecting an item USES it immediately.
+#define STDVR_WHEEL_ITEMS   3
 
-#define STDVR_WHEEL_MAX_SEGMENTS 14
+// 14 covers DF2 (10 weapons / 14 force powers). MOTS reaches 17 of each, so the cap would
+// silently truncate the wheel there.
+#define STDVR_WHEEL_MAX_SEGMENTS 18
 
 // Wheel segment (one selectable item)
 typedef struct stdVR_WheelSegment {
@@ -42,6 +47,8 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight);
 
 // Check if any wheel is currently active
 int stdVR_WeaponWheel_IsActive(void);
+// Which wheel is up: STDVR_WHEEL_NONE / _WEAPON / _FORCE
+int stdVR_WeaponWheel_GetActiveWheel(void);
 
 // Check if grip is captured by wheel for a given hand (0=left, 1=right)
 int stdVR_WeaponWheel_IsGripSuppressed(int hand);
@@ -64,6 +71,7 @@ void stdVR_WeaponWheel_ResetCache(void);
 static inline void stdVR_WeaponWheel_Update(void) {}
 static inline void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight) { (void)hudWidth; (void)hudHeight; }
 static inline int stdVR_WeaponWheel_IsActive(void) { return 0; }
+static inline int stdVR_WeaponWheel_GetActiveWheel(void) { return 0; }
 static inline int stdVR_WeaponWheel_IsGripSuppressed(int hand) { (void)hand; return 0; }
 static inline void stdVR_WeaponWheel_CacheModel(int binIdx, rdModel3* pModel) { (void)binIdx; (void)pModel; }
 static inline void stdVR_WeaponWheel_Draw3D(rdMatrix34* pCameraWorldMat) { (void)pCameraWorldMat; }

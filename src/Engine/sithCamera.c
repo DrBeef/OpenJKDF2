@@ -923,6 +923,119 @@ static void sithCamera_ApplyVREyeState(const rdMatrix34* vrViewMatrix)
     }
 }
 
+// Added: VR render-time camera interpolation.
+// Physics runs on a fixed timestep (1/TARGET_PHYSTICK_FPS, 150Hz in single player) while VR
+// renders at 72/90Hz, so each frame advances the world by a whole number of steps: at 90Hz
+// that is 2,2,1,2,2,1... and the player's position comes out as a staircase. Rendered
+// straight, that reads as jitter whose size scales with movement speed. Keep the last two
+// stepped positions and place the camera between them, using the simulated time that has
+// elapsed since the newest one as the phase. The step length is measured rather than assumed,
+// so this is correct whichever physics path is live (150Hz general, 50Hz old-player,
+// multiplayer). This shifts the CAMERA only - simulation, collision and networking are
+// untouched. It costs one step of camera latency, which is why it sits behind a cvar.
+static rdVector3 sithCamera_vrInterpPrevPos;
+static rdVector3 sithCamera_vrInterpCurPos;
+static flex_d_t sithCamera_vrInterpStepSeconds = 0.0;  // measured length of the last move interval
+static flex_d_t sithCamera_vrInterpSinceMove = 0.0;    // simulated time banked since that move
+static int sithCamera_vrInterpSamples = 0;             // 0 = none, 1 = cur only, 2 = prev+cur usable
+
+// A jump beyond this is a teleport/respawn/level start, not movement: snap, don't slide.
+#define SITHCAMERA_VR_INTERP_SNAP_DIST (0.5)
+
+void sithCamera_VRResetInterp(void)
+{
+    sithCamera_vrInterpSamples = 0;
+    sithCamera_vrInterpStepSeconds = 0.0;
+    sithCamera_vrInterpSinceMove = 0.0;
+}
+
+// Called once per fixed simulation step, after the things have ticked.
+void sithCamera_VRRecordSimStep(void)
+{
+    sithThing* pPlayer = sithPlayer_pLocalPlayerThing;
+    if (!pPlayer)
+    {
+        sithCamera_VRResetInterp();
+        return;
+    }
+
+    sithCamera_vrInterpSinceMove += sithTime_deltaSeconds;
+
+    if (sithCamera_vrInterpSamples == 0)
+    {
+        rdVector_Copy3(&sithCamera_vrInterpPrevPos, &pPlayer->position);
+        rdVector_Copy3(&sithCamera_vrInterpCurPos, &pPlayer->position);
+        sithCamera_vrInterpSinceMove = 0.0;
+        sithCamera_vrInterpSamples = 1;
+        return;
+    }
+
+    rdVector3 delta;
+    rdVector_Sub3(&delta, &pPlayer->position, &sithCamera_vrInterpCurPos);
+    flex_t distSq = rdVector_Dot3(&delta, &delta);
+    if (distSq == 0.0)
+    {
+        return;  // nothing moved this step - hold the current pair
+    }
+
+    if (distSq > (SITHCAMERA_VR_INTERP_SNAP_DIST * SITHCAMERA_VR_INTERP_SNAP_DIST))
+    {
+        rdVector_Copy3(&sithCamera_vrInterpPrevPos, &pPlayer->position);
+        rdVector_Copy3(&sithCamera_vrInterpCurPos, &pPlayer->position);
+        sithCamera_vrInterpSinceMove = 0.0;
+        sithCamera_vrInterpSamples = 1;
+        return;
+    }
+
+    rdVector_Copy3(&sithCamera_vrInterpPrevPos, &sithCamera_vrInterpCurPos);
+    rdVector_Copy3(&sithCamera_vrInterpCurPos, &pPlayer->position);
+    sithCamera_vrInterpStepSeconds = sithCamera_vrInterpSinceMove;
+    sithCamera_vrInterpSinceMove = 0.0;
+    sithCamera_vrInterpSamples = 2;
+}
+
+// Phase within the current step: simulated time elapsed since the newest sampled position,
+// over the length of the interval that produced it. sithTime_physicsRolloverFrames is time
+// that has passed but has not been simulated yet; it can go slightly negative because the
+// outer loop rounds, so clamp.
+static flex_t sithCamera_VRGetInterpAlpha(void)
+{
+    if (sithCamera_vrInterpStepSeconds <= 0.0)
+    {
+        return 1.0;
+    }
+
+    flex_d_t pending = sithCamera_vrInterpSinceMove + sithTime_physicsRolloverFrames;
+    flex_d_t alpha = pending / sithCamera_vrInterpStepSeconds;
+    if (alpha < 0.0)
+    {
+        alpha = 0.0;
+    }
+    if (alpha > 1.0)
+    {
+        alpha = 1.0;
+    }
+    return (flex_t)alpha;
+}
+
+static void sithCamera_VRApplyInterp(sithCamera* cam)
+{
+    if (!jkPlayer_vrCameraInterp || sithCamera_vrInterpSamples < 2)
+    {
+        return;
+    }
+    if (!sithPlayer_pLocalPlayerThing || cam->primaryFocus != sithPlayer_pLocalPlayerThing)
+    {
+        return;  // cutscene/other camera: leave it alone
+    }
+
+    // FollowFocus has already placed the camera at the newest stepped position, so walk it
+    // back by the part of the step that has not been reached yet.
+    rdVector3 delta;
+    rdVector_Sub3(&delta, &sithCamera_vrInterpCurPos, &sithCamera_vrInterpPrevPos);
+    rdVector_MultAcc3(&cam->viewMat.scale, &delta, sithCamera_VRGetInterpAlpha() - 1.0);
+}
+
 // Prepare camera for VR rendering (called once per frame, before eye loop)
 // This does all the per-frame camera updates without actually rendering
 void sithCamera_PrepareFrameVR(void)
@@ -931,6 +1044,9 @@ void sithCamera_PrepareFrameVR(void)
 
     // Update camera position to follow the player/focus
     sithCamera_FollowFocus(sithCamera_currentCamera);
+
+    // Added: smooth the fixed-timestep staircase before anything derives from viewMat
+    sithCamera_VRApplyInterp(sithCamera_currentCamera);
 
     // Set as current rdCamera (but don't update view matrix yet - that's per-eye)
     rdCamera_SetCurrent(&sithCamera_currentCamera->rdCam);

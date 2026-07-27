@@ -298,7 +298,7 @@ void jkDev_BlitLogToScreenGPU()
     v7.x = 0;
     v7.y = 0;
     v7.height = (int)((flex_t)jkDev_BMFontHeight * jkPlayer_hudScale);
-    v1 = 4;
+    v1 = jkDev_msgTopY;
     v2 = 0;
     v3 = &jkDev_aEntries[0];
     for (int i = 0; i < 5; i++)
@@ -355,7 +355,37 @@ void jkDev_PrintfLog()
 }
 
 // MOTS altered? inlined?
+// Added: Y the message column starts at, in canvas pixels. VR moves it down so prompts land
+// in a comfortable part of the baked HUD rect instead of hard against its top edge.
+int jkDev_msgTopY = 4;
+
 int jkDev_PrintUniString(const wchar_t *str)
+{
+    return jkDev_PrintUniStringTimed(str, JKDEV_MSG_DEFAULT_DWELL_MS);
+}
+
+// Added: retire a message early. Used when the player performs the action an instructional
+// prompt was asking for - leaving it on screen after that reads as the game not noticing.
+// Matched by text rather than index because expiring entries compact the list.
+void jkDev_ExpireEntryByText(const wchar_t *str)
+{
+    if (!str) {
+        return;
+    }
+
+    for (int i = 0; i < 5; i++)
+    {
+        if (jkDev_aEntries[i].timeMsExpiration && !__wcscmp(jkDev_aEntries[i].text, str))
+        {
+            jkDev_aEntries[i].timeMsExpiration = 0;
+            jkDev_UpdateEntries();
+            jkDev_bScreenNeedsUpdate = 1;
+            return;
+        }
+    }
+}
+
+int jkDev_PrintUniStringTimed(const wchar_t *str, uint32_t dwellMs)
 {
     int v1; // ecx
     int v2; // edx
@@ -384,7 +414,7 @@ LABEL_7:
     v6 = v1;
     _wcsncpy(jkDev_aEntries[v1].text, str, 0x80u);
     jkDev_aEntries[v6].field_104 = 0;
-    jkDev_aEntries[v6].timeMsExpiration = stdPlatform_GetTimeMsec() + 5000;
+    jkDev_aEntries[v6].timeMsExpiration = stdPlatform_GetTimeMsec() + dwellMs;
     jkDev_bScreenNeedsUpdate = 1;
     ++jkDev_log_55A4A4;
     jkDev_aEntries[v6].bDrawEntry = 2;

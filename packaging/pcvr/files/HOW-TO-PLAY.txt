@@ -48,6 +48,29 @@ If nothing builds in the headset, confirm your OpenXR runtime is active
 
 
 ----------------------------------------------------------------
+ 3. Mysteries of the Sith (optional)
+----------------------------------------------------------------
+
+The expansion is a separate game with its own assets, so it lives in
+the "mots" folder rather than merging with Dark Forces II. You need a
+legal copy of it too.
+
+From your Mysteries of the Sith installation, copy into "mots":
+
+    Episode/          (JKM.GOO, JKM_KFY.GOO, JKM_MP.GOO, JKM_SABER.GOO)
+    Resource/         (JKMRES.GOO, JKMsndLO.goo, JK_.CD, VIDEO/)
+    MUSIC/            (optional)
+
+Then launch with:
+
+    jkdf2xr.exe -motsCompat
+
+Dark Forces II and Mysteries of the Sith keep separate settings,
+saves and weapon alignment - switching between them changes nothing
+in the other.
+
+
+----------------------------------------------------------------
  Notes
 ----------------------------------------------------------------
 

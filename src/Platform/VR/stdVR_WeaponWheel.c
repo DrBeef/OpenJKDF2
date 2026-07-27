@@ -10,6 +10,7 @@
 #include "General/stdBitmap.h"
 #include "General/stdFont.h"
 #include "Gameplay/sithInventory.h"
+#include "Cog/sithCog.h"
 #include "World/sithWeapon.h"
 #include "Gameplay/sithPlayer.h"
 #include "Gameplay/sithTime.h"
@@ -55,9 +56,13 @@ static float stdVR_wheelRotation = 0.0f;  // Slow spin animation (radians)
 // Internal: Known POV model filenames for each weapon bin.
 // JK and MOTS use different names for fists; other weapons are the same.
 // ============================================================================
+// MOTS keeps its weapons in a separate bin range and swaps the player between Kyle and Mara
+// between levels, so each weapon has a second "_m" POV model. Both are listed - whichever
+// loads first is good enough for a wheel icon. Names taken from the povModel/povModel_m lines
+// of the MOTS weap_*_m.cog scripts.
 typedef struct stdVR_WeaponModelName {
     int binIdx;
-    const char* aNames[3]; // NULL-terminated list of possible filenames
+    const char* aNames[4]; // NULL-terminated list of possible filenames
 } stdVR_WeaponModelName;
 
 static const stdVR_WeaponModelName stdVR_aWeaponModelNames[] = {
@@ -71,6 +76,26 @@ static const stdVR_WeaponModelName stdVR_aWeaponModelNames[] = {
     { SITHBIN_SEQUENCER_CHARGE,   { "seqv.3do",  NULL } },
     { SITHBIN_CONCUSSION_RIFLE,   { "conv.3do",  NULL } },
     { SITHBIN_LIGHTSABER,         { "sabv.3do",  NULL } },
+
+    // MOTS. The para_* bins (125/136/139) hold no weapon and the EWEB (130) is an emplaced
+    // gun with no POV model, so neither gets an entry - they fall back to the HUD icon.
+    { SITHBIN_MOTS_FISTS,              { "fistv.3do", "fistv_m.3do", NULL } },
+    { SITHBIN_MOTS_BRYARPISTOL,        { "bryv.3do",  "bryv_m.3do",  NULL } },
+    { SITHBIN_MOTS_STORMTROOPER_RIFLE, { "strv.3do",  "strv_m.3do",  NULL } },
+    { SITHBIN_MOTS_THERMAL_DETONATOR,  { "detv.3do",  "detv_m.3do",  NULL } },
+    { SITHBIN_MOTS_REPEATER,           { "rptv.3do",  "rptv_m.3do",  NULL } },
+    { SITHBIN_MOTS_RAIL_DETONATOR,     { "rldv.3do",  "rldv_m.3do",  NULL } },
+    { SITHBIN_MOTS_SEQUENCER_CHARGE,   { "seqb.3do",  "seqb_m.3do",  NULL } },
+    { SITHBIN_MOTS_CONCUSSION_RIFLE,   { "conv.3do",  "conv_m.3do",  NULL } },
+    { SITHBIN_MOTS_LIGHTSABER,         { "sabv.3do",  "sabv_m.3do",  NULL } },
+    { SITHBIN_MOTS_BLASTECH,           { "blsv.3do",  "blsv_m.3do",  NULL } },
+    // The scope's POV model is nullpov.3do (it draws as a HUD overlay), so show the pickup mesh.
+    { SITHBIN_MOTS_STORMTROOPER_SCOPE, { "sscv.3do",  "sscg.3do",    NULL } },
+    { SITHBIN_MOTS_FLASH_BOMB,         { "flsv.3do",  "flsv_m.3do",  NULL } },
+    { SITHBIN_MOTS_TUSKEN_PROD,        { "bowv.3do",  NULL } },
+    { SITHBIN_MOTS_RAIL_SEEKER,        { "skrv.3do",  "skrv_m.3do",  NULL } },
+    { SITHBIN_MOTS_MANUAL_SEQUENCER,   { "seqb.3do",  "seqb_m.3do",  NULL } },
+    { SITHBIN_MOTS_CARBO_GUN,          { "cbnv.3do",  "cbnv_m.3do",  NULL } },
 };
 #define STDVR_NUM_WEAPON_MODELS (sizeof(stdVR_aWeaponModelNames) / sizeof(stdVR_aWeaponModelNames[0]))
 
@@ -103,6 +128,23 @@ static float stdVR_wheelPointerY = 0.0f;  // Normalized: -1 to +1 (down to up)
 
 // Minimum angular deviation (degrees) from rest position to register a selection
 #define STDVR_WHEEL_POINT_THRESHOLD 8.0f
+
+// Off-hand thumbstick deflection that flips the wheel page, and the value it must fall back
+// under before another flip is accepted.
+#define STDVR_WHEEL_PAGE_FLIP_THRESHOLD 0.6f
+#define STDVR_WHEEL_PAGE_FLIP_RELEASE   0.3f
+static int stdVR_wheelPageFlipLatched = 0;
+
+// Horizontal axis of the thumbstick on the hand holding the wheel. Read from that hand's OWN
+// stick rather than the move/turn role arrays: those apply their own axis handling, and
+// deriving from them resolved to the vertical axis, so the page never flipped. Confirmed on
+// device - a sideways push swings this to +-0.97.
+static float stdVR_WeaponWheel_GetOffhandStickX(void)
+{
+    int offhand = 1 - stdVR_config.dominantHand;
+
+    return stdVR_clientInfo.controllers[offhand].thumbstick[0];
+}
 
 // Pi constant
 #define STDVR_PI 3.14159265f
@@ -145,6 +187,44 @@ static const char* stdVR_WeaponWheel_GetName(int binIdx)
         case SITHBIN_F_SABERTHROW:   return "Saber Throw";
         case SITHBIN_F_PUSH:         return "Force Push";
         case SITHBIN_F_CHAINLIGHT:   return "Chain Lightning";
+        // Inventory items
+        case SITHBIN_BACTATANK:      return "Bacta Tank";
+        case SITHBIN_IRGOGGLES:      return "IR Goggles";
+        case SITHBIN_FIELDLIGHT:     return "Field Light";
+        case SITHBIN_KEYIMPERIAL:    return "Imperial Key";
+        case SITHBIN_WRENCH:         return "Wrench";
+        case SITHBIN_DATADISK:       return "Data Disk";
+        case SITHBIN_KEYRED:         return "Red Key";
+        case SITHBIN_KEYBLUE:        return "Blue Key";
+        case SITHBIN_KEYYELLOW:      return "Yellow Key";
+        case SITHBIN_WRCHBLUE:       return "Blue Wrench";
+        case SITHBIN_WRCHYELLOW:     return "Yellow Wrench";
+        case SITHBIN_KEYGREEN:       return "Green Key";
+        // MOTS weapons (its own bin range, see misc/items.dat in JKMRES.GOO)
+        case SITHBIN_MOTS_FISTS:              return "Fists";
+        case SITHBIN_MOTS_BRYARPISTOL:        return "Bryar Pistol";
+        case SITHBIN_MOTS_STORMTROOPER_RIFLE: return "Stormtrooper Rifle";
+        case SITHBIN_MOTS_THERMAL_DETONATOR:  return "Thermal Detonator";
+        case SITHBIN_MOTS_REPEATER:           return "Repeater";
+        case SITHBIN_MOTS_RAIL_DETONATOR:     return "Rail Detonator";
+        case SITHBIN_MOTS_SEQUENCER_CHARGE:   return "Sequencer Charge";
+        case SITHBIN_MOTS_CONCUSSION_RIFLE:   return "Concussion Rifle";
+        case SITHBIN_MOTS_EWEB:               return "E-Web Repeater";
+        case SITHBIN_MOTS_LIGHTSABER:         return "Lightsaber";
+        case SITHBIN_MOTS_BLASTECH:           return "BlasTech DL-44";
+        case SITHBIN_MOTS_STORMTROOPER_SCOPE: return "Rifle Scope";
+        case SITHBIN_MOTS_FLASH_BOMB:         return "Flash Bomb";
+        case SITHBIN_MOTS_TUSKEN_PROD:        return "Bowcaster";
+        case SITHBIN_MOTS_RAIL_SEEKER:        return "Rail Seeker";
+        case SITHBIN_MOTS_MANUAL_SEQUENCER:   return "Manual Sequencer";
+        case SITHBIN_MOTS_CARBO_GUN:          return "Carbonite Gun";
+        // MOTS inventory items
+        case SITHBIN_TSKNCLOTHES:    return "Tusken Clothes";
+        case SITHBIN_HVYEXPLOSIVE:   return "Heavy Explosive";
+        case SITHBIN_HLCRN:          return "Holocron";
+        case SITHBIN_DRARM:          return "Droid Arm";
+        case SITHBIN_PRYBAR:         return "Pry Bar";
+        case SITHBIN_RADIO:          return "Radio";
         default:                     return "Unknown";
     }
 }
@@ -161,7 +241,12 @@ static int stdVR_WeaponWheel_BuildWeaponSegments(void)
     sithPlayerInfo* pPlayerInfo = sithPlayer_pLocalPlayerThing->actorParams.playerinfo;
     int count = 0;
 
-    for (int bin = SITHBIN_FISTS; bin <= SITHBIN_LIGHTSABER; bin++) {
+    // MOTS keeps its weapons in bins 121-140 rather than 1-10, so scanning the DF2 range would
+    // leave the wheel empty there.
+    int binStart = Main_bMotsCompat ? SITHBIN_MOTS_FISTS     : SITHBIN_FISTS;
+    int binEnd   = Main_bMotsCompat ? SITHBIN_MOTS_CARBO_GUN : SITHBIN_LIGHTSABER;
+
+    for (int bin = binStart; bin <= binEnd; bin++) {
         if (count >= STDVR_WHEEL_MAX_SEGMENTS) break;
 
         sithItemDescriptor* pDesc = &sithInventory_aDescriptors[bin];
@@ -205,6 +290,88 @@ static int stdVR_WeaponWheel_BuildForceSegments(void)
     }
 
     return count;
+}
+
+// ============================================================================
+// Internal: Build segments for the inventory page of the off-hand wheel.
+// Matches the engine's own item-cycling eligibility (sithInventory_GetNumBinsWithFlagRev
+// with ITEMINFO_ITEM) so the wheel shows exactly what next/prev-item would offer.
+// ============================================================================
+static int stdVR_WeaponWheel_BuildItemSegments(void)
+{
+    if (!sithPlayer_pLocalPlayerThing || !sithPlayer_pLocalPlayerThing->actorParams.playerinfo) {
+        return 0;
+    }
+
+    sithPlayerInfo* pPlayerInfo = sithPlayer_pLocalPlayerThing->actorParams.playerinfo;
+    int count = 0;
+
+    for (int bin = 0; bin < SITHBIN_NUMBINS; bin++) {
+        if (count >= STDVR_WHEEL_MAX_SEGMENTS) break;
+
+        sithItemDescriptor* pDesc = &sithInventory_aDescriptors[bin];
+        sithItemInfo* pInfo = &pPlayerInfo->iteminfo[bin];
+
+        if ((pDesc->flags & ITEMINFO_ITEM) && (pDesc->flags & ITEMINFO_VALID)
+            && (pInfo->state & ITEMSTATE_AVAILABLE)) {
+            stdVR_wheelState.aSegments[count].binIdx = bin;
+            stdVR_wheelState.aSegments[count].pIcon = pDesc->hudBitmap;
+            count++;
+        }
+    }
+
+    return count;
+}
+
+static void stdVR_WeaponWheel_GetControllerAngles(int hand, float* pYaw, float* pPitch);
+
+// Select an inventory item and use it, mirroring the checks the INPUT_FUNC_USEINV path in
+// sithInventory_Tick applies: the bin must be off cooldown and available before its COG is
+// told to activate.
+static void stdVR_WeaponWheel_UseItem(int binIdx)
+{
+    sithThing* pPlayer = sithPlayer_pLocalPlayerThing;
+    if (!pPlayer || !pPlayer->actorParams.playerinfo || binIdx < 0) {
+        return;
+    }
+
+    sithInventory_SelectItem(pPlayer, binIdx);
+
+    sithPlayerInfo* pPlayerInfo = pPlayer->actorParams.playerinfo;
+    if (sithTime_curSeconds < (flex_d_t)pPlayerInfo->iteminfo[binIdx].binWait) {
+        return;
+    }
+    if (!sithInventory_GetAvailable(pPlayer, binIdx)) {
+        return;
+    }
+
+    sithCog* pCog = sithInventory_aDescriptors[binIdx].cog;
+    if (pCog) {
+        sithCog_SendMessage(pCog, SITH_MESSAGE_ACTIVATE, SITH_MESSAGE_ACTIVATE, binIdx,
+                            SENDERTYPE_THING, pPlayer->thingIdx, SENDERTYPE_0);
+    }
+}
+
+// Open (or re-page) the off-hand wheel. Returns 1 if the page has anything to show.
+static int stdVR_WeaponWheel_SetOffhandPage(int wheelType, int offhand)
+{
+    int numSegs = (wheelType == STDVR_WHEEL_ITEMS)
+                ? stdVR_WeaponWheel_BuildItemSegments()
+                : stdVR_WeaponWheel_BuildForceSegments();
+
+    if (numSegs <= 0) {
+        return 0;
+    }
+
+    stdVR_wheelState.activeWheel = wheelType;
+    stdVR_wheelState.numSegments = numSegs;
+    stdVR_wheelState.highlightedSegment = -1;
+    stdVR_wheelState.prevHighlightedSegment = -1;
+    stdVR_weaponWheelTimeScale = 0.1f;
+    stdVR_wheelPointerX = 0.0f;
+    stdVR_wheelPointerY = 0.0f;
+    stdVR_WeaponWheel_GetControllerAngles(offhand, &stdVR_wheelInitialYaw, &stdVR_wheelInitialPitch);
+    return 1;
 }
 
 // ============================================================================
@@ -304,18 +471,35 @@ void stdVR_WeaponWheel_Update(void)
         }
     }
     else if (stdVR_clientInfo.buttonPressed & btnGripOffhand) {
-        int numSegs = stdVR_WeaponWheel_BuildForceSegments();
-        if (numSegs > 0) {
-            stdVR_wheelState.activeWheel = STDVR_WHEEL_FORCE;
-            stdVR_wheelState.numSegments = numSegs;
-            stdVR_wheelState.highlightedSegment = -1;
-            stdVR_wheelState.prevHighlightedSegment = -1;
-            stdVR_weaponWheelTimeScale = 0.1f;
-            stdVR_wheelPointerX = 0.0f;
-            stdVR_wheelPointerY = 0.0f;
-            // Capture rest yaw/pitch for relative pointing
-            stdVR_WeaponWheel_GetControllerAngles(offhand, &stdVR_wheelInitialYaw, &stdVR_wheelInitialPitch);
+        // Off-hand grip opens the two-page wheel: Force powers and inventory items, flipped
+        // with the off-hand thumbstick while held. Prefer the Force page, but fall back to
+        // items so the wheel is still useful before any powers have been earned.
+        if (stdVR_WeaponWheel_SetOffhandPage(STDVR_WHEEL_FORCE, offhand)
+            || stdVR_WeaponWheel_SetOffhandPage(STDVR_WHEEL_ITEMS, offhand)) {
+            stdVR_wheelPageFlipLatched = 0;
             stdVR_TriggerHaptic(offhand, 0.3f, 0.1f, 100.0f);
+        }
+    }
+
+    // Page flip. Two pages, so any horizontal deflection past the threshold toggles - no
+    // dependence on the stick's sign convention, which differs between the move and turn
+    // stick. Latched so one push is one flip.
+    if (stdVR_wheelState.activeWheel == STDVR_WHEEL_FORCE || stdVR_wheelState.activeWheel == STDVR_WHEEL_ITEMS) {
+        float stickX = stdVR_WeaponWheel_GetOffhandStickX();
+        if (stickX < 0.0f) {
+            stickX = -stickX;
+        }
+
+        if (!stdVR_wheelPageFlipLatched && stickX >= STDVR_WHEEL_PAGE_FLIP_THRESHOLD) {
+            int otherPage = (stdVR_wheelState.activeWheel == STDVR_WHEEL_FORCE)
+                          ? STDVR_WHEEL_ITEMS : STDVR_WHEEL_FORCE;
+            if (stdVR_WeaponWheel_SetOffhandPage(otherPage, offhand)) {
+                stdVR_TriggerHaptic(offhand, 0.35f, 0.08f, 140.0f);
+            }
+            stdVR_wheelPageFlipLatched = 1;
+        }
+        else if (stickX < STDVR_WHEEL_PAGE_FLIP_RELEASE) {
+            stdVR_wheelPageFlipLatched = 0;
         }
     }
 
@@ -331,7 +515,14 @@ void stdVR_WeaponWheel_Update(void)
 
                 if (stdVR_wheelState.activeWheel == STDVR_WHEEL_WEAPON) {
                     sithWeapon_SelectWeapon(sithPlayer_pLocalPlayerThing, binIdx, 0);
-                } else {
+                }
+                else if (stdVR_wheelState.activeWheel == STDVR_WHEEL_ITEMS) {
+                    // Items are USED on release, not merely selected - the wheel is the whole
+                    // interaction. Select first so the HUD and next/prev-item agree with what
+                    // was just used.
+                    stdVR_WeaponWheel_UseItem(binIdx);
+                }
+                else {
                     sithInventory_SelectPower(sithPlayer_pLocalPlayerThing, binIdx);
                 }
 
@@ -409,6 +600,32 @@ void stdVR_WeaponWheel_Draw(int hudWidth, int hudHeight)
 
     float segmentArc = (2.0f * STDVR_PI) / stdVR_wheelState.numSegments;
     flex_t labelScale = coordH / 480.0f;
+
+    // Added: page tabs for the off-hand wheel, so the Force/Items split is visible rather
+    // than something the player has to remember.
+    if (!bWeaponWheel && jkHud_pMsgFontSft) {
+        int bItems = (stdVR_wheelState.activeWheel == STDVR_WHEEL_ITEMS);
+        flex_t tabScale = labelScale * 1.2f;
+        int tabY = (int)(centerY - radius) - (int)(coordH * 0.10f);
+        if (tabY < 0) tabY = 0;
+
+        // Underline the active page: a filled bar behind the active label reads clearly at
+        // low HUD resolutions where a colour difference alone would not.
+        int barW = (int)(coordW * 0.11f);
+        int barH = (int)(coordH * 0.006f);
+        if (barH < 1) barH = 1;
+        rdRect bar;
+        bar.x = (int)(centerX + (bItems ? (coordW * 0.02f) : -(coordW * 0.13f)));
+        bar.y = tabY + (int)(14.0f * tabScale);
+        bar.width = barW;
+        bar.height = barH;
+        std3D_DrawUIClearedRectRGBA(50, 150, 255, 220, &bar);
+
+        stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, (int)(centerX - coordW * 0.13f), tabY,
+                             (int)coordW, "FORCE", bItems ? 0 : 1, tabScale);
+        stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, (int)(centerX + coordW * 0.02f), tabY,
+                             (int)coordW, "ITEMS", bItems ? 1 : 0, tabScale);
+    }
 
     for (int i = 0; i < stdVR_wheelState.numSegments; i++) {
         // Angle at center of this segment (0 = up, clockwise)
@@ -515,6 +732,12 @@ int stdVR_WeaponWheel_IsActive(void)
     return stdVR_wheelState.activeWheel != STDVR_WHEEL_NONE;
 }
 
+// Added: which wheel is up (STDVR_WHEEL_NONE/WEAPON/FORCE), for prompts that wait on one
+int stdVR_WeaponWheel_GetActiveWheel(void)
+{
+    return stdVR_wheelState.activeWheel;
+}
+
 // ============================================================================
 // Public: Check if grip is suppressed for a given hand
 // ============================================================================
@@ -530,7 +753,8 @@ int stdVR_WeaponWheel_IsGripSuppressed(int hand)
     if (stdVR_wheelState.activeWheel == STDVR_WHEEL_WEAPON && hand == dominantHand) {
         return 1;
     }
-    if (stdVR_wheelState.activeWheel == STDVR_WHEEL_FORCE && hand == offhand) {
+    if ((stdVR_wheelState.activeWheel == STDVR_WHEEL_FORCE
+      || stdVR_wheelState.activeWheel == STDVR_WHEEL_ITEMS) && hand == offhand) {
         return 1;
     }
 

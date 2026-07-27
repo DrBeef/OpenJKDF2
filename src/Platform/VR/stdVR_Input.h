@@ -19,6 +19,9 @@ void stdVR_Input_ProcessSnapTurn(void);
 
 // Get movement direction based on config
 void stdVR_Input_GetMovementDirection(float* pMoveX, float* pMoveY);
+// Stick-click button masks, following the swap-thumbsticks option
+uint32_t stdVR_Input_GetMoveStickButton(void);
+uint32_t stdVR_Input_GetTurnStickButton(void);
 
 // Get snap turn angle (returns 0 if no snap turn pending, otherwise the angle)
 int stdVR_Input_GetSnapTurnAngle(void);

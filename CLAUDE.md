@@ -16,18 +16,24 @@ OpenJKDF2 is a function-by-function reimplementation of Jedi Knight: Dark Forces
 | Windows PCVR | `mkdir build_vr && cd build_vr && cmake .. -G "Visual Studio 17 2022" -A x64 -DTARGET_USE_VR=ON && cmake --build . --config Release` |
 | macOS | `./.github/build_macos.sh` |
 | Android | `./build_android.sh` |
-| Quest VR | `./build_quest_vr.sh` |
+| Quest VR | `cd packaging/quest-vr && ./gradlew.bat assembleRelease` (builds the native code too — see below) |
 
 To enable tests: `export TARGET_BUILD_TESTS=1` before building.
 
 ### Android/Quest VR Build Environment
 Android SDK location: `C:\Users\simon\AppData\Local\Android\Sdk`
 
-For Quest VR builds, set these environment variables:
+Quest VR builds go through gradle, which compiles the native engine as part of the APK:
+```bash
+cd packaging/quest-vr
+./gradlew.bat assembleRelease
+```
+
+These environment variables are only needed for the standalone `./build_quest_vr.sh` native
+compile check — gradle resolves the SDK/NDK itself and does not need them:
 ```bash
 export ANDROID_HOME="C:/Users/simon/AppData/Local/Android/Sdk"
 export ANDROID_NDK_HOME="C:/Users/simon/AppData/Local/Android/Sdk/ndk/26.1.10909125"
-./build_quest_vr.sh
 ```
 
 ## Architecture
@@ -101,28 +107,46 @@ The same APK works on both Meta Quest and Pico devices - uses Khronos OpenXR loa
 - Android SDK: `C:\Users\simon\AppData\Local\Android\Sdk`
 - Android NDK: `C:\Users\simon\AppData\Local\Android\Sdk\ndk\26.1.10909125`
 
-**Step 1: Build native libraries**
+**Gradle builds the native code itself** — `build.gradle` has
+`externalNativeBuild { cmake { path "../../CMakeLists.txt" } }`, so `./gradlew.bat` compiles the
+engine from source. Building the APK is the only step required.
+
+`build_quest_vr.sh` is *not* part of the APK build. It writes to
+`packaging/quest-vr/app/src/main/jniLibs/arm64-v8a/`, which no sourceSet references (gradle's
+`sourceSets.main` roots at `src/main`, not `app/src/main`), so nothing it produces is packaged —
+that directory holds stale `.so` files. Use it only as a quick standalone check that the native
+code compiles for arm64; never as a prerequisite for the APK.
+
+**Build the APK** (from `packaging/quest-vr`):
 ```bash
-cd /c/DEV/GitHub/Public/OpenJKDF2
-export ANDROID_HOME="C:/Users/simon/AppData/Local/Android/Sdk"
-export ANDROID_NDK_HOME="C:/Users/simon/AppData/Local/Android/Sdk/ndk/26.1.10909125"
-./build_quest_vr.sh
+./gradlew.bat assembleRelease   # -O2, use this for anything you will play or benchmark
+./gradlew.bat assembleDebug     # -O0 -g, debuggable, only for native debugging
 ```
 
-**Step 2: Build APK**
+The two build types differ a lot — `debug` compiles the engine at `-O0` with `debuggable`/
+`jniDebuggable`, which costs serious frame time on-device. Default to `assembleRelease`.
+Release is signed with the standard Android debug key via the `signingConfigs.debugKey` block in
+`build.gradle`, so it sideloads without provisioning a keystore. **Replace that before any public
+release.**
+
+**Install on device**
 ```bash
-cd packaging/quest-vr
-./gradlew.bat assembleDebug
+"C:/Users/simon/AppData/Local/Android/Sdk/platform-tools/adb.exe" install -r "C:/DEV/GitHub/Public/OpenJKDF2/packaging/quest-vr/build/outputs/apk/release/JKDF2-XR-release.apk"
 ```
 
-**Step 3: Install on device**
-```bash
-"C:/Users/simon/AppData/Local/Android/Sdk/platform-tools/adb.exe" install -r "C:/DEV/GitHub/Public/OpenJKDF2/packaging/quest-vr/build/outputs/apk/debug/JKDF2-XR-debug.apk"
-```
+**Choosing DF2 vs MotS:** `LauncherActivity` is a flat 2D panel activity that offers a game
+chooser when MotS assets are present, and writes the `-motsCompat` token into
+`/sdcard/JKDF2XR/commandline.txt`. See *MotS (Mysteries of the Sith)* below.
 
 **Troubleshooting:**
 - If gradle fails with locked file errors, stop the daemon first: `./gradlew.bat --stop`
-- APK output location: `packaging/quest-vr/build/outputs/apk/debug/JKDF2-XR-debug.apk`
+- APK output: `packaging/quest-vr/build/outputs/apk/{release,debug}/JKDF2-XR-{release,debug}.apk`
+- To confirm which build type is installed:
+  `adb shell dumpsys package com.teambeefvr.jkdf2xr | grep "flags=\["` — release has no `DEBUGGABLE`.
+- To confirm the APK really used release native libs, compare the packaged `libSDL2.so` size
+  against `.cxx/Release/*/arm64-v8a/SDL/libSDL2.so` (the Debug one differs by a few bytes).
+- `packagingOptions { doNotStrip "**/*.so" }` applies to release too: symbols are kept, which
+  costs APK size but not frame time, and keeps native crash traces readable.
 
 ### PC VR Build (Windows)
 
@@ -175,6 +199,42 @@ tuned runtime `C:\DEV\JKDF2-XR\jkdf2xr_vr_weapons.json`); do not hand-edit the
 
 To cut a versioned release, bump `OPENJKDF2VR_PROJECT_VERSION` in
 `cmake_modules/version.cmake`, rebuild PCVR, then re-run the packaging script.
+
+### MotS (Mysteries of the Sith)
+
+The expansion is a separate game with its own assets, not a mod. The **engine** side was already
+implemented upstream (`Main_bMotsCompat`, threaded through ~300 sites: MotS COG verbs, its own bin
+range, the Force menu with the star system, `.SAN` SMUSH cutscenes). Do not re-implement any of
+that — only the VR/packaging glue is local work.
+
+**Running it:** pass `-motsCompat`. `InstallHelper_SetCwd` then chdirs into a `mots` folder beside
+the executable (`/sdcard/JKDF2XR/mots` on Quest), so DF2 stays at the top level and each game keeps
+its **own** cvars, registry, saves and `jkdf2xr_vr_weapons.json`. The packaging script and the Quest
+launcher both seed a copy of the golden weapons JSON into `mots/`.
+
+Shaders and UI still resolve after that chdir because `stdEmbeddedRes_Load` falls back to the
+executable directory on Windows and to APK assets on Android — no resource duplication needed.
+
+**PCVR:** `jkdf2xr.exe -motsCompat`, or put it in `commandline.txt` next to the exe.
+
+**Quest:** `LauncherActivity` is a flat 2D panel that shows a game chooser when MotS assets are
+present, and manages the `-motsCompat` token inside `/sdcard/JKDF2XR/commandline.txt` (preserving
+any other arguments). Two constraints make this work, and both are load-bearing:
+
+- The launcher must declare `com.oculus.intent.category.2D` (plus `com.oculus.intent.category.DEFAULT`).
+  Merely *omitting* the VR categories is not enough — the shell defaults an entry activity to
+  immersive, opens a volumetric window and waits for OpenXR frames, so flat UI draws but is never
+  composited. `VRActivity` carries the VR categories under action `VIEW` (not `MAIN`) so it adds no
+  second launcher icon. Same shape as CitraVR.
+- `VRActivity` runs in `android:process=":vr_process"` and the launcher kills that process before
+  starting it. Engine configuration lives in globals initialised when the `.so` loads; relaunching
+  only restarts the activity, so without this a previous MotS run leaves `Main_bMotsCompat` set and
+  every later launch is MotS regardless of the choice. Do **not** "fix" that by resetting the flag
+  in `Main_ParseCmdLine` — the desktop *Expansions & Mods* relaunch path in `main.c` works by
+  setting exactly that flag and re-entering `Window_Main_Linux`.
+
+MotS weapons live in bins 121-140, not 1-10 (see `misc/items.dat` in `JKMRES.GOO`); bins 125/136/139
+are `para_*` placeholders that never appear. Anything iterating weapon bins must handle both ranges.
 
 ### VR Technical Notes
 

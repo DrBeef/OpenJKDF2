@@ -470,6 +470,9 @@ int32_t jkGuiRend_DisplayAndReturnClicked(jkGuiMenu *menu)
 #ifdef PLATFORM_VR
         // Update VR cursor position and trigger state
         if (stdVR_bEnabled && stdVR_clientInfo.bUseScreenLayer) {
+            // Added: keep full VR button state fresh inside blocking menus so Y/menu
+            // can trigger the active menu's escape shortcut (Options -> back/cancel).
+            stdVR_UpdateInput();
             stdVR_UpdateMenuCursor();
             jkGuiRend_UpdateMouse();
 

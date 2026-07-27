@@ -296,6 +296,9 @@ int sithMain_Tick()
             {
                 sithSurface_Tick(sithTime_deltaSeconds);
                 sithThing_TickAll(sithTime_deltaSeconds, sithTime_deltaMs);
+#ifdef PLATFORM_VR
+                sithCamera_VRRecordSimStep();
+#endif
             }
 
             sithTime_deltaSeconds = tmp;
@@ -377,6 +380,12 @@ int sithMain_Tick()
 
                 sithCogScript_TickAll();
 
+#ifdef PLATFORM_VR
+                // Added: sample the player's stepped position so the VR camera can be
+                // interpolated across the step at the (higher) headset refresh rate.
+                sithCamera_VRRecordSimStep();
+#endif
+
                 // COG scripts will sleep for periods of time based on sithTime_curMs,
                 // so we have to emulate the current time as well
                 sithTime_curMs += sithTime_deltaMs;
@@ -417,6 +426,11 @@ int sithMain_Tick()
             sithThing_MotsTick(0x1F, 0, 0);
 
             sithCogScript_TickAll();
+
+#ifdef PLATFORM_VR
+            // Physics ran at the real frame delta here, so there is no staircase to smooth.
+            sithCamera_VRResetInterp();
+#endif
         }
 
         //sithAI_PrintThings();

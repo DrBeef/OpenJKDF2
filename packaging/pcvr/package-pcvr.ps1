@@ -118,6 +118,24 @@ Copy-Item -Recurse $resourceSrc (Join-Path $staging 'resource')
 # Pre-tuned VR weapon offsets
 Copy-Item $WeaponsJson (Join-Path $staging 'jkdf2xr_vr_weapons.json')
 
+# Mysteries of the Sith lives in its own folder - running with -motsCompat chdirs into it, so
+# it needs its own copy of the offsets (the file covers both games' bin ranges).
+$motsDir = Join-Path $staging 'mots'
+New-Item -ItemType Directory -Force -Path $motsDir | Out-Null
+Copy-Item $WeaponsJson (Join-Path $motsDir 'jkdf2xr_vr_weapons.json')
+@(
+    "Put your Mysteries of the Sith files in this folder."
+    ""
+    "You need these, copied from your MotS install:"
+    "    Episode\JKM.GOO, JKM_KFY.GOO, JKM_MP.GOO, JKM_SABER.GOO"
+    "    Resource\JKMRES.GOO, JKMsndLO.goo, JK_.CD"
+    "    Resource\VIDEO\   (cutscenes, optional)"
+    "    MUSIC\            (optional)"
+    ""
+    "Then launch with:  jkdf2xr.exe -motsCompat"
+    "(or put -motsCompat on a line in commandline.txt next to the exe)"
+) | Set-Content -Encoding ascii (Join-Path $motsDir 'PUT-MOTS-FILES-HERE.txt')
+
 # User instructions
 if (Test-Path $howToPlay) { Copy-Item $howToPlay (Join-Path $staging 'HOW-TO-PLAY.txt') }
 

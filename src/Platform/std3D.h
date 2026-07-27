@@ -139,10 +139,6 @@ void std3D_DebugLogGLState(const char* tag, int eye, int frame);
 void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame);
 void std3D_DebugClearTestColor(int eye);
 void std3D_DebugSaveInternalFbo(const char* filename);
-// VR comfort vignette - draws radial dark gradient over the current FBO
-void std3D_DrawVignetteToCurrentFBO(int fboWidth, int fboHeight, float intensity);
-// VR weapon crosshair - draws a small colored dot at a world position
-void std3D_DrawWorldDot(rdVector3* pWorldPos, float size, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 // Get internal rendering FBO info (for drawing overlays before scene blit)
 int std3D_GetInternalFBO(int* pWidth, int* pHeight);
 // VR HUD rendering - draws overlay buffer to currently bound FBO

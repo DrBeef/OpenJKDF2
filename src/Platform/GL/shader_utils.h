@@ -14,7 +14,7 @@ extern void print_log(GLuint object);
 GLuint load_shader_file(const char* filepath, GLenum type);
 // enableMultiView: when nonzero, inject GL_OVR_multiview2 + MULTIVIEW_ENABLED so the shader
 // can render single-pass stereo to the multiview array FBO. Only the 3D-scene shaders that
-// target that FBO (default/crosshair/vignette) should set this; UI/menu shaders render to
+// target that FBO (default/crosshair) should set this; UI/menu shaders render to
 // plain 2D FBOs and must stay mono (a num_views=2 shader on a non-array FBO is invalid).
 extern GLuint create_shader(const char* shaderSource, GLenum type, int enableMultiView);
 
