@@ -736,6 +736,14 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
         uint32_t btnActivate = STDVR_BTN_X;
         uint32_t btnAltFire  = STDVR_BTN_B;
 
+        // The weapon alignment tool takes over the controller: its sticks edit the offsets and
+        // its buttons cycle modes, so no VR input reaches the game while it is up - except
+        // NEXTWEAPON, which is how a tuning pass steps through the arsenal without closing it.
+        if (stdVR_AlignmentTool_IsActive()
+            && funcIdx != INPUT_FUNC_NEXTWEAPON && funcIdx != INPUT_FUNC_PREVWEAPON) {
+            return 0;
+        }
+
         int vrInput = 0;
         // Altered: some VR actions must be the ONLY source for their function. Clearing
         // vrInput is not enough - execution falls through to the legacy keybind scan below,
@@ -788,8 +796,12 @@ int sithControl_ReadFunctionMap(int funcIdx, int *pOut)
                     vrInput = stdVR_Input_IsButtonDown(btnUseInv);
                 break;
             case INPUT_FUNC_NEXTWEAPON:
-                // Right thumbstick up flick = next weapon
+                // Only reachable from the alignment tool's right trigger; normal weapon
+                // selection is the wheel.
                 vrInput = stdVR_Input_IsNextWeaponTriggered();
+                break;
+            case INPUT_FUNC_PREVWEAPON:
+                vrInput = stdVR_Input_IsPrevWeaponTriggered();
                 break;
             case INPUT_FUNC_FAST:
                 // Off-hand thumbstick click = toggle run

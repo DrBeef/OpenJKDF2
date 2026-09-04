@@ -21,6 +21,10 @@ extern "C" {
 #define STDVR_CONTROLLER_RIGHT  1
 #define STDVR_CONTROLLER_COUNT  2
 
+// Display refresh rates that the code keeps from XR_FB_display_refresh_rate. Quest 3 reports
+// 5 rates (72/80/90/120 Hz and similar), so 16 is enough.
+#define STDVR_MAX_REFRESH_RATES 16
+
 // VR Button bit flags
 #define STDVR_BTN_TRIGGER_R    0x0001
 #define STDVR_BTN_TRIGGER_L    0x0002
@@ -167,6 +171,13 @@ typedef struct stdVR_ClientInfo {
     float analogTurn[2];            // Right stick: [0]=X (turn), [1]=Y (unused)
     float triggerLeft;              // Left trigger value (0-1)
     float triggerRight;             // Right trigger value (0-1)
+
+    // Added: display refresh rates that the runtime reports, in Hz. The list is empty when the
+    // runtime does not support XR_FB_display_refresh_rate. Meta Quest supports it. Some other
+    // runtimes, for example Pico, can report no support.
+    float aRefreshRates[STDVR_MAX_REFRESH_RATES];
+    int numRefreshRates;            // Number of valid entries in aRefreshRates
+    float currentRefreshRate;       // Rate that the runtime uses now, 0 if unknown
     float gripLeft;                 // Left grip value (0-1)
     float gripRight;                // Right grip value (0-1)
 

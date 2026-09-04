@@ -67,6 +67,12 @@ static void stdVR_WeaponOffsets_Load(void)
             snprintf(keyName, sizeof(keyName), "weapon_%d_pitch", i);
             pOffset->pitchAdjust = stdJSON_GetFloat(STDVR_WEAPON_OFFSETS_FNAME, keyName, pOffset->pitchAdjust);
 
+            snprintf(keyName, sizeof(keyName), "weapon_%d_yaw", i);
+            pOffset->yawAdjust = stdJSON_GetFloat(STDVR_WEAPON_OFFSETS_FNAME, keyName, pOffset->yawAdjust);
+
+            snprintf(keyName, sizeof(keyName), "weapon_%d_roll", i);
+            pOffset->rollAdjust = stdJSON_GetFloat(STDVR_WEAPON_OFFSETS_FNAME, keyName, pOffset->rollAdjust);
+
             pOffset->bConfigured = 1;
 
             stdPlatform_Printf("stdVR_WeaponOffsets: Loaded offsets for weapon %d\n", i);
@@ -169,6 +175,12 @@ void stdVR_WeaponOffsets_Save(void)
 
         snprintf(keyName, sizeof(keyName), "weapon_%d_pitch", i);
         stdJSON_SaveFloat(STDVR_WEAPON_OFFSETS_FNAME, keyName, pOffset->pitchAdjust);
+
+        snprintf(keyName, sizeof(keyName), "weapon_%d_yaw", i);
+        stdJSON_SaveFloat(STDVR_WEAPON_OFFSETS_FNAME, keyName, pOffset->yawAdjust);
+
+        snprintf(keyName, sizeof(keyName), "weapon_%d_roll", i);
+        stdJSON_SaveFloat(STDVR_WEAPON_OFFSETS_FNAME, keyName, pOffset->rollAdjust);
 
         stdPlatform_Printf("stdVR_WeaponOffsets: Saved offsets for weapon %d\n", i);
     }

@@ -40,6 +40,9 @@ static void jkStrings_RegisterVRStrings(stdStrTable* pTable)
     jkStrings_RegisterString(pTable, "GUIEXT_VR_DOMINANT_HAND_HINT",   L"Which hand holds the weapon");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_SWAP_STICKS",          L"Swap Thumbsticks");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_SWAP_STICKS_HINT",     L"Move with the right stick and turn with the left");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_ALIGN_TOOL",              L"Weapon Alignment (dev)");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_ALIGN_TOOL_HINT",         L"In-headset weapon offset editor. Unticking saves the offsets.");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_REFRESH_RATE_HINT",       L"Display refresh rate. Higher rates use more battery.");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_SABER",         L"Swing the saber to attack");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_FISTS",         L"Punch forward with either hand to attack");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_CROUCH",           L"Push the %ls thumbstick down to crouch");
@@ -55,6 +58,7 @@ static void jkStrings_RegisterVRStrings(stdStrTable* pTable)
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_ITEMS",                L"Hold the %ls grip and push the stick to reach your items");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_DEATH_LOAD",           L"Press Y for the menu, then Load to restore your last save");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_HOLOMAP_GRAB",         L"Use the grip buttons to grab, rotate and scale the map");
+    jkStrings_RegisterString(pTable, "GUIEXT_VR_PROMPT_HOLOMAP_CLOSE",    L"Click the %ls thumbstick again to close the map");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_MOVE_DIRECTION",       L"Controller-Relative Move");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_MOVE_DIRECTION_HINT",  L"Move relative to controller instead of head direction");
     jkStrings_RegisterString(pTable, "GUIEXT_VR_SNAP_TURN",            L"Snap Turn");

@@ -20,8 +20,6 @@ static int stdVR_alignmentTool_bInitted = 0;
 static stdVR_AlignmentMode stdVR_alignmentTool_mode = STDVR_ALIGN_POSITION;
 
 // Input state tracking for debouncing
-static int stdVR_alignmentTool_bGripsHeld = 0;
-static int stdVR_alignmentTool_bBPressed = 0;
 static int stdVR_alignmentTool_bAPressed = 0;
 
 // Adjustment speeds
@@ -44,8 +42,6 @@ void stdVR_AlignmentTool_Startup(void)
 
     stdVR_alignmentTool_bActive = 0;
     stdVR_alignmentTool_mode = STDVR_ALIGN_POSITION;
-    stdVR_alignmentTool_bGripsHeld = 0;
-    stdVR_alignmentTool_bBPressed = 0;
     stdVR_alignmentTool_bAPressed = 0;
 
     stdVR_alignmentTool_bInitted = 1;
@@ -92,18 +88,16 @@ void stdVR_AlignmentTool_Update(float deltaSeconds)
         return;
     }
 
-    // Check for toggle activation: both grips + B button
-    int bBothGrips = (stdVR_clientInfo.gripLeft > 0.5f) && (stdVR_clientInfo.gripRight > 0.5f);
-    int bBButton = (stdVR_clientInfo.buttonState & STDVR_BTN_B) != 0;
-
-    // Toggle on B press while both grips held (with debounce)
-    if (bBothGrips && bBButton) {
-        if (!stdVR_alignmentTool_bGripsHeld || !stdVR_alignmentTool_bBPressed) {
-            stdVR_AlignmentTool_Toggle();
-        }
+    // Altered: activation is the cvar g_vrAlignTool, not the old both-grips + B chord. Those
+    // inputs all have jobs now - each grip opens a wheel and B is alt-fire - so the chord
+    // would open a wheel, drop time to 0.1x and fire the weapon on the way in. A cvar also
+    // keeps a dev tool out of reach of a player mashing buttons.
+    // Clearing the cvar toggles off, which is what writes the JSON.
+    extern int jkPlayer_vrAlignTool;
+    int bWantActive = (jkPlayer_vrAlignTool != 0);
+    if (bWantActive != stdVR_alignmentTool_bActive) {
+        stdVR_AlignmentTool_Toggle();
     }
-    stdVR_alignmentTool_bGripsHeld = bBothGrips;
-    stdVR_alignmentTool_bBPressed = bBButton;
 
     if (!stdVR_alignmentTool_bActive) {
         return;
@@ -126,6 +120,7 @@ void stdVR_AlignmentTool_Update(float deltaSeconds)
     // Get stick inputs
     float leftStickX = stdVR_AlignmentTool_ApplyDeadzone(stdVR_clientInfo.analogMove[0]);
     float leftStickY = stdVR_AlignmentTool_ApplyDeadzone(stdVR_clientInfo.analogMove[1]);
+
     float rightStickY = stdVR_AlignmentTool_ApplyDeadzone(stdVR_clientInfo.analogTurn[1]);
 
     // Apply adjustments based on mode
@@ -145,12 +140,20 @@ void stdVR_AlignmentTool_Update(float deltaSeconds)
             if (pOffset->modelScale > 5.0f) pOffset->modelScale = 5.0f;
             break;
 
-        case STDVR_ALIGN_PITCH:
-            // Left stick Y = pitch adjustment
+        case STDVR_ALIGN_ROTATION:
+            // Left stick Y = pitch, left stick X = yaw, right stick Y = roll. This matches
+            // the layout of POSITION mode, so all three axes need no extra mode change.
             pOffset->pitchAdjust += leftStickY * STDVR_ALIGN_PITCH_SPEED * deltaSeconds;
-            // Clamp pitch to reasonable range
-            if (pOffset->pitchAdjust < -90.0f) pOffset->pitchAdjust = -90.0f;
-            if (pOffset->pitchAdjust > 90.0f) pOffset->pitchAdjust = 90.0f;
+            pOffset->yawAdjust += leftStickX * STDVR_ALIGN_PITCH_SPEED * deltaSeconds;
+            pOffset->rollAdjust += rightStickY * STDVR_ALIGN_PITCH_SPEED * deltaSeconds;
+
+            // Clamp each axis to a sensible range
+            if (pOffset->pitchAdjust < -180.0f) pOffset->pitchAdjust = -180.0f;
+            if (pOffset->pitchAdjust > 180.0f) pOffset->pitchAdjust = 180.0f;
+            if (pOffset->yawAdjust < -180.0f) pOffset->yawAdjust = -180.0f;
+            if (pOffset->yawAdjust > 180.0f) pOffset->yawAdjust = 180.0f;
+            if (pOffset->rollAdjust < -180.0f) pOffset->rollAdjust = -180.0f;
+            if (pOffset->rollAdjust > 180.0f) pOffset->rollAdjust = 180.0f;
             break;
 
         default:
@@ -175,9 +178,23 @@ void stdVR_AlignmentTool_DrawOverlay(void)
     stdVR_WeaponOffset* pOffset = stdVR_GetCurrentWeaponOffset();
 
     char buf[256];
-    int y = 50;
-    int fontHeight = stdFont_GetHeight(jkHud_pMsgFontSft) + 2;
+    int y = 30;
     flex_t scale = jkPlayer_hudScale;
+
+    // The overlay needs about 16 lines. Cap the scale so a large HUD scale cannot push the
+    // last lines off the bottom of the canvas. 2.0 is the default, so this changes nothing
+    // for most users.
+    if (scale > 2.0) {
+        scale = 2.0;
+    }
+
+    // Altered: the text draws at jkPlayer_hudScale, but the line pitch used the UNSCALED font
+    // height, so at the default scale of 2.0 each line drew over the line above it. Scale the
+    // pitch by the same factor and add a small gap.
+    int fontHeight = (int)((flex_t)stdFont_GetHeight(jkHud_pMsgFontSft) * scale) + 4;
+    if (fontHeight < 8) {
+        fontHeight = 8;
+    }
 
     // Title
     stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "=== VR WEAPON ALIGNMENT ===", 1, scale);
@@ -189,7 +206,7 @@ void stdVR_AlignmentTool_DrawOverlay(void)
     y += fontHeight;
 
     // Current mode
-    const char* modeNames[] = { "POSITION", "SCALE", "PITCH" };
+    const char* modeNames[] = { "POSITION", "SCALE", "ROTATION" };
     snprintf(buf, sizeof(buf), "Mode: %s (A to cycle)",
         stdVR_alignmentTool_mode < STDVR_ALIGN_MODE_COUNT ? modeNames[stdVR_alignmentTool_mode] : "???");
     stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, buf, 1, scale);
@@ -214,7 +231,8 @@ void stdVR_AlignmentTool_DrawOverlay(void)
         stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, buf, 1, scale);
         y += fontHeight;
 
-        snprintf(buf, sizeof(buf), "Pitch: %.1f deg", pOffset->pitchAdjust);
+        snprintf(buf, sizeof(buf), "Pitch: %.1f  Yaw: %.1f  Roll: %.1f deg",
+                 pOffset->pitchAdjust, pOffset->yawAdjust, pOffset->rollAdjust);
         stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, buf, 1, scale);
         y += fontHeight;
 
@@ -231,9 +249,9 @@ void stdVR_AlignmentTool_DrawOverlay(void)
     // Controls help
     stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "Controls:", 1, scale);
     y += fontHeight;
-    stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "  Both Grips + B: Toggle tool", 1, scale);
+    stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "  VR Options menu: turn the tool off to save", 1, scale);
     y += fontHeight;
-    stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "  A: Cycle mode", 1, scale);
+    stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "  A: Cycle mode   Triggers: Prev/Next weapon", 1, scale);
     y += fontHeight;
 
     switch (stdVR_alignmentTool_mode) {
@@ -245,8 +263,8 @@ void stdVR_AlignmentTool_DrawOverlay(void)
         case STDVR_ALIGN_SCALE:
             stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "  Left Stick Y: Scale", 1, scale);
             break;
-        case STDVR_ALIGN_PITCH:
-            stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "  Left Stick Y: Pitch", 1, scale);
+        case STDVR_ALIGN_ROTATION:
+            stdFont_DrawAsciiGPU(jkHud_pMsgFontSft, 10, y, 640, "  L Stick: Pitch/Yaw   R Stick Y: Roll", 1, scale);
             break;
         default:
             break;

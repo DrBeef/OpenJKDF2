@@ -694,6 +694,34 @@ void stdVR_MapInputToGame(void)
     stdVR_Input_MapToGame();
 }
 
+int stdVR_GetRefreshRateCount(void)
+{
+    return stdVR_clientInfo.numRefreshRates;
+}
+
+float stdVR_GetRefreshRateByIndex(int idx)
+{
+    if (idx < 0 || idx >= stdVR_clientInfo.numRefreshRates) {
+        return 0.0f;
+    }
+
+    return stdVR_clientInfo.aRefreshRates[idx];
+}
+
+float stdVR_GetCurrentRefreshRate(void)
+{
+    return stdVR_clientInfo.currentRefreshRate;
+}
+
+int stdVR_ApplyRefreshRate(float hz)
+{
+    if (!stdVR_bEnabled || hz <= 0.0f) {
+        return 0;
+    }
+
+    return stdVR_OpenXR_RequestRefreshRate(hz);
+}
+
 void stdVR_TriggerHaptic(int hand, float amplitude, float duration, float frequency)
 {
     if (!stdVR_bEnabled || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
@@ -1128,15 +1156,21 @@ void stdVR_ControllerToWorld(int hand, rdVector3* pWorldPos, int useOffsets)
     offset.y = ctrlPos.y - hmdPos.y;
     offset.z = ctrlPos.z - hmdPos.z;
 
-    // Apply pitch adjustment to match weapon visual (same as GetControllerViewMatrix)
-    // Use per-weapon pitch adjust if available, otherwise fall back to global config
+    // Rotation that positions the muzzle offset. Altered: the per-weapon alignment angles now
+    // apply ONLY when the caller asks for the per-weapon offsets (useOffsets), which means the
+    // weapon VISUAL. The fire path calls this with useOffsets = 0, so aligning a weapon model
+    // no longer moves the point that projectiles come from. Only the global controller pitch
+    // adjustment affects the fire path.
     stdVR_WeaponOffset* pWeaponOffset = stdVR_GetCurrentWeaponOffset();
-    float pitchAdjust = (pWeaponOffset ? pWeaponOffset->pitchAdjust : 0.f) + stdVR_motionConfig.weaponPitchAdjust;
+    float pitchAdjust = ((useOffsets && pWeaponOffset) ? pWeaponOffset->pitchAdjust : 0.f)
+                      + stdVR_motionConfig.weaponPitchAdjust;
+    float yawAdjust = (useOffsets && pWeaponOffset) ? pWeaponOffset->yawAdjust : 0.f;
+    float rollAdjust = (useOffsets && pWeaponOffset) ? pWeaponOffset->rollAdjust : 0.f;
 
     rdMatrix34 adjustedPose;
-    if (pitchAdjust != 0.0f) {
+    if (pitchAdjust != 0.0f || yawAdjust != 0.0f || rollAdjust != 0.0f) {
         rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { pitchAdjust, 0.0f, 0.0f };
+        rdVector3 pitchAngles = { pitchAdjust, yawAdjust, rollAdjust };
         rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
         rdMatrix_Multiply34(&adjustedPose, &pCtrl->poseMatrix, &pitchRot);
     } else {
@@ -1363,13 +1397,15 @@ static int stdVR_GetControllerViewMatrixInternal(int hand, rdMatrix34* pViewMat,
     stdVR_WeaponOffset* pWeaponOffset = bApplyWeaponOffset ? stdVR_GetCurrentWeaponOffset() : NULL;
     float pitchAdjust = (pWeaponOffset ? pWeaponOffset->pitchAdjust : 0.f)
                       + (bApplyWeaponOffset ? stdVR_motionConfig.weaponPitchAdjust : 0.f);
+    float yawAdjust = pWeaponOffset ? pWeaponOffset->yawAdjust : 0.f;
+    float rollAdjust = pWeaponOffset ? pWeaponOffset->rollAdjust : 0.f;
 
-    // First apply pitch adjustment to controller pose if configured
+    // First apply the rotation adjustment to the controller pose if configured
     rdMatrix34 adjustedPose;
-    if (pitchAdjust != 0.0f) {
-        // Build pitch rotation matrix
+    if (pitchAdjust != 0.0f || yawAdjust != 0.0f || rollAdjust != 0.0f) {
+        // Build the rotation matrix. rdMatrix_BuildRotate34 takes pitch, yaw, roll.
         rdMatrix34 pitchRot;
-        rdVector3 pitchAngles = { pitchAdjust, 0.0f, 0.0f };
+        rdVector3 pitchAngles = { pitchAdjust, yawAdjust, rollAdjust };
         rdMatrix_BuildRotate34(&pitchRot, &pitchAngles);
 
         // Apply pitch adjustment: adjustedPose = controllerPose * pitchRot
@@ -1601,6 +1637,48 @@ void stdVR_DrawWeaponCrosshair(void)
     rdThing_Draw(&sBoltTemplate->rdthing, &xhairMat);
 }
 
+// Added: alignment aid. Draws the controller's three axes as world-space rays, so a weapon
+// model can be lined up against the direction the projectile takes. Forward is the long ray,
+// because that is the one that matters for aiming.
+//   forward (green)  = the aim direction, and the path of the projectile
+//   right   (red)
+//   up      (blue)
+// This uses the aim matrix, so the rays show the FIRE direction. The per-weapon alignment
+// angles do not move them. That is the point: align the model until the barrel lies along the
+// green ray.
+void stdVR_DrawControllerAxisRays(int hand)
+{
+    if (!stdVR_bEnabled || hand < 0 || hand >= STDVR_CONTROLLER_COUNT) {
+        return;
+    }
+
+    stdVR_ControllerState* pCtrl = &stdVR_clientInfo.controllers[hand];
+    if (!pCtrl->bTracking) {
+        return;
+    }
+
+    rdMatrix34 aimMat;
+    stdVR_GetControllerWorldMatrix(hand, &aimMat);
+
+    rdVector3 origin = aimMat.scale;
+    rdVector3 end;
+
+    // Forward. Long, so it shows where the shot goes.
+    rdVector_Copy3(&end, &origin);
+    rdVector_MultAcc3(&end, &aimMat.lvec, STDVR_AXIS_RAY_FORWARD_LEN);
+    std3D_DrawWorldLine(&origin, &end, 40, 255, 40, 220, 3.0f);
+
+    // Right.
+    rdVector_Copy3(&end, &origin);
+    rdVector_MultAcc3(&end, &aimMat.rvec, STDVR_AXIS_RAY_SIDE_LEN);
+    std3D_DrawWorldLine(&origin, &end, 255, 40, 40, 220, 3.0f);
+
+    // Up.
+    rdVector_Copy3(&end, &origin);
+    rdVector_MultAcc3(&end, &aimMat.uvec, STDVR_AXIS_RAY_SIDE_LEN);
+    std3D_DrawWorldLine(&origin, &end, 60, 120, 255, 220, 3.0f);
+}
+
 // Debug: Draw controller axes at given world position using immediate mode GL
 // This draws RGB axes (X=Red, Y=Green, Z=Blue) to visualize controller orientation
 void stdVR_DrawDebugControllerAxes(int hand)
@@ -1742,6 +1820,17 @@ void stdVR_SyncConfigFromJkPlayer(void)
         if (stdVR_config.supersampling != stdVR_lastAppliedSupersampling) {
             stdVR_lastAppliedSupersampling = stdVR_config.supersampling;
             stdVR_OpenXR_RequestSupersampleRebuild();
+        }
+    }
+
+    // Display refresh rate. Only ask the runtime when the value changed, because the profile
+    // sync also runs during a level load.
+    {
+        extern float jkPlayer_vrRefreshRate;
+        static float stdVR_lastAppliedRefreshRate = -1.0f;
+        if (jkPlayer_vrRefreshRate > 0.0f && jkPlayer_vrRefreshRate != stdVR_lastAppliedRefreshRate) {
+            stdVR_lastAppliedRefreshRate = jkPlayer_vrRefreshRate;
+            stdVR_ApplyRefreshRate(jkPlayer_vrRefreshRate);
         }
     }
 

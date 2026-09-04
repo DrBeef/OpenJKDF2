@@ -102,6 +102,7 @@ enum
     STDVR_PROMPT_ITEMS       = 12,  // usable inventory item, once the intro chain has finished
     STDVR_PROMPT_DEATH_LOAD  = 13,  // first death
     STDVR_PROMPT_HOLOMAP_GRAB= 14,  // holomap opened for the first time
+    STDVR_PROMPT_HOLOMAP_CLOSE= 15, // follows the grab prompt, while the map is still open
     STDVR_PROMPT_COUNT              // <= 32
 };
 
@@ -114,6 +115,14 @@ void stdVR_ResetPromptsShown(void);
 // Write the taught-prompt bitmask to the profile. Only safe outside gameplay - see the note
 // on the implementation.
 void stdVR_FlushPromptsShown(void);
+
+// Display refresh rate. The runtime must support XR_FB_display_refresh_rate. Quest supports
+// it. When stdVR_GetRefreshRateCount() returns 0 the feature is absent and the VR Options
+// menu hides the setting.
+int stdVR_GetRefreshRateCount(void);
+float stdVR_GetRefreshRateByIndex(int idx);
+float stdVR_GetCurrentRefreshRate(void);
+int stdVR_ApplyRefreshRate(float hz);   // Returns 1 if the runtime accepted the rate
 
 // Utility
 void stdVR_RecenterView(void);
@@ -166,6 +175,12 @@ void stdVR_DrawWeaponCrosshair(void);
 
 // Debug visualization
 void stdVR_DrawDebugControllerAxes(int hand);
+
+// Alignment aid: draw the controller axes as world rays. Forward is green and shows the
+// direction a projectile takes. Lengths are in game units.
+#define STDVR_AXIS_RAY_FORWARD_LEN (0.60f)
+#define STDVR_AXIS_RAY_SIDE_LEN    (0.12f)
+void stdVR_DrawControllerAxisRays(int hand);
 
 // Settings sync functions (to/from jkPlayer settings)
 void stdVR_SyncConfigFromJkPlayer(void);

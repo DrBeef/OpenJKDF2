@@ -139,6 +139,10 @@ void std3D_DebugLogGLState(const char* tag, int eye, int frame);
 void std3D_DebugProbeInternalFbo(const char* tag, int eye, int frame);
 void std3D_DebugClearTestColor(int eye);
 void std3D_DebugSaveInternalFbo(const char* filename);
+// Draw a line between two world positions. VR safe: goes through the crosshair shader, which
+// applies the real per-eye projection. Call it while the VR camera is active.
+void std3D_DrawWorldLine(const rdVector3* pWorldA, const rdVector3* pWorldB,
+                         uint8_t r, uint8_t g, uint8_t b, uint8_t a, float width);
 // Get internal rendering FBO info (for drawing overlays before scene blit)
 int std3D_GetInternalFBO(int* pWidth, int* pHeight);
 // VR HUD rendering - draws overlay buffer to currently bound FBO

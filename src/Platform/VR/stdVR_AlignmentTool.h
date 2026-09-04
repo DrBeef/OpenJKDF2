@@ -15,7 +15,7 @@ extern "C" {
 typedef enum stdVR_AlignmentMode {
     STDVR_ALIGN_POSITION = 0,   // Adjust X/Y/Z position offsets
     STDVR_ALIGN_SCALE = 1,      // Adjust model scale
-    STDVR_ALIGN_PITCH = 2,      // Adjust pitch rotation
+    STDVR_ALIGN_ROTATION = 2,   // Adjust pitch, yaw and roll
     STDVR_ALIGN_MODE_COUNT = 3
 } stdVR_AlignmentMode;
 
@@ -41,6 +41,15 @@ stdVR_AlignmentMode stdVR_AlignmentTool_GetMode(void);
 #ifdef __cplusplus
 }
 #endif
+
+#else // !VR_WEAPON_ALIGNMENT_TOOL
+
+// Stubs so callers can gate on the tool without wrapping every site in an #ifdef.
+static inline void stdVR_AlignmentTool_Startup(void) {}
+static inline void stdVR_AlignmentTool_Update(float deltaSeconds) { (void)deltaSeconds; }
+static inline void stdVR_AlignmentTool_DrawOverlay(void) {}
+static inline void stdVR_AlignmentTool_Toggle(void) {}
+static inline int stdVR_AlignmentTool_IsActive(void) { return 0; }
 
 #endif // VR_WEAPON_ALIGNMENT_TOOL
 

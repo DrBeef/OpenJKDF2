@@ -508,7 +508,9 @@ extern FAST_FUNC void* __aeabi_memcpy8(void* dst, const void* src, size_t len);*
 
 // =============================================================================
 // VR Weapon Alignment Tool - Real-time weapon position adjustment
-// Uncomment to enable for VR development/testing builds ONLY
+// Uncomment for a weapon alignment pass. This adds the "Weapon Alignment (dev)" row to the
+// VR Options menu and the in-headset editor behind it. Keep it commented out otherwise: the
+// tool takes over the controller, so a player must never reach it.
 // =============================================================================
 //#define VR_WEAPON_ALIGNMENT_TOOL
 

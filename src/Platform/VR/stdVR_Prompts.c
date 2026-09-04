@@ -105,6 +105,18 @@ static wchar_t stdVR_promptQueueText[STDVR_PROMPT_QUEUE_MAX][192];
 static int stdVR_promptQueueCount = 0;
 static uint32_t stdVR_promptQueueNextMs = 0;
 
+static void stdVR_Prompts_Format(wchar_t* pOut, const char* pStrKey, const wchar_t* pFallback,
+                                 const wchar_t* pArg1, const wchar_t* pArg2)
+{
+    const wchar_t* pFmt = jkStrings_GetUniString(pStrKey);
+    if (!pFmt) {
+        pFmt = pFallback;
+    }
+
+    jk_snwprintf(pOut, 192, pFmt, pArg1, pArg2);
+    pOut[191] = 0;
+}
+
 static void stdVR_Prompts_ShowOnce(int promptId, const char* pStrKey, const wchar_t* pFallback,
                                    const wchar_t* pArg1, const wchar_t* pArg2)
 {
@@ -122,16 +134,10 @@ static void stdVR_Prompts_ShowOnce(int promptId, const char* pStrKey, const wcha
         return;
     }
 
-    const wchar_t* pFmt = jkStrings_GetUniString(pStrKey);
-    if (!pFmt) {
-        pFmt = pFallback;
-    }
-
     // Formatted at QUEUE time so the text reflects the control scheme as it was when the
     // moment happened, and so a config change mid-queue cannot leave a dangling argument.
     int slot = stdVR_promptQueueCount++;
-    jk_snwprintf(stdVR_promptQueueText[slot], 192, pFmt, pArg1, pArg2);
-    stdVR_promptQueueText[slot][191] = 0;
+    stdVR_Prompts_Format(stdVR_promptQueueText[slot], pStrKey, pFallback, pArg1, pArg2);
     stdVR_promptQueue[slot] = promptId;
 }
 
@@ -163,6 +169,7 @@ static int stdVR_Prompts_IsSatisfied(int promptId)
         case STDVR_PROMPT_HOLOMAP_GRAB: return !stdVR_Map3D_IsVisible()
                                             || (stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_L)
                                              && stdVR_Input_IsButtonDown(STDVR_BTN_GRIP_R));
+        case STDVR_PROMPT_HOLOMAP_CLOSE: return !stdVR_Map3D_IsVisible();
         case STDVR_PROMPT_JUMP:         return stdVR_Input_IsButtonDown(STDVR_BTN_A);
         case STDVR_PROMPT_ACTIVATE:     return stdVR_Input_IsButtonDown(STDVR_BTN_X);
         case STDVR_PROMPT_ALT_FIRE:     return stdVR_Input_IsButtonDown(STDVR_BTN_B);
@@ -212,6 +219,32 @@ static void stdVR_Prompts_TickQueue(uint32_t now)
         _memcpy(stdVR_promptQueueText[i], stdVR_promptQueueText[i + 1],
                 sizeof(stdVR_promptQueueText[i]));
     }
+}
+
+// Show a prompt straight away, ahead of anything queued. For prompts that only make sense
+// while the player is doing the thing right now: by the time a queued prompt reached the
+// front, the player had usually closed the map again.
+static void stdVR_Prompts_ShowOnceNow(int promptId, const char* pStrKey, const wchar_t* pFallback,
+                                      const wchar_t* pArg1, const wchar_t* pArg2)
+{
+    if (stdVR_WasPromptShown(promptId)) {
+        return;
+    }
+
+    wchar_t text[192];
+    stdVR_Prompts_Format(text, pStrKey, pFallback, pArg1, pArg2);
+
+    // Retire whatever is on screen, so the two do not stack.
+    if (stdVR_promptDisplayedId >= 0) {
+        jkDev_ExpireEntryByText(stdVR_promptDisplayedText);
+    }
+
+    uint32_t now = stdPlatform_GetTimeMsec();
+    stdVR_ShowPromptOnce(promptId, text);
+    stdVR_promptDisplayedId = promptId;
+    stdVR_promptDisplayedAtMs = now;
+    _memcpy(stdVR_promptDisplayedText, text, sizeof(stdVR_promptDisplayedText));
+    stdVR_promptQueueNextMs = now + STDVR_PROMPT_SPACING_MS;
 }
 
 // ============================================================================
@@ -386,9 +419,23 @@ static void stdVR_Prompts_TickEvents(void)
     // The map's grab/rotate/scale gesture is not signposted anywhere, so teach it the first
     // time the map is up. The HUD (and so the message log) still draws over the holomap.
     if (!stdVR_WasPromptShown(STDVR_PROMPT_HOLOMAP_GRAB) && stdVR_Map3D_IsVisible()) {
-        stdVR_Prompts_ShowOnce(STDVR_PROMPT_HOLOMAP_GRAB, "GUIEXT_VR_PROMPT_HOLOMAP_GRAB",
+        stdVR_Prompts_ShowOnceNow(STDVR_PROMPT_HOLOMAP_GRAB, "GUIEXT_VR_PROMPT_HOLOMAP_GRAB",
                                L"Use the grip buttons to grab, rotate and scale the map",
                                NULL, NULL);
+    }
+
+    // Follows the grab prompt, while the map is still open. Two ways in: the player performed
+    // the grab gesture, which retires the grab prompt and leaves stdVR_promptDisplayedId
+    // pointing elsewhere, or the normal prompt gap has passed. Without the second test a
+    // player who never grabs would never be told how to close the map.
+    if (!stdVR_WasPromptShown(STDVR_PROMPT_HOLOMAP_CLOSE)
+        && stdVR_WasPromptShown(STDVR_PROMPT_HOLOMAP_GRAB)
+        && stdVR_Map3D_IsVisible()
+        && (stdVR_promptDisplayedId != STDVR_PROMPT_HOLOMAP_GRAB
+            || stdPlatform_GetTimeMsec() >= stdVR_promptQueueNextMs)) {
+        stdVR_Prompts_ShowOnceNow(STDVR_PROMPT_HOLOMAP_CLOSE, "GUIEXT_VR_PROMPT_HOLOMAP_CLOSE",
+                                  L"Click the %ls thumbstick again to close the map",
+                                  stdVR_Prompts_TurnStickWord(), NULL);
     }
 
     // Gated on the intro chain being finished: the player starts holding the field light, so

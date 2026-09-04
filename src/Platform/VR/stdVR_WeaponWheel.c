@@ -435,6 +435,11 @@ void stdVR_WeaponWheel_Update(void)
         return;
     }
 
+    // The alignment tool owns the grips and sticks while it is up.
+    if (stdVR_AlignmentTool_IsActive()) {
+        return;
+    }
+
     // Don't activate wheels while the holomap is showing; dismiss any active wheel
     if (stdVR_Map3D_IsVisible()) {
         if (stdVR_wheelState.activeWheel != STDVR_WHEEL_NONE) {

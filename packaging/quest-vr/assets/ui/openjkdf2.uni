@@ -1,4 +1,4 @@
-MSGS 123          # <--- DON'T FORGET TO UPDATE THIS COUNT
+MSGS 143          # <--- DON'T FORGET TO UPDATE THIS COUNT
 
 #  "<key>"     <unused number>   "<string>"
 
@@ -105,6 +105,9 @@ MSGS 123          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_VR_DOMINANT_HAND_HINT"                  0 "Which hand holds the weapon"
    "GUIEXT_VR_SWAP_STICKS"                         0 "Swap Thumbsticks"
    "GUIEXT_VR_SWAP_STICKS_HINT"                    0 "Move with the right stick and turn with the left"
+   "GUIEXT_VR_ALIGN_TOOL"                            0 "Weapon Alignment (dev)"
+   "GUIEXT_VR_ALIGN_TOOL_HINT"                       0 "In-headset weapon offset editor. Unticking saves the offsets."
+   "GUIEXT_VR_REFRESH_RATE_HINT"                     0 "Display refresh rate. Higher rates use more battery."
    "GUIEXT_VR_PROMPT_SABER"                        0 "Swing the saber to attack"
    "GUIEXT_VR_PROMPT_FISTS"                        0 "Punch forward with either hand to attack"
    "GUIEXT_VR_PROMPT_CROUCH"                        0 "Push the %ls thumbstick down to crouch"
@@ -120,6 +123,7 @@ MSGS 123          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_VR_PROMPT_ITEMS"                          0 "Hold the %ls grip and push the stick to reach your items"
    "GUIEXT_VR_PROMPT_DEATH_LOAD"                     0 "Press Y for the menu, then Load to restore your last save"
    "GUIEXT_VR_PROMPT_HOLOMAP_GRAB"                   0 "Use the grip buttons to grab, rotate and scale the map"
+   "GUIEXT_VR_PROMPT_HOLOMAP_CLOSE"                    0 "Click the %ls thumbstick again to close the map"
    "GUIEXT_VR_MOVE_DIRECTION"                      0 "Controller-Relative Move"
    "GUIEXT_VR_MOVE_DIRECTION_HINT"                 0 "Move relative to controller instead of head direction"
    "GUIEXT_VR_SNAP_TURN"                           0 "Snap Turn"

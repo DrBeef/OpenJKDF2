@@ -527,6 +527,13 @@ static XrAction xrButtonXAction = XR_NULL_HANDLE;
 static XrAction xrButtonYAction = XR_NULL_HANDLE;
 static XrAction xrMenuAction = XR_NULL_HANDLE;
 static XrAction xrHapticAction = XR_NULL_HANDLE;
+
+// Added: XR_FB_display_refresh_rate. The extension is optional, so the entry points come from
+// xrGetInstanceProcAddr and stay null when the runtime does not have it.
+static bool stdVR_bHasRefreshRateExt = false;
+static PFN_xrEnumerateDisplayRefreshRatesFB stdVR_pfnEnumerateDisplayRefreshRates = nullptr;
+static PFN_xrGetDisplayRefreshRateFB stdVR_pfnGetDisplayRefreshRate = nullptr;
+static PFN_xrRequestDisplayRefreshRateFB stdVR_pfnRequestDisplayRefreshRate = nullptr;
 static XrSpace xrAimControllerSpaces[STDVR_CONTROLLER_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
 static XrSpace xrGripControllerSpaces[STDVR_CONTROLLER_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
 static XrPath xrHandPaths[STDVR_CONTROLLER_COUNT];
@@ -781,7 +788,11 @@ extern "C" int stdVR_OpenXR_Init(void)
         if (strcmp(ext.extensionName, XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME) == 0) {
             hasBDControllerInteraction = true;
         }
+        if (strcmp(ext.extensionName, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME) == 0) {
+            stdVR_bHasRefreshRateExt = true;
+        }
     }
+    VR_Log("stdVR_OpenXR: XR_FB_display_refresh_rate: %s\n", stdVR_bHasRefreshRateExt ? "YES" : "NO");
     VR_Log("stdVR_OpenXR: XR_KHR_android_create_instance: %s\n", hasAndroidCreateInstance ? "YES" : "NO");
     VR_Log("stdVR_OpenXR: XR_BD_controller_interaction: %s\n", hasBDControllerInteraction ? "YES" : "NO");
 #endif
@@ -799,6 +810,11 @@ extern "C" int stdVR_OpenXR_Init(void)
         enabledExtensions.push_back(XR_BD_CONTROLLER_INTERACTION_EXTENSION_NAME);
     }
 #endif
+    // Added: display refresh rate control. The extension is optional. The menu option stays
+    // hidden when the runtime does not report it.
+    if (stdVR_bHasRefreshRateExt) {
+        enabledExtensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+    }
 
     XrInstanceCreateInfo createInfo = { XR_TYPE_INSTANCE_CREATE_INFO };
     strcpy(createInfo.applicationInfo.applicationName, "OpenJKDF2");
@@ -1376,6 +1392,9 @@ extern "C" int stdVR_OpenXR_CreateSession(void* pGLContext)
 
     // From here on, if anything fails we need to clean up the session
     XrResult result;
+
+    // Added: read the display refresh rates that the runtime offers. This needs a live session.
+    stdVR_OpenXR_InitRefreshRates();
 
     // Store selected format for MultiView swapchain creation later
     // (declared here to avoid goto jumping over initialization)
@@ -3354,6 +3373,79 @@ extern "C" void stdVR_OpenXR_UpdateInput(void)
     // Compute pressed/released
     stdVR_clientInfo.buttonPressed = stdVR_clientInfo.buttonState & ~prevButtonState;
     stdVR_clientInfo.buttonReleased = prevButtonState & ~stdVR_clientInfo.buttonState;
+}
+
+// ============================================================================
+// Display refresh rate (XR_FB_display_refresh_rate)
+// ============================================================================
+
+// Read the supported rates once, after the session exists. Leaves the list empty when the
+// runtime does not have the extension, which is what hides the menu option.
+void stdVR_OpenXR_InitRefreshRates(void)
+{
+    stdVR_clientInfo.numRefreshRates = 0;
+    stdVR_clientInfo.currentRefreshRate = 0.0f;
+
+    if (!stdVR_bHasRefreshRateExt || xrInstance == XR_NULL_HANDLE || xrSession == XR_NULL_HANDLE) {
+        return;
+    }
+
+    xrGetInstanceProcAddr(xrInstance, "xrEnumerateDisplayRefreshRatesFB",
+                          (PFN_xrVoidFunction*)&stdVR_pfnEnumerateDisplayRefreshRates);
+    xrGetInstanceProcAddr(xrInstance, "xrGetDisplayRefreshRateFB",
+                          (PFN_xrVoidFunction*)&stdVR_pfnGetDisplayRefreshRate);
+    xrGetInstanceProcAddr(xrInstance, "xrRequestDisplayRefreshRateFB",
+                          (PFN_xrVoidFunction*)&stdVR_pfnRequestDisplayRefreshRate);
+
+    if (!stdVR_pfnEnumerateDisplayRefreshRates) {
+        VR_Log("stdVR_OpenXR: refresh rate extension present but entry points missing\n");
+        return;
+    }
+
+    uint32_t count = 0;
+    if (XR_FAILED(stdVR_pfnEnumerateDisplayRefreshRates(xrSession, 0, &count, nullptr)) || count == 0) {
+        return;
+    }
+    if (count > STDVR_MAX_REFRESH_RATES) {
+        count = STDVR_MAX_REFRESH_RATES;
+    }
+
+    if (XR_FAILED(stdVR_pfnEnumerateDisplayRefreshRates(xrSession, count, &count,
+                                                        stdVR_clientInfo.aRefreshRates))) {
+        return;
+    }
+    stdVR_clientInfo.numRefreshRates = (int)count;
+
+    if (stdVR_pfnGetDisplayRefreshRate) {
+        float current = 0.0f;
+        if (XR_SUCCEEDED(stdVR_pfnGetDisplayRefreshRate(xrSession, &current))) {
+            stdVR_clientInfo.currentRefreshRate = current;
+        }
+    }
+
+    for (int i = 0; i < stdVR_clientInfo.numRefreshRates; i++) {
+        VR_Log("stdVR_OpenXR: refresh rate [%d] = %.1f Hz\n", i, stdVR_clientInfo.aRefreshRates[i]);
+    }
+    VR_Log("stdVR_OpenXR: current refresh rate = %.1f Hz\n", stdVR_clientInfo.currentRefreshRate);
+}
+
+// Ask the runtime for a rate. Returns 1 on success. The runtime can refuse, for example when
+// the battery is low, so the caller must not assume the rate changed.
+int stdVR_OpenXR_RequestRefreshRate(float hz)
+{
+    if (!stdVR_pfnRequestDisplayRefreshRate || xrSession == XR_NULL_HANDLE || hz <= 0.0f) {
+        return 0;
+    }
+
+    XrResult result = stdVR_pfnRequestDisplayRefreshRate(xrSession, hz);
+    if (XR_FAILED(result)) {
+        VR_Log("stdVR_OpenXR: request %.1f Hz failed (%d)\n", hz, result);
+        return 0;
+    }
+
+    stdVR_clientInfo.currentRefreshRate = hz;
+    VR_Log("stdVR_OpenXR: refresh rate set to %.1f Hz\n", hz);
+    return 1;
 }
 
 extern "C" void stdVR_OpenXR_TriggerHaptic(int hand, float amplitude, float duration, float frequency)

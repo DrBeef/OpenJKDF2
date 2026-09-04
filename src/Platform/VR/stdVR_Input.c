@@ -46,6 +46,11 @@ static int stdVR_prevWeaponTriggered = 0;
 #define STDVR_CROUCH_THRESHOLD 0.9f
 #define STDVR_STICK_AXIS_DOMINANCE 2.0f
 
+// Alignment tool: trigger edge state for weapon stepping
+static int stdVR_alignNextTriggerHeld = 0;
+static int stdVR_alignPrevTriggerHeld = 0;
+#define STDVR_ALIGN_TRIGGER_THRESHOLD 0.7f
+
 // Crouch toggle via right thumbstick down
 static int stdVR_crouchToggled = 0;
 static int stdVR_crouchToggleState = 0;  // debounce: 0 = neutral, -1 = already toggled this push
@@ -90,7 +95,7 @@ void stdVR_Input_ProcessSnapTurn(void)
     }
 
     // Added: Suppress turning while weapon wheel is active
-    if (stdVR_WeaponWheel_IsActive()) {
+    if (stdVR_WeaponWheel_IsActive() || stdVR_AlignmentTool_IsActive()) {
         stdVR_snapTurnPending = 0;
         return;
     }
@@ -138,7 +143,7 @@ void stdVR_Input_GetMovementDirection(float* pMoveX, float* pMoveY)
     // off-hand stick is the wheel's page-flip control, so letting it also strafe would send
     // the player sliding sideways every time they change page. Turning is suppressed the
     // same way in stdVR_Input_GetSmoothTurnSpeed.
-    if (stdVR_WeaponWheel_IsActive()) {
+    if (stdVR_WeaponWheel_IsActive() || stdVR_AlignmentTool_IsActive()) {
         *pMoveX = 0.0f;
         *pMoveY = 0.0f;
         return;
@@ -183,7 +188,7 @@ void stdVR_Input_GetMovementDirection(float* pMoveX, float* pMoveY)
     }
 
     // Added: Suppress movement while weapon wheel is active
-    if (stdVR_WeaponWheel_IsActive()) {
+    if (stdVR_WeaponWheel_IsActive() || stdVR_AlignmentTool_IsActive()) {
         *pMoveX = 0.0f;
         *pMoveY = 0.0f;
         return;
@@ -218,9 +223,34 @@ void stdVR_Input_MapToGame(void)
     float moveX = 0.0f, moveY = 0.0f;
     stdVR_Input_GetMovementDirection(&moveX, &moveY);
 
-    // Weapon switching via dominant hand thumbstick up/down
-    // Disabled while weapon wheel is active (thumbstick used for wheel selection)
-    if (!stdVR_WeaponWheel_IsActive()) {
+    // Added: while the alignment tool is open the triggers step through the arsenal (right =
+    // next, left = previous), so a tuning pass can reach every weapon without closing the
+    // tool. The triggers are free there because firing is suppressed, and it keeps the sticks
+    // entirely for the offsets.
+    if (stdVR_AlignmentTool_IsActive()) {
+        int bNext = (stdVR_clientInfo.triggerRight > STDVR_ALIGN_TRIGGER_THRESHOLD);
+        int bPrev = (stdVR_clientInfo.triggerLeft  > STDVR_ALIGN_TRIGGER_THRESHOLD);
+
+        if (bNext && !stdVR_alignNextTriggerHeld) {
+            stdVR_nextWeaponTriggered = 1;
+            stdVR_TriggerHaptic(STDVR_CONTROLLER_RIGHT, 0.3f, 0.05f, 100.0f);
+        }
+        if (bPrev && !stdVR_alignPrevTriggerHeld) {
+            stdVR_prevWeaponTriggered = 1;
+            stdVR_TriggerHaptic(STDVR_CONTROLLER_LEFT, 0.3f, 0.05f, 100.0f);
+        }
+        stdVR_alignNextTriggerHeld = bNext;
+        stdVR_alignPrevTriggerHeld = bPrev;
+    }
+    else {
+        stdVR_alignNextTriggerHeld = 0;
+        stdVR_alignPrevTriggerHeld = 0;
+    }
+
+    // Turn stick DOWN toggles crouch. Pushing UP does nothing: weapon selection is the
+    // wheel's job, and a nudged stick flick kept switching weapons by accident. Disabled
+    // while a wheel or the alignment tool is up - both own the sticks.
+    if (!stdVR_WeaponWheel_IsActive() && !stdVR_AlignmentTool_IsActive()) {
         // Use the turn stick's Y axis (right stick by default, left if the sticks are swapped
         // - analogTurn is already routed by stdVR_OpenXR_UpdateInput)
         float weaponSwitchY = stdVR_clientInfo.analogTurn[1];  // Y axis of turn stick
@@ -241,14 +271,7 @@ void stdVR_Input_MapToGame(void)
             weaponSwitchY = 0.0f;
         }
 
-        if (weaponSwitchY > STDVR_WEAPON_SWITCH_THRESHOLD) {
-            // Thumbstick pushed up - next weapon
-            if (stdVR_weaponSwitchState != 1) {
-                stdVR_nextWeaponTriggered = 1;
-                stdVR_weaponSwitchState = 1;
-                stdVR_TriggerHaptic(stdVR_config.dominantHand, 0.3f, 0.05f, 100.0f);
-            }
-        } else if (weaponSwitchY < -STDVR_CROUCH_THRESHOLD) {
+        if (weaponSwitchY < -STDVR_CROUCH_THRESHOLD) {
             // Thumbstick pushed down - toggle crouch
             if (stdVR_crouchToggleState != -1) {
                 stdVR_crouchToggled = !stdVR_crouchToggled;
@@ -486,7 +509,7 @@ float stdVR_Input_GetSmoothTurnSpeed(void)
     }
 
     // Added: Suppress smooth turn while weapon wheel is active
-    if (stdVR_WeaponWheel_IsActive()) {
+    if (stdVR_WeaponWheel_IsActive() || stdVR_AlignmentTool_IsActive()) {
         return 0.0f;
     }
 
@@ -561,12 +584,8 @@ int stdVR_Input_IsNextWeaponTriggered(void)
     if (!stdVR_bEnabled) {
         return 0;
     }
-#ifdef VR_WEAPON_ALIGNMENT_TOOL
-    // Disable weapon switching while alignment tool is active
-    if (stdVR_AlignmentTool_IsActive()) {
-        return 0;
-    }
-#endif
+    // Altered: weapon switching is now the ONE game action allowed while the alignment tool
+    // is open, so a tuning pass can step through weapons without closing the tool.
     return stdVR_nextWeaponTriggered;
 }
 
@@ -576,12 +595,8 @@ int stdVR_Input_IsPrevWeaponTriggered(void)
     if (!stdVR_bEnabled) {
         return 0;
     }
-#ifdef VR_WEAPON_ALIGNMENT_TOOL
-    // Disable weapon switching while alignment tool is active
-    if (stdVR_AlignmentTool_IsActive()) {
-        return 0;
-    }
-#endif
+    // Altered: weapon stepping is allowed while the alignment tool is open - see the trigger
+    // handling in stdVR_Input_MapToGame.
     return stdVR_prevWeaponTriggered;
 }
 

@@ -42,6 +42,11 @@ int stdVR_OpenXR_GetMultiViewFBO(void);
 // (VR render scale). Safe to call from any thread/path; the rebuild itself is deferred to
 // between-frames (BeginFrame). No-op unless a MultiView session is running.
 void stdVR_OpenXR_RequestSupersampleRebuild(void);
+
+// Display refresh rate (XR_FB_display_refresh_rate). The rate list is empty when the runtime
+// does not support the extension.
+void stdVR_OpenXR_InitRefreshRates(void);
+int stdVR_OpenXR_RequestRefreshRate(float hz);
 void stdVR_OpenXR_GetStereoOffsets(float* leftOffset, float* rightOffset);
 
 // Tracking

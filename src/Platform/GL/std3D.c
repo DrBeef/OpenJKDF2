@@ -3621,6 +3621,62 @@ void std3D_DebugSaveInternalFbo(const char* filename)
     glBindFramebuffer(GL_FRAMEBUFFER, prevFbo);
 }
 
+// Added: draw a straight line between two WORLD positions, for alignment aids.
+// Uses the crosshair shader, which is the one shader that applies the real per-eye projection
+// from the MultiView UBOs. The vertices must be in ENGINE VIEW space, so this transforms the
+// two world points by the current camera view matrix first.
+// Call this while the VR camera is active, before sithCamera_RestoreVRView.
+void std3D_DrawWorldLine(const rdVector3* pWorldA, const rdVector3* pWorldB,
+                         uint8_t r, uint8_t g, uint8_t b, uint8_t a, float width)
+{
+    if (Main_bHeadless || !programCrosshair || !pWorldA || !pWorldB) return;
+
+    extern rdCamera* rdCamera_pCurCamera;
+    if (!rdCamera_pCurCamera) return;
+
+    rdVector3 viewA, viewB;
+    rdMatrix_TransformPoint34(&viewA, pWorldA, &rdCamera_pCurCamera->view_matrix);
+    rdMatrix_TransformPoint34(&viewB, pWorldB, &rdCamera_pCurCamera->view_matrix);
+
+    glDepthMask(GL_FALSE);
+    glDisable(GL_DEPTH_TEST);   // an alignment aid must stay visible through the weapon model
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glLineWidth(width);
+
+    glUseProgram(programCrosshair);
+
+    // The MultiView branch of crosshair_v.glsl ignores mvp and uses the UBO matrices. Send an
+    // identity anyway so the single-view branch stays valid.
+    float identity[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
+    if (programCrosshair_uniform_mvp != -1) {
+        glUniformMatrix4fv(programCrosshair_uniform_mvp, 1, GL_FALSE, identity);
+    }
+
+    typedef struct { float x, y, z; uint8_t cr, cg, cb, ca; } LineVert;
+    LineVert verts[2] = {
+        { viewA.x, viewA.y, viewA.z, r, g, b, a },
+        { viewB.x, viewB.y, viewB.z, r, g, b, a },
+    };
+
+    glEnableVertexAttribArray(programCrosshair_attribute_coord3d);
+    glEnableVertexAttribArray(programCrosshair_attribute_v_color);
+
+    glBindBuffer(GL_ARRAY_BUFFER, menu_vbo_all);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+    glVertexAttribPointer(programCrosshair_attribute_coord3d, 3, GL_FLOAT, GL_FALSE, sizeof(LineVert), (GLvoid*)0);
+    glVertexAttribPointer(programCrosshair_attribute_v_color, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(LineVert), (GLvoid*)(3 * sizeof(float)));
+
+    glDrawArrays(GL_LINES, 0, 2);
+
+    glDisableVertexAttribArray(programCrosshair_attribute_coord3d);
+    glDisableVertexAttribArray(programCrosshair_attribute_v_color);
+
+    glLineWidth(1.0f);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+}
+
 // Added: Get internal rendering FBO info
 int std3D_GetInternalFBO(int* pWidth, int* pHeight)
 {

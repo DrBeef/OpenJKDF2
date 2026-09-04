@@ -93,6 +93,8 @@ int jkPlayer_vrWeaponCrosshair = 0;     // Show in-world weapon crosshair (0/1)
 int jkPlayer_vrDominantHand = 1;        // 0=left, 1=right
 int jkPlayer_vrSwapSticks = 0;          // Move on the right stick, turn on the left
 int jkPlayer_vrPromptsShown = 0;        // Bitmask of instructional prompts already taught
+int jkPlayer_vrAlignTool = 0;           // Weapon alignment tool active (dev tool, cvar-driven)
+float jkPlayer_vrRefreshRate = 0.0f;    // Display refresh rate in Hz (0 = keep the runtime default)
 int jkPlayer_vrMoveDirection = 1;       // 0=head, 1=controller
 float jkPlayer_vrSupersampling = 1.0f;  // VR render scale multiplier
 float jkPlayer_vr6DoFScale = 1.0f;      // 6DoF head->body movement scale (0 = disabled / camera-float)
@@ -120,6 +122,12 @@ static rdModel3* pVRFistsModel3 = NULL;
 static rdThing vrOffhandThing;
 static int bVROffhandReady = 0;
 static rdVector3 vrOffhandLhandOffset = {0}; // Cached K_Lhand bind-pose offset for centering
+// Model that vrOffhandThing is bound to. Normally the fists model, but some weapons carry a
+// better off-hand in their own POV model, so the binding can change while playing.
+static rdModel3* pVROffhandBoundModel = NULL;
+// K_Lhand node index inside pVROffhandBoundModel. It differs per model: 2 in the fists, 3 in
+// the sequencer, and the gun models have no left hand at all.
+static int vrOffhandLhandNodeIdx = -1;
 
 // VR "hands only" rendering: show just the hand by suppressing the meshes of its ancestor
 // arm nodes (shoulder/upper-arm/forearm). Amputation can't do this because it hides a node AND
@@ -127,7 +135,26 @@ static rdVector3 vrOffhandLhandOffset = {0}; // Cached K_Lhand bind-pose offset 
 // own mesh when meshIdx == -1 (it still recurses into children), so temporarily clearing each
 // ancestor's meshIdx hides the arm while keeping the hand (and fingers) visible.
 #define JKPLAYER_VR_MAX_ARM_NODES 16
+
+// Scale for the bare off-hand model. 0.9 makes it 10% smaller than the weapon hand.
+#define JKPLAYER_VR_OFFHAND_SCALE (0.9f)
 typedef struct { rdHierarchyNode* node; int meshIdx; } jkPlayerVRSavedMesh;
+
+// Find a hierarchy node by name. The hand node index is NOT the same in every POV model:
+// the fists put K_Rhand at 5, the pistols and rifles at 2, the sequencer at 7. Hardcoding an
+// index hid nothing on the gun models, which have only 4 nodes.
+static int jkPlayer_VRFindNodeByName(rdModel3* model, const char* pName)
+{
+    if (!model || !pName) return -1;
+
+    for (int i = 0; i < model->numHierarchyNodes; i++) {
+        if (!__strcmpi(model->hierarchyNodes[i].name, pName)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
 
 static int jkPlayer_VRHideArmKeepHand(rdModel3* model, int handNodeIdx, jkPlayerVRSavedMesh* saved)
 {
@@ -287,6 +314,10 @@ void jkPlayer_StartupVars()
     // Smooths the fixed-step physics staircase at the 72/90Hz VR refresh (sithCamera.c)
     sithCvar_RegisterBool("g_vrCameraInterp",            1,                         &jkPlayer_vrCameraInterp,           CVARFLAG_LOCAL);
     sithCvar_RegisterBool("g_vrSwapSticks",              0,                         &jkPlayer_vrSwapSticks,             CVARFLAG_LOCAL);
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    // Dev tool: 1 opens the weapon alignment editor, 0 closes it AND writes the offsets JSON
+    sithCvar_RegisterBool("g_vrAlignTool",               0,                         &jkPlayer_vrAlignTool,              CVARFLAG_LOCAL);
+#endif
     // Quake-style ground movement ramps (sithPhysics_VRQuakeGroundMove)
     sithCvar_RegisterBool("g_vrMoveQuakeFeel",           1,                         &jkPlayer_vrMoveQuakeFeel,          CVARFLAG_LOCAL);
     sithCvar_RegisterFlex("g_vrMoveAccel",               14.0,                      &jkPlayer_vrMoveAccel,              CVARFLAG_LOCAL);
@@ -343,6 +374,7 @@ void jkPlayer_ResetVars()
     jkPlayer_vrDominantHand = 1;
     jkPlayer_vrSwapSticks = 0;
     jkPlayer_vrPromptsShown = 0;
+    jkPlayer_vrRefreshRate = 0.0f;
     jkPlayer_vrMoveDirection = 1;
     jkPlayer_vrSupersampling = 1.0f;
     jkPlayer_vr6DoFScale = 1.0f;
@@ -447,6 +479,8 @@ void jkPlayer_Shutdown()
         bVROffhandReady = 0;
     }
     pVRFistsModel3 = NULL;
+    pVROffhandBoundModel = NULL;
+    vrOffhandLhandNodeIdx = -1;
     stdVR_WeaponWheel_ResetCache();
 #endif
 }
@@ -704,6 +738,7 @@ void jkPlayer_WriteConf(wchar_t *name)
         stdJSON_SaveInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
         stdJSON_SaveInt(ext_fpath, "vrSwapSticks", jkPlayer_vrSwapSticks);
         stdJSON_SaveInt(ext_fpath, "vrPromptsShown", jkPlayer_vrPromptsShown);
+        stdJSON_SaveFloat(ext_fpath, "vrRefreshRate", jkPlayer_vrRefreshRate);
         stdJSON_SaveInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
         // Added: these three were modifiable in the VR options menu but never
         // written back, so they reverted to defaults every session.
@@ -918,6 +953,7 @@ int jkPlayer_ReadConf(wchar_t *name)
         jkPlayer_vrDominantHand = stdJSON_GetInt(ext_fpath, "vrDominantHand", jkPlayer_vrDominantHand);
         jkPlayer_vrSwapSticks = stdJSON_GetInt(ext_fpath, "vrSwapSticks", jkPlayer_vrSwapSticks);
         jkPlayer_vrPromptsShown = stdJSON_GetInt(ext_fpath, "vrPromptsShown", jkPlayer_vrPromptsShown);
+        jkPlayer_vrRefreshRate = stdJSON_GetFloat(ext_fpath, "vrRefreshRate", jkPlayer_vrRefreshRate);
         jkPlayer_vrWeaponCrosshair = stdJSON_GetInt(ext_fpath, "vrWeaponCrosshair", jkPlayer_vrWeaponCrosshair);
         // Added: mirror the write-side additions. vrSmoothTurnSpeed was also
         // missing here even though the writer already saved it.
@@ -1020,6 +1056,7 @@ void jkPlayer_SetPovModel(jkPlayerInfo *info, rdModel3 *model)
         extern void VR_Log(const char* fmt, ...);
         VR_Log("SetPovModel: '%s' (curWeapon=%d, pVRFistsModel3=%p)\n",
             model->filename, info->actorThing ? sithInventory_GetCurWeapon(info->actorThing) : -1, (void*)pVRFistsModel3);
+
     }
 
 #endif
@@ -1218,18 +1255,30 @@ void jkPlayer_DrawPov()
                 bVRHideLeftArm = 1;
             if (curWeap == SITHBIN_THERMAL_DETONATOR)
                 bVRHideLeftArm = 1;
+            // Added: the MotS thrown weapons hold the item in one hand, so the off-hand arm
+            // dangles the same way the DF2 detonator did.
+            if (curWeap == SITHBIN_MOTS_THERMAL_DETONATOR
+             || curWeap == SITHBIN_MOTS_SEQUENCER_CHARGE
+             || curWeap == SITHBIN_MOTS_FLASH_BOMB
+             || curWeap == SITHBIN_MOTS_MANUAL_SEQUENCER)
+                bVRHideLeftArm = 1;
             if (curWeap == SITHBIN_FISTS || curWeap == SITHBIN_MOTS_FISTS) {
                 bVRHideLeftArm = 1;
-                bVRFistsHandsOnly = 1;   // fists: show only the hand, not the whole arm
             }
+
+            // Altered: hide the weapon-hand arm for EVERY motion weapon, not only the fists.
+            // The arm cannot follow a hand that a tracked controller drives, so a floating
+            // hand holding the weapon reads better than an arm at the wrong angle.
+            bVRFistsHandsOnly = 1;
         }
         if (bVRHideLeftArm
             && playerThings[playerThingIdx].povModel.amputatedJoints
             && playerThings[playerThingIdx].povModel.model3)
         {
             rdModel3* model = playerThings[playerThingIdx].povModel.model3;
-            if (model->numHierarchyNodes > 2) {
-                rdHierarchyNode* node = &model->hierarchyNodes[2]; // K_Lhand
+            int lhandIdx = jkPlayer_VRFindNodeByName(model, "k_lhand");
+            if (lhandIdx >= 0) {
+                rdHierarchyNode* node = &model->hierarchyNodes[lhandIdx];
                 // Walk up to the highest ancestor that still has a parent (stop at root's child)
                 while (node->parent && node->parent->parent) {
                     node = node->parent;
@@ -1239,12 +1288,16 @@ void jkPlayer_DrawPov()
             }
         }
 
-        // Fists: hide the dominant arm segments so only the hand (K_Rhand, node 5) shows.
+        // Hide the weapon-hand arm so only the hand and the weapon show. The hand node is
+        // looked up by name because its index differs per model.
         jkPlayerVRSavedMesh vrArmSaved[JKPLAYER_VR_MAX_ARM_NODES];
         int vrArmSavedCount = 0;
         if (bVRFistsHandsOnly && playerThings[playerThingIdx].povModel.model3) {
-            vrArmSavedCount = jkPlayer_VRHideArmKeepHand(
-                playerThings[playerThingIdx].povModel.model3, 5, vrArmSaved);
+            rdModel3* pPovModel = playerThings[playerThingIdx].povModel.model3;
+            int rhandIdx = jkPlayer_VRFindNodeByName(pPovModel, "k_rhand");
+            if (rhandIdx >= 0) {
+                vrArmSavedCount = jkPlayer_VRHideArmKeepHand(pPovModel, rhandIdx, vrArmSaved);
+            }
         }
 
         // VR motion controls: disable software backface culling for the weapon model.
@@ -1324,12 +1377,28 @@ void jkPlayer_DrawPov()
                 }
             }
 
-            // Initialize the off-hand rdThing when we have the fists model but haven't set up yet
-            if (pVRFistsModel3 && !bVROffhandReady) {
+            // Pick the model that supplies the off-hand. Added: the Manual Sequencer holds the
+            // charge in its off hand, and its own POV model has that hand posed correctly, so
+            // the generic fist looks wrong. Use the weapon's own model for it.
+            rdModel3* pVROffhandSrc = pVRFistsModel3;
+            {
+                sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
+                int offhandWeap = sithInventory_GetCurWeapon(pActorThing);
+                if (offhandWeap == SITHBIN_MOTS_MANUAL_SEQUENCER
+                    && playerThings[playerThingIdx].povModel.model3
+                    && playerThings[playerThingIdx].povModel.model3->numHierarchyNodes > 5)
+                {
+                    pVROffhandSrc = playerThings[playerThingIdx].povModel.model3;
+                }
+            }
+
+            // Bind the off-hand rdThing, and rebind when the source model changes
+            if (pVROffhandSrc && (!bVROffhandReady || pVROffhandSrc != pVROffhandBoundModel)) {
                 sithThing* pActorThing = playerThings[playerThingIdx].actorThing;
                 rdThing_NewEntry(&vrOffhandThing, pActorThing);
-                if (rdThing_SetModel3(&vrOffhandThing, pVRFistsModel3)) {
+                if (rdThing_SetModel3(&vrOffhandThing, pVROffhandSrc)) {
                     bVROffhandReady = 1;
+                    pVROffhandBoundModel = pVROffhandSrc;
 
                     // Compute K_Lhand bind-pose offset: build hierarchy matrices
                     // with identity to get the model-space position of K_Lhand (node 2).
@@ -1340,8 +1409,11 @@ void jkPlayer_DrawPov()
                     vrOffhandThing.frameTrue = 0;
                     rdPuppet_BuildJointMatrices(&vrOffhandThing, &identityMat);
 
-                    if (pVRFistsModel3->numHierarchyNodes > 2) {
-                        rdVector_Copy3(&vrOffhandLhandOffset, &vrOffhandThing.hierarchyNodeMatrices[2].scale);
+                    int srcLhandIdx = jkPlayer_VRFindNodeByName(pVROffhandSrc, "k_lhand");
+                    vrOffhandLhandNodeIdx = srcLhandIdx;
+                    if (srcLhandIdx >= 0) {
+                        rdVector_Copy3(&vrOffhandLhandOffset,
+                                       &vrOffhandThing.hierarchyNodeMatrices[srcLhandIdx].scale);
                     } else {
                         rdVector_Zero3(&vrOffhandLhandOffset);
                     }
@@ -1368,6 +1440,14 @@ void jkPlayer_DrawPov()
                         std3D_SetFrontFaceCW(1);
                     }
 
+                    // Added: the bare off-hand reads slightly too large next to the weapon
+                    // hand, so scale the model down. This must happen BEFORE the pre-translate
+                    // below: the pre-translate rotates the K_Lhand offset through this basis,
+                    // so scaling first keeps the hand exactly on the controller.
+                    rdVector_Scale3Acc(&offhandViewMat.rvec, JKPLAYER_VR_OFFHAND_SCALE);
+                    rdVector_Scale3Acc(&offhandViewMat.lvec, JKPLAYER_VR_OFFHAND_SCALE);
+                    rdVector_Scale3Acc(&offhandViewMat.uvec, JKPLAYER_VR_OFFHAND_SCALE);
+
                     // Translate so K_Lhand is centered on the controller position
                     rdVector3 negLhandOffset;
                     rdVector_Neg3(&negLhandOffset, &vrOffhandLhandOffset);
@@ -1376,8 +1456,9 @@ void jkPlayer_DrawPov()
                     // Amputate K_Rhand (node 5) chain — always hide the weapon arm,
                     // show only the bare off-hand arm
                     int offhandAmputatedNodeIdx = -1;
-                    if (pVRFistsModel3->numHierarchyNodes > 5) {
-                        rdHierarchyNode* pNode = &pVRFistsModel3->hierarchyNodes[5];
+                    int offhandRhandIdx = jkPlayer_VRFindNodeByName(pVROffhandBoundModel, "k_rhand");
+                    if (offhandRhandIdx >= 0) {
+                        rdHierarchyNode* pNode = &pVROffhandBoundModel->hierarchyNodes[offhandRhandIdx];
                         while (pNode->parent && pNode->parent->parent) {
                             pNode = pNode->parent;
                         }
@@ -1388,7 +1469,10 @@ void jkPlayer_DrawPov()
                     // Hands-only: hide the off-hand arm segments so only K_Lhand (node 2) shows.
                     jkPlayerVRSavedMesh vrOffhandArmSaved[JKPLAYER_VR_MAX_ARM_NODES];
                     int vrOffhandArmSavedCount =
-                        jkPlayer_VRHideArmKeepHand(pVRFistsModel3, 2, vrOffhandArmSaved);
+                        (vrOffhandLhandNodeIdx >= 0)
+                            ? jkPlayer_VRHideArmKeepHand(pVROffhandBoundModel, vrOffhandLhandNodeIdx,
+                                                         vrOffhandArmSaved)
+                            : 0;
 
                     // Force hierarchy matrix rebuild for off-hand position
                     vrOffhandThing.frameTrue = 0;
@@ -1437,6 +1521,13 @@ void jkPlayer_DrawPov()
 #endif
 
 #ifdef PLATFORM_VR
+        // Added: alignment aid. While the weapon alignment tool is open, draw the controller
+        // axes as rays. The green forward ray is the path a projectile takes, so the model can
+        // be lined up against it.
+        if (stdVR_bEnabled && stdVR_AlignmentTool_IsActive()) {
+            stdVR_DrawControllerAxisRays(stdVR_GetDominantHand());
+        }
+
         // Debug: Draw controller axes to visualize tracking
 /*        if (stdVR_bEnabled) {
             int hand = stdVR_GetDominantHand();

@@ -188,6 +188,8 @@ extern int jkPlayer_vrWeaponCrosshair;   // Show in-world weapon crosshair (0/1)
 extern int jkPlayer_vrDominantHand;      // 0=left, 1=right
 extern int jkPlayer_vrSwapSticks;        // Move on the right stick, turn on the left
 extern int jkPlayer_vrPromptsShown;      // Bitmask of instructional prompts already taught
+extern int jkPlayer_vrAlignTool;         // Weapon alignment tool active (dev tool, cvar-driven)
+extern float jkPlayer_vrRefreshRate;     // Display refresh rate in Hz (0 = keep the runtime default)
 extern int jkPlayer_vrMoveDirection;     // 0=head, 1=controller
 extern float jkPlayer_vrSupersampling;   // VR render scale multiplier
 extern float jkPlayer_vr6DoFScale;       // 6DoF head->body movement scale (0 = disabled / camera-float)

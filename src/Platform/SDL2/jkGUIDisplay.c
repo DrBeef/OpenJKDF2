@@ -40,6 +40,7 @@ static wchar_t vr_smooth_speed_text[8] = {0};
 static wchar_t vr_height_text[16] = {0};
 static wchar_t vr_ss_text[256] = {0};
 static wchar_t vr_pitch_text[16] = {0};
+static wchar_t vr_refresh_text[32] = {0};
 // HUD layout tuning sliders: per-field label + value text, plus slider config and the
 // jkPlayer globals each slider targets. base/inc/n map slider step <-> value consistently
 // across the draw callback, the populate-on-show, and the save-on-OK.
@@ -92,6 +93,10 @@ enum {
     VR_EL_PITCH_SLIDER,      // Weapon Pitch: slider (-25 .. +25 deg)
     VR_EL_PITCH_VAL,         // Weapon Pitch: value text
     VR_EL_SWAP_STICKS,       // Swap thumbsticks (move <-> turn)
+    VR_EL_REFRESH_RATE,      // Display refresh rate, hidden if the runtime has no list
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    VR_EL_ALIGN_TOOL,        // dev builds only - see engine_config.h
+#endif
     VR_EL_HUD_LAYOUT_BTN,    // opens the HUD Layout sub-page
     VR_EL_END,
 };
@@ -138,6 +143,18 @@ static jkGuiElement jkGuiDisplay_aElements[VR_EL_END + 1] = {
 
     // Left column: swap the movement and turning thumbsticks
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_SWAP_STICKS",     0, {30, 345, 270, 20},  1, 0, "GUIEXT_VR_SWAP_STICKS_HINT",      0, 0, 0, {0}, 0},
+
+    // Display refresh rate. Text label, because the list of rates comes from the runtime and
+    // its length is not known until the session exists. A click steps to the next rate.
+    { ELEMENT_TEXTBUTTON,  501,          0, NULL,                        0, {30, 375, 270, 24},  1, 0, "GUIEXT_VR_REFRESH_RATE_HINT",     0, 0, 0, {0}, 0},
+
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    // Development builds only: opens the in-headset weapon alignment editor. Ticking this and
+    // pressing OK activates it; unticking it deactivates AND writes jkdf2xr_vr_weapons.json.
+    // The whole entry compiles out when VR_WEAPON_ALIGNMENT_TOOL is off, so a shipping build
+    // never shows it.
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_VR_ALIGN_TOOL",      0, {30, 405, 270, 20},  1, 0, "GUIEXT_VR_ALIGN_TOOL_HINT",       0, 0, 0, {0}, 0},
+#endif
 
     // Button to open the dedicated HUD Layout sub-page (full-width sliders need their own page).
     // Placed on the bottom button row (between Cancel and OK) to free the left column for sliders.
@@ -540,6 +557,28 @@ int jkGuiDisplay_ShowAdvanced()
 
 #endif // !PLATFORM_VR (ShowAdvanced)
 
+// Display refresh rate row. The runtime owns the list of rates, so the menu shows the rate
+// that the index selects and hides the row when the runtime reports no rates.
+static int jkGuiDisplay_vrRefreshIdx = 0;
+
+static void jkGuiDisplay_VRUpdateRefreshLabel(void)
+{
+    int count = stdVR_GetRefreshRateCount();
+    if (count <= 0) {
+        jkGuiDisplay_aElements[VR_EL_REFRESH_RATE].bIsVisible = 0;
+        return;
+    }
+
+    if (jkGuiDisplay_vrRefreshIdx < 0 || jkGuiDisplay_vrRefreshIdx >= count) {
+        jkGuiDisplay_vrRefreshIdx = 0;
+    }
+
+    jk_snwprintf(vr_refresh_text, 32, L"Refresh Rate: %d Hz",
+                 (int)(stdVR_GetRefreshRateByIndex(jkGuiDisplay_vrRefreshIdx) + 0.5f));
+    jkGuiDisplay_aElements[VR_EL_REFRESH_RATE].wstr = vr_refresh_text;
+    jkGuiDisplay_aElements[VR_EL_REFRESH_RATE].bIsVisible = 1;
+}
+
 int jkGuiDisplay_Show()
 {
 #ifdef PLATFORM_VR
@@ -559,6 +598,22 @@ int jkGuiDisplay_Show()
     jkGuiDisplay_aElements[VR_EL_MOVE_DIRECTION].selectedTextEntry    = jkPlayer_vrMoveDirection;
     jkGuiDisplay_aElements[VR_EL_SNAP_TURN].selectedTextEntry         = (jkPlayer_vrSnapTurnAngle > 0) ? 1 : 0;
     jkGuiDisplay_aElements[VR_EL_SWAP_STICKS].selectedTextEntry       = jkPlayer_vrSwapSticks;
+
+    // Start on the rate that the profile holds, or on the rate the runtime uses now.
+    {
+        float want = (jkPlayer_vrRefreshRate > 0.0f) ? jkPlayer_vrRefreshRate : stdVR_GetCurrentRefreshRate();
+        jkGuiDisplay_vrRefreshIdx = 0;
+        for (int i = 0; i < stdVR_GetRefreshRateCount(); i++) {
+            if (stdVR_GetRefreshRateByIndex(i) == want) {
+                jkGuiDisplay_vrRefreshIdx = i;
+                break;
+            }
+        }
+        jkGuiDisplay_VRUpdateRefreshLabel();
+    }
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+    jkGuiDisplay_aElements[VR_EL_ALIGN_TOOL].selectedTextEntry        = jkPlayer_vrAlignTool;
+#endif
 
     // Snap angle: map 30->0, 45->1, 90->2
     {
@@ -599,6 +654,15 @@ vr_redisplay:
         jkGuiDisplay_ShowVRHud();
         goto vr_redisplay;
     }
+    if (v0 == 501) {
+        // Refresh rate row -> step to the next rate that the runtime offers.
+        int count = stdVR_GetRefreshRateCount();
+        if (count > 0) {
+            jkGuiDisplay_vrRefreshIdx = (jkGuiDisplay_vrRefreshIdx + 1) % count;
+            jkGuiDisplay_VRUpdateRefreshLabel();
+        }
+        goto vr_redisplay;
+    }
     if (v0 != -1)
     {
         // Write values back to jkPlayer globals
@@ -606,6 +670,12 @@ vr_redisplay:
         jkPlayer_vrWeaponCrosshair = jkGuiDisplay_aElements[VR_EL_WEAPON_CROSSHAIR].selectedTextEntry;
         jkPlayer_vrMoveDirection   = jkGuiDisplay_aElements[VR_EL_MOVE_DIRECTION].selectedTextEntry;
         jkPlayer_vrSwapSticks      = jkGuiDisplay_aElements[VR_EL_SWAP_STICKS].selectedTextEntry;
+        if (stdVR_GetRefreshRateCount() > 0) {
+            jkPlayer_vrRefreshRate = stdVR_GetRefreshRateByIndex(jkGuiDisplay_vrRefreshIdx);
+        }
+#ifdef VR_WEAPON_ALIGNMENT_TOOL
+        jkPlayer_vrAlignTool       = jkGuiDisplay_aElements[VR_EL_ALIGN_TOOL].selectedTextEntry;
+#endif
 
         // Snap turn mode
         if (jkGuiDisplay_aElements[VR_EL_SNAP_TURN].selectedTextEntry) {

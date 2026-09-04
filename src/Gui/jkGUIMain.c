@@ -64,7 +64,14 @@ static jkGuiElement jkGuiMain_elements[11] = {
     {ELEMENT_TEXTBUTTON, 13, 2, "GUI_SETUP", 3, {470, 380, 150, 40}, 1, 0, 0, 0, 0, 0, {0}, 0},
 #ifdef QOL_IMPROVEMENTS
     {ELEMENT_TEXTBUTTON, 16, 2, "GUI_CREDITS", 3, {130, 430, 150, 40}, 1, 0, 0, 0, 0, 0, {0}, 0},
+#ifdef PLATFORM_VR
+    // Removed for VR: the button had no string entry, so it drew as a stray "E", and the Quest
+    // launcher already offers the game chooser that starts MotS. The slot stays as an inert
+    // placeholder because the layout code below indexes these elements by position.
+    {ELEMENT_TEXT, 17, 2, NULL, 3, {0, 0, 0, 0}, 1, 0, 0, 0, 0, 0, {0}, 0},
+#else
     {ELEMENT_TEXTBUTTON, 17, 2, L"Expansions & Mods", 3, {370, 430, 150, 40}, 1, 0, 0, 0, 0, 0, {0}, 0},
+#endif
     {ELEMENT_TEXT,  0,  0,  NULL,  3, {560, 440, 70, 15},  1,  0,  0,  0,  0,  0, {0},  0},
     {ELEMENT_TEXT,  0,  0,  NULL,  3, {560, 455, 70, 15},  1,  0,  0,  0,  0,  0, {0},  0},
 #else

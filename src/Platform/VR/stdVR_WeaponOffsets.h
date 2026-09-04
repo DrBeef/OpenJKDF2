@@ -18,6 +18,8 @@ typedef struct stdVR_WeaponOffset {
     float offsetZ;          // Up/down offset (meters)
     float modelScale;       // Scale multiplier (default 1.0)
     float pitchAdjust;      // Pitch rotation (degrees)
+    float yawAdjust;        // Yaw rotation (degrees)
+    float rollAdjust;       // Roll rotation (degrees)
     int bConfigured;        // Has this weapon been manually configured?
 } stdVR_WeaponOffset;
 
