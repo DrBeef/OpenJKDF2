@@ -156,9 +156,19 @@ int Main_StartupDedicated(int bFullyDedicated)
         jkPlayer_CreateConf(L"ServerDed");
     }
     else {
+        // Added: zero the buffer and validate the result. jkPlayer_CreateConf creates a
+        // directory named after this string without checking it, unlike the new-player
+        // dialog. A name carrying stray bytes produced profile folders that Android's
+        // storage layer then refuses to delete, so reject one rather than create it.
+        _memset(aTmpPlayerShortName, 0, sizeof(aTmpPlayerShortName));
         wuRegistry_GetString("playerShortName", aTmpPlayerShortName, 32, "ServerDed");
+        aTmpPlayerShortName[sizeof(aTmpPlayerShortName) - 1] = 0;
         stdString_CharToWchar(jkPlayer_playerShortName, aTmpPlayerShortName, 31);
         jkPlayer_playerShortName[31] = 0;
+        if (!jkPlayer_VerifyWcharName(jkPlayer_playerShortName)) {
+            stdPlatform_Printf("Main: rejected stored playerShortName, falling back to default\n");
+            stdString_SafeWStrCopy(jkPlayer_playerShortName, L"Player", 32);
+        }
         jkPlayer_CreateConf(jkPlayer_playerShortName);
     }
     

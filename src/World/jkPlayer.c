@@ -419,8 +419,91 @@ int jkPlayer_LoadSave(char *path)
     return sithGamesave_Load(path, 0, 1);
 }
 
+#ifdef PLATFORM_VR
+// Added: sweep away profile directories whose names carry stray bytes.
+//
+// stdJSON_GetString used to return the stored player name without a null terminator, so
+// startup read "VRPlayer" plus whatever followed it in the caller's buffer and created a
+// directory under that name. That is fixed at the source now; this clears up what it left.
+//
+// Only partly, though, and the limit is not ours. Android serves /sdcard through a FUSE layer
+// that reconstructs the path as a Java string. A path holding bytes that are not valid UTF-8
+// no longer matches what is on disk, so every unlink under such a directory returns ENOENT.
+// rmdir on an empty one still works, so this removes the empty directories and leaves the rest.
+// MANAGE_EXTERNAL_STORAGE does not help - measured on a Quest 3, this app fails to unlink those
+// files exactly as adb does. Removing them needs root or a factory reset.
+//
+// The test is the game's own name validator, so a directory is only removed when the game
+// itself would refuse to create a profile with that name. Accented names stay.
+static void jkPlayer_VRCleanCorruptProfileDirs(const char* pParent)
+{
+    stdFileSearch* pSearch = stdFileUtil_NewFind(pParent, 2, NULL);
+    if (!pSearch) {
+        return;
+    }
+
+    // scandir() snapshots the whole directory up front, so deleting while iterating is safe.
+    stdFileSearchResult res;
+    while (stdFileUtil_FindNext(pSearch, &res)) {
+        if (!res.is_subdirectory || res.fpath[0] == '.') {
+            continue;
+        }
+
+        wchar_t wName[256];
+        _memset(wName, 0, sizeof(wName));
+        stdString_CharToWchar(wName, res.fpath, 255);
+        wName[255] = 0;
+
+        // Test each character on its own, wrapped in filler. jkPlayer_VerifyWcharName also
+        // rejects a name for where its spaces sit (leading, trailing, all-space), and an old
+        // profile could trip that without being corrupt. The filler neutralises those rules
+        // so only a genuinely disallowed character counts.
+        int bCorrupt = 0;
+        for (int i = 0; wName[i]; i++) {
+            wchar_t probe[4] = { 'a', wName[i], 'a', 0 };
+            if (!jkPlayer_VerifyWcharName(probe)) {
+                bCorrupt = 1;
+                break;
+            }
+        }
+
+        if (!bCorrupt) {
+            continue;
+        }
+
+        char path[256];
+        stdFnames_MakePath(path, sizeof(path), pParent, res.fpath);
+        stdPlatform_Printf("jkPlayer: removing corrupt profile dir '%s'\n", path);
+        stdFileUtil_Deltree(path);
+    }
+
+    stdFileUtil_DisposeFind(pSearch);
+}
+
+void jkPlayer_VRCleanupProfiles(void)
+{
+    static int bDone = 0;
+    if (bDone) {
+        return;
+    }
+    bDone = 1;
+
+    jkPlayer_VRCleanCorruptProfileDirs("player");
+
+    // Legacy: some installs have a hand-made "player_garbage_archive" holding nothing but
+    // these undeletable directories. Empty it and drop it. Both calls are no-ops when the
+    // folder is absent. Safe to delete this block once no headset still carries one.
+    jkPlayer_VRCleanCorruptProfileDirs("player_garbage_archive");
+    stdFileUtil_Deltree("player_garbage_archive");
+}
+#endif // PLATFORM_VR
+
 void jkPlayer_Startup()
 {
+#ifdef PLATFORM_VR
+    // Runs before any profile is read or created. Guarded internally to run once.
+    jkPlayer_VRCleanupProfiles();
+#endif
     jkPlayer_InitThings();
     _memcpy(&jkSaber_rotateMat, &rdroid_identMatrix34, sizeof(jkSaber_rotateMat));
 }

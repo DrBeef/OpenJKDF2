@@ -82,6 +82,11 @@ void jkPlayer_ResetVars();
 int jkPlayer_LoadAutosave();
 int jkPlayer_LoadSave(char *path);
 void jkPlayer_Startup();
+#ifdef PLATFORM_VR
+// One-shot sweep of profile directories whose names hold bytes the game would never accept.
+// See the definition in jkPlayer.c for why only this app can delete them.
+void jkPlayer_VRCleanupProfiles(void);
+#endif
 void jkPlayer_Shutdown();
 void jkPlayer_Open();
 void jkPlayer_Close();

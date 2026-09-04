@@ -294,11 +294,20 @@ int stdJSON_GetString(const char* pFpath, const char* pKey, char* pOut, int outS
         stdJSON_SetString(pFpath, pKey, pValDefault);
     }
     
-    size_t readSize = strlen(out.c_str());
-    if (readSize < outSize) {
-        outSize = readSize;
+    // Altered: this used to clamp the copy length DOWN to strlen and call strncpy, which
+    // writes no terminator when n == strlen(src). Callers pass an uninitialised stack buffer,
+    // so everything past the copied text stayed as stack garbage - that is what produced
+    // player profile directories like "VRPlayer\x10\x01" from a stored name of "VRPlayer".
+    if (outSize <= 0) {
+        return 1;
     }
-    _strncpy(pOut, out.c_str(), outSize);
+
+    size_t readSize = strlen(out.c_str());
+    if (readSize > (size_t)(outSize - 1)) {
+        readSize = (size_t)(outSize - 1);
+    }
+    memcpy(pOut, out.c_str(), readSize);
+    pOut[readSize] = 0;
 
     return 1;
 }
@@ -349,11 +358,22 @@ int stdJSON_GetWString(const char* pFpath, const char* pKey, char16_t* pOut, int
         out = utf8_to_utf16(out_u8);
     }
     
-    size_t readSize = _wcslen((wchar_t*)out.data());
-    if (readSize < outSize) {
-        outSize = readSize;
+    // Altered: same missing terminator as stdJSON_GetString above. Also drops the
+    // (wchar_t*) cast on a u16string: wchar_t is 4 bytes on Android, so wcslen/wcsncpy
+    // read the wrong element size there. u16string::size() is the UTF-16 unit count,
+    // which is what wcslen returned on Windows, so Windows behaviour is unchanged.
+    if (outSize <= 0) {
+        return 1;
     }
-    _wcsncpy((wchar_t*)pOut, (wchar_t*)out.data(), outSize);
+
+    size_t readSize = out.size();
+    if (readSize > (size_t)(outSize - 1)) {
+        readSize = (size_t)(outSize - 1);
+    }
+    for (size_t i = 0; i < readSize; i++) {
+        pOut[i] = out[i];
+    }
+    pOut[readSize] = 0;
 
     return 1;
 }
